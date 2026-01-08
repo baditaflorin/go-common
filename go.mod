@@ -1,3 +1,3 @@
 module github.com/baditaflorin/go-common
 
-go 1.25.0
+go 1.24
