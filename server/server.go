@@ -18,14 +18,22 @@ type Server struct {
 func New(cfg *config.Config) *Server {
 	mux := http.NewServeMux()
 
-	// Standard Health Route
+	// Register /health endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "ok",
-			"version": cfg.Version,
+			"status":  "healthy",
 			"service": cfg.AppName,
+			"version": cfg.Version,
 		})
+	})
+
+	// Register /version endpoint (User Request)
+	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(cfg.Version))
 	})
 
 	return &Server{Config: cfg, Mux: mux}
