@@ -41,7 +41,7 @@ func New(cfg *config.Config) *Server {
 
 func (s *Server) Start() {
 	addr := ":" + s.Config.Port
-	fmt.Printf("Starting %s v%s on %s\n", s.Config.AppName, s.Config.Version, addr)
+	fmt.Printf("Starting %s v%s on %s (DEBUG: /version enabled)\n", s.Config.AppName, s.Config.Version, addr)
 
 	srv := &http.Server{
 		Addr:         addr,
