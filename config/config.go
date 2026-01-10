@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -42,13 +43,14 @@ func Load(appName, defaultVersion string) *Config {
 // readServiceMetadata attempts to parse 'service.yaml' in the current directory
 // to extract 'version' and 'name'. It uses a simple scanner to avoid external YAML deps.
 func readServiceMetadata() (version, name string) {
-	f, err := os.Open("service.yaml")
+	file, err := os.Open("service.yaml")
 	if err != nil {
+		fmt.Printf("DEBUG: Failed to open service.yaml: %v\n", err)
 		return "", ""
 	}
-	defer f.Close()
+	defer file.Close()
 
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(file) // Changed 'f' to 'file'
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "version:") {
