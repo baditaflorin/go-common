@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/baditaflorin/go-common/config"
+	"github.com/baditaflorin/go-common/metrics"
 	"github.com/baditaflorin/go-common/middleware"
 )
 
@@ -15,6 +16,7 @@ type Server struct {
 	Config      *config.Config
 	Mux         *http.ServeMux
 	Middlewares []middleware.Middleware
+	Stats       *metrics.Stats
 }
 
 type Option func(*Server)
@@ -29,6 +31,7 @@ func WithMiddleware(mws ...middleware.Middleware) Option {
 // New creates a new Server with optional configuration
 func New(cfg *config.Config, opts ...Option) *Server {
 	mux := http.NewServeMux()
+	stats := metrics.New()
 
 	// Register /health endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -48,10 +51,18 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		w.Write([]byte(cfg.Version))
 	})
 
+	// Register /metrics endpoint (Phase 3)
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(stats.Snapshot())
+	})
+
 	srv := &Server{
 		Config:      cfg,
 		Mux:         mux,
 		Middlewares: []middleware.Middleware{},
+		Stats:       stats,
 	}
 
 	// Apply options
@@ -59,12 +70,14 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		opt(srv)
 	}
 
-	// Add Default Middlewares if not explicitly disabled (could be an option later)
-	// For now, let's just prepend RequestID and Logging so they run first
-	// Note: We want RequestID first, then Logging
+	// Add Default Middlewares
+	// 1. RequestID (Start)
+	// 2. Logging
+	// 3. Metrics (Record Status)
 	srv.Middlewares = append([]middleware.Middleware{
 		middleware.RequestID,
 		middleware.Logging,
+		middleware.Metrics(stats),
 	}, srv.Middlewares...)
 
 	return srv
@@ -72,7 +85,7 @@ func New(cfg *config.Config, opts ...Option) *Server {
 
 func (s *Server) Start() {
 	addr := ":" + s.Config.Port
-	fmt.Printf("Starting %s v%s on %s (Middleware Enabled)\n", s.Config.AppName, s.Config.Version, addr)
+	fmt.Printf("Starting %s v%s on %s (Middleware+Metrics Enabled)\n", s.Config.AppName, s.Config.Version, addr)
 
 	// Wrap the mux with middlewares
 	finalHandler := middleware.Chain(s.Mux, s.Middlewares...)
