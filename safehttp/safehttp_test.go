@@ -157,3 +157,29 @@ func TestValidateURL(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeURL(t *testing.T) {
+	tests := []struct {
+		raw      string
+		wantErr  bool
+		wantHost string
+	}{
+		{"https://example.com/path", false, "example.com"},
+		{"example.com/path", false, "example.com"},
+		{"http://example.com", false, "example.com"},
+		{"", true, ""},
+		{"ftp://example.com", true, ""},
+		{"//example.com", true, ""},
+		{"http:///nohost", true, ""},
+	}
+	for _, tt := range tests {
+		u, err := safehttp.NormalizeURL(tt.raw)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("NormalizeURL(%q) err=%v wantErr=%v", tt.raw, err, tt.wantErr)
+			continue
+		}
+		if !tt.wantErr && u.Hostname() != tt.wantHost {
+			t.Errorf("NormalizeURL(%q) host=%q want=%q", tt.raw, u.Hostname(), tt.wantHost)
+		}
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -183,4 +184,24 @@ func makeDialer(portCheck bool) func(ctx context.Context, network, addr string) 
 		}
 		return d.DialContext(ctx, network, addr)
 	}
+}
+
+// NormalizeURL parses raw into a validated *url.URL.
+// Prepends "https://" if no scheme is present. Trims whitespace.
+func NormalizeURL(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("empty url")
+	}
+	if !strings.Contains(raw, "://") {
+		if strings.HasPrefix(raw, "//") {
+			return nil, ErrInvalidScheme
+		}
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid url: %w", err)
+	}
+	return u, ValidateURL(u)
 }
