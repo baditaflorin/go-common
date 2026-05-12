@@ -99,3 +99,30 @@ func (s *Server) Start() {
 
 	log.Fatal(srv.ListenAndServe())
 }
+
+// HealthBody is the JSON response shape for /health.
+type healthBody struct {
+	Status  string `json:"status"`
+	Service string `json:"service"`
+	Version string `json:"version"`
+}
+
+// HealthHandler returns an http.Handler for GET /health.
+// Response: {"status":"ok","service":"<id>","version":"<ver>"}
+func HealthHandler(serviceID, version string) http.Handler {
+	b, _ := json.Marshal(healthBody{Status: "ok", Service: serviceID, Version: version})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+	})
+}
+
+// VersionHandler returns an http.Handler for GET /version.
+// Response: {"version":"<ver>"}
+func VersionHandler(version string) http.Handler {
+	b, _ := json.Marshal(map[string]string{"version": version})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+	})
+}

@@ -183,3 +183,30 @@ func TestNormalizeURL(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckURL_BlocksPrivate(t *testing.T) {
+	ctx := context.Background()
+	blocked := []string{
+		"http://127.0.0.1/",
+		"http://10.0.0.1/",
+		"http://192.168.1.1/",
+		"http://169.254.169.254/",
+		"ftp://example.com/",
+	}
+	for _, u := range blocked {
+		if _, err := safehttp.CheckURL(ctx, u); err == nil {
+			t.Errorf("CheckURL(%q) should return error", u)
+		}
+	}
+}
+
+func TestCheckURL_AcceptsPublic(t *testing.T) {
+	ctx := context.Background()
+	u, err := safehttp.CheckURL(ctx, "https://example.com/path")
+	if err != nil {
+		t.Fatalf("CheckURL(example.com): unexpected error: %v", err)
+	}
+	if u.Host != "example.com" {
+		t.Errorf("expected host=example.com, got %q", u.Host)
+	}
+}

@@ -205,3 +205,41 @@ func NormalizeURL(raw string) (*url.URL, error) {
 	}
 	return u, ValidateURL(u)
 }
+
+// CheckURL normalizes rawURL, validates scheme, and guards the host against
+// RFC1918/loopback/CGNAT/ULA addresses. It is the one-call replacement for
+// the parse ��� ValidateURL ��� GuardHost pattern used in every service handler.
+// Returns the validated, ready-to-use *url.URL.
+func CheckURL(ctx context.Context, rawURL string) (*url.URL, error) {
+	u, err := NormalizeURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateURL(u); err != nil {
+		return nil, err
+	}
+	if err := GuardHost(ctx, u.Hostname()); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// TestBlockedHosts is a canonical list of hosts/IPs that every service's SSRF
+// guard must reject. Use in table-driven tests instead of copying the list.
+var TestBlockedHosts = []string{
+	"127.0.0.1",
+	"::1",
+	"10.0.0.1",
+	"172.16.0.1",
+	"192.168.1.1",
+	"169.254.169.254",
+	"fc00::1",
+	"100.64.0.1",
+}
+
+// TestAllowedHosts is a canonical list of public IPs that must NOT be blocked.
+var TestAllowedHosts = []string{
+	"8.8.8.8",
+	"1.1.1.1",
+	"93.184.216.34",
+}
