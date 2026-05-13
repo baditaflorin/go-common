@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/baditaflorin/go-common/apikey"
 	"github.com/baditaflorin/go-common/config"
 	"github.com/baditaflorin/go-common/metrics"
 	"github.com/baditaflorin/go-common/middleware"
@@ -25,6 +26,33 @@ type Option func(*Server)
 func WithMiddleware(mws ...middleware.Middleware) Option {
 	return func(s *Server) {
 		s.Middlewares = append(s.Middlewares, mws...)
+	}
+}
+
+// WithKeystoreAuth mounts the canonical fleet auth middleware
+// (middleware.TokenAuthKeystore) wired up to the keystore via
+// apikey.New() + apikey.Cache. Suitable for every 0exec service —
+// gateway X-Auth-User is trusted on the hot path, the keystore is
+// only called when the gateway is bypassed.
+//
+// localTokens are pre-trusted without hitting the keystore — e.g. the
+// gateway's static fallback key, or "default_token" for demos.
+// Pass none for keystore-only.
+//
+//	srv := server.New(cfg, server.WithKeystoreAuth("default_token"))
+//
+// Reads APIKEY_SERVICE_URL + APIKEY_SERVICE_ADMIN_TOKEN from env (with
+// sane defaults). Failures are deferred to first /verify call — the
+// service starts even if the keystore is unreachable, and per-request
+// behavior falls through to the local-token fast path or fails closed
+// with 503. /health, /version, /_gw_health are always exempt.
+func WithKeystoreAuth(localTokens ...string) Option {
+	return func(s *Server) {
+		ks := apikey.NewCache(apikey.New())
+		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
+			Verifier:    ks,
+			LocalTokens: localTokens,
+		}))
 	}
 }
 
