@@ -45,6 +45,19 @@ type NetworkEntry struct {
 	Initiator       string            `json:"initiator"`
 }
 
+// Performance groups page-load timings. Two sub-maps because the keyspaces
+// collide (e.g. `load` exists in both CDP lifecycle events and the legacy
+// window.performance.timing API). Splitting them keeps both losslessly.
+type Performance struct {
+	// Lifecycle is the set of CDP page-lifecycle events we record:
+	// firstPaint, firstContentfulPaint, DOMContentLoaded, load, init.
+	// Values are milliseconds since the unix epoch.
+	Lifecycle map[string]int64 `json:"lifecycle"`
+	// Timing is window.performance.timing.toJSON() verbatim — keys like
+	// navigationStart, responseEnd, loadEventEnd, etc.
+	Timing map[string]int64 `json:"timing"`
+}
+
 // ProxyResult is what JSProxy returns. Field tags match the go-js-proxy-network
 // JSON response so the same struct round-trips through both ends.
 type ProxyResult struct {
@@ -52,7 +65,7 @@ type ProxyResult struct {
 	DOMHTML     string              `json:"dom_html"`
 	Network     []NetworkEntry      `json:"network"`
 	ConsoleLogs []string            `json:"console_logs"`
-	Performance map[string]int64    `json:"performance"`
+	Performance Performance         `json:"performance"`
 	CookiesSet  []map[string]string `json:"cookies_set"`
 }
 
@@ -174,7 +187,7 @@ func jsProxyLegacy(ctx context.Context, base, apiKey, target string) (*ProxyResu
 		DOMHTML:     string(body),
 		Network:     nil,
 		ConsoleLogs: nil,
-		Performance: nil,
+		Performance: Performance{},
 		CookiesSet:  nil,
 	}, nil
 }

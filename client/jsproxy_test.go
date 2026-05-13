@@ -38,7 +38,10 @@ func TestJSProxy_Modern_ParsesResponse(t *testing.T) {
 			ResourceType: "document",
 		}},
 		ConsoleLogs: []string{"hello"},
-		Performance: map[string]int64{"load": 123},
+		Performance: Performance{
+			Lifecycle: map[string]int64{"load": 123, "firstPaint": 50},
+			Timing:    map[string]int64{"navigationStart": 1000, "loadEventEnd": 1123},
+		},
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,8 +70,17 @@ func TestJSProxy_Modern_ParsesResponse(t *testing.T) {
 	if len(got.Network) != 1 || got.Network[0].Status != 200 {
 		t.Fatalf("network log not parsed correctly: %#v", got.Network)
 	}
-	if got.Performance["load"] != 123 {
-		t.Fatalf("performance not parsed: %#v", got.Performance)
+	if got.Performance.Lifecycle["load"] != 123 {
+		t.Fatalf("performance.lifecycle.load not parsed: %#v", got.Performance.Lifecycle)
+	}
+	if got.Performance.Lifecycle["firstPaint"] != 50 {
+		t.Fatalf("performance.lifecycle.firstPaint not parsed: %#v", got.Performance.Lifecycle)
+	}
+	if got.Performance.Timing["navigationStart"] != 1000 {
+		t.Fatalf("performance.timing.navigationStart not parsed: %#v", got.Performance.Timing)
+	}
+	if got.Performance.Timing["loadEventEnd"] != 1123 {
+		t.Fatalf("performance.timing.loadEventEnd not parsed: %#v", got.Performance.Timing)
 	}
 }
 
