@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Pre-commit: gitleaks scan of staged changes.
+# Install (one-time): ln -sf ../../scripts/pre-commit .git/hooks/pre-commit && chmod +x scripts/pre-commit
+set -euo pipefail
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "warn: gitleaks not installed — skipping secret scan." >&2
+  echo "      install: brew install gitleaks   (https://github.com/gitleaks/gitleaks)" >&2
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+config="$repo_root/.gitleaks.toml"
+args=(protect --staged --redact --no-banner)
+[ -f "$config" ] && args+=(--config "$config")
+
+if ! gitleaks "${args[@]}"; then
+  echo "" >&2
+  echo "ERROR: gitleaks detected secrets in staged changes (this repo is PUBLIC)." >&2
+  echo "       go-common is consumed via go-get; nothing sensitive should land here." >&2
+  exit 1
+fi
