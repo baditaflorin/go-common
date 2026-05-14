@@ -73,6 +73,7 @@ type FetchOption func(*fetchConfig)
 
 type fetchConfig struct {
 	jsRender    bool
+	networkLog  bool
 	timeout     time.Duration
 	userAgent   string
 	allowDirect *bool // nil => env decides
@@ -83,6 +84,26 @@ type fetchConfig struct {
 // Chromium render). Default false — plain HTML fetch is much cheaper.
 func WithJSRender(b bool) FetchOption {
 	return func(c *fetchConfig) { c.jsRender = b }
+}
+
+// WithNetworkLog, when true, asks the helper to attach the full
+// rendered-page telemetry to the returned FetchResult: Network,
+// ConsoleLogs, Performance, and the rich CookiesSet observed by the
+// browser. Implies WithJSRender(true) — there is no source of this
+// data on the direct or html-proxy paths.
+//
+// Use this when downstream logic needs to walk the request tree
+// (XHR/fetch endpoints, dynamically-loaded JS bundles, redirect
+// params observed in real navigation, console errors, etc.). The
+// payload is already in memory after a JS render; opt-in is purely
+// to make the cost/intent explicit at the call site.
+func WithNetworkLog(b bool) FetchOption {
+	return func(c *fetchConfig) {
+		c.networkLog = b
+		if b {
+			c.jsRender = true
+		}
+	}
 }
 
 // WithFetchTimeout caps total request budget (default 25s).
@@ -128,17 +149,49 @@ type FetchCookie struct {
 // FetchResult is the unified shape returned by Fetch — same struct
 // regardless of which backend (html-proxy / js-proxy / direct) served
 // the request.
+//
+// Rich-telemetry fields (Network, ConsoleLogs, Performance) are
+// populated only when the caller passes WithNetworkLog(true) (which
+// implies a JS render). They are nil on the html-proxy and direct
+// paths because those backends do not produce that data. Callers
+// should nil-check before walking them; the netextract.go helpers do.
 type FetchResult struct {
 	URL            string            `json:"url"`            // original request
 	FinalURL       string            `json:"final_url"`      // after redirects
 	Status         int               `json:"status"`         // final response status
 	Headers        map[string]string `json:"headers"`        // final response headers
-	Body           string            `json:"body"`           // final response body
+	Body           string            `json:"body"`           // final response body (rendered DOM when js-proxy)
 	RedirectChain  []FetchHop        `json:"redirect_chain"` // all hops INCLUDING final
 	CookiesSet     []FetchCookie     `json:"cookies_set"`    // Set-Cookie across all hops
 	Backend        string            `json:"backend"`        // "html-proxy"|"js-proxy"|"direct"
 	Degraded       bool              `json:"degraded"`       // fell back from requested backend
 	DegradedReason string            `json:"degraded_reason,omitempty"`
+
+	// Network is every HTTP request the browser made while rendering
+	// the page (document, scripts, XHR, fetch, images, fonts…). Each
+	// entry carries URL, method, status, request+response headers,
+	// resource_type, initiator and timing. Populated only when
+	// WithNetworkLog(true) was passed.
+	Network []NetworkEntry `json:"network,omitempty"`
+
+	// ConsoleLogs is the verbatim browser console output (info, warn,
+	// error). Most useful: framework dev-mode warnings, stack traces,
+	// unhandled-promise rejections. Populated only when
+	// WithNetworkLog(true) was passed.
+	ConsoleLogs []string `json:"console_logs,omitempty"`
+
+	// Performance carries the CDP lifecycle events and the
+	// window.performance.timing snapshot from the rendered page.
+	// Populated only when WithNetworkLog(true) was passed.
+	Performance *Performance `json:"performance,omitempty"`
+}
+
+// HasNetwork reports whether the rich-telemetry fields are present.
+// Callers use this as a guard before walking Network/ConsoleLogs/etc.
+// — keeps the "did we ask for it?" check at one obvious site instead
+// of replicated nil-checks in every consumer.
+func (r *FetchResult) HasNetwork() bool {
+	return r != nil && r.Network != nil
 }
 
 // Defaults & env-key names — exported for test/override use.
@@ -276,8 +329,20 @@ func fetchViaHTMLProxy(ctx context.Context, target string, cfg fetchConfig) (*Fe
 }
 
 func fetchViaJSProxy(ctx context.Context, target string, cfg fetchConfig) (*FetchResult, error) {
-	// Reuse existing JSProxy helper, then normalise to FetchResult.
-	pr, err := JSProxy(ctx, target)
+	// Pick the right backend by intent:
+	//   networkLog requested → go-js-proxy-network (expensive, returns
+	//                          DOM + network + console + performance)
+	//   plain JS render       → go-js-proxy (cheap, returns just DOM)
+	// Picking based on intent — not on env or a single default — means
+	// services that only need the rendered DOM don't pay the cost of
+	// (or get rate-limited by) the network-aware proxy.
+	var pr *ProxyResult
+	var err error
+	if cfg.networkLog {
+		pr, err = JSProxy(ctx, target)
+	} else {
+		pr, err = JSProxyDOM(ctx, target)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +388,7 @@ func fetchViaJSProxy(ctx context.Context, target string, cfg fetchConfig) (*Fetc
 		})
 	}
 
-	return &FetchResult{
+	res := &FetchResult{
 		URL:           target,
 		FinalURL:      pr.FinalURL,
 		Status:        status,
@@ -332,7 +397,14 @@ func fetchViaJSProxy(ctx context.Context, target string, cfg fetchConfig) (*Fetc
 		RedirectChain: chain,
 		CookiesSet:    cookies,
 		Backend:       "js-proxy",
-	}, nil
+	}
+	if cfg.networkLog {
+		res.Network = pr.Network
+		res.ConsoleLogs = pr.ConsoleLogs
+		perf := pr.Performance
+		res.Performance = &perf
+	}
+	return res, nil
 }
 
 func fetchDirect(ctx context.Context, target string, cfg fetchConfig) (*FetchResult, error) {
@@ -461,9 +533,23 @@ func ProbeHTMLProxy(ctx context.Context) error {
 	return probeHealth(ctx, base)
 }
 
-// ProbeJSProxy is a depcheck-friendly probe for the js-proxy backend.
+// ProbeJSProxy is a depcheck-friendly probe for the network-aware
+// js-proxy backend (go-js-proxy-network). Use this when your service
+// depends on the network log being available.
 func ProbeJSProxy(ctx context.Context) error {
-	base := envOr("JS_PROXY_URL", DefaultJSProxyURL)
+	base := envFirst("JS_PROXY_NETWORK_URL", "JS_PROXY_URL")
+	if base == "" {
+		base = DefaultJSProxyNetworkURL
+	}
+	return probeHealth(ctx, base)
+}
+
+// ProbeJSProxyDOM is a depcheck-friendly probe for the DOM-only
+// js-proxy backend (go-js-proxy). Use this when your service only
+// renders pages and never walks the network array — the cheaper
+// proxy will still serve you and that's the dep you should declare.
+func ProbeJSProxyDOM(ctx context.Context) error {
+	base := envOr("JS_PROXY_DOM_URL", DefaultJSProxyDOMURL)
 	return probeHealth(ctx, base)
 }
 

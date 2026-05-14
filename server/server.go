@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/baditaflorin/go-common/apikey"
+	"github.com/baditaflorin/go-common/client"
 	"github.com/baditaflorin/go-common/config"
 	"github.com/baditaflorin/go-common/depcheck"
 	"github.com/baditaflorin/go-common/metrics"
@@ -15,11 +16,12 @@ import (
 )
 
 type Server struct {
-	Config      *config.Config
-	Mux         *http.ServeMux
-	Middlewares []middleware.Middleware
-	Stats       *metrics.Stats
-	Deps        *depcheck.Registry
+	Config       *config.Config
+	Mux          *http.ServeMux
+	Middlewares  []middleware.Middleware
+	Stats        *metrics.Stats
+	Deps         *depcheck.Registry
+	Capabilities []client.Capability
 }
 
 type Option func(*Server)
@@ -128,6 +130,10 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(stats.Snapshot())
 	})
+
+	// Register /capabilities endpoint — fleet-wide flag discovery.
+	// See server/capabilities.go for the rationale.
+	mountCapabilities(srv)
 
 	// Add Default Middlewares
 	// 1. RequestID (Start)

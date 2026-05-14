@@ -121,6 +121,7 @@ centralised. Check the repo's handler code — typically a constant
 | jsbundle     | `github.com/baditaflorin/go-common/jsbundle`      | source-map recovery for scanning JS bundles             |
 | apikey       | `github.com/baditaflorin/go-common/apikey`        | keystore client (`Verify`, `Cache`, admin endpoints)    |
 | middleware   | `github.com/baditaflorin/go-common/middleware`    | `TokenAuthKeystore` HTTP middleware (≥ v0.7.0)          |
+| client       | `github.com/baditaflorin/go-common/client`        | `Fetch` + `netextract` + `OptionsFromQuery` (≥ v0.12.0) |
 
 ```go
 import (
@@ -134,6 +135,124 @@ client := safehttp.NewClient(
 // Errors: safehttp.ErrBlocked, safehttp.ErrInvalidScheme, safehttp.ErrMissingHost
 u, err := safehttp.NormalizeURL(rawInput)
 ```
+
+## Rich-fetch — DOM or DOM + network log
+
+`Fetch(ctx, url)` defaults to direct (SSRF-safe) or html-proxy. Two
+opt-in flags route to a render proxy. **Two SEPARATE proxies** —
+pick by intent:
+
+| Proxy | URL | Returns | Use when |
+|---|---|---|---|
+| go-js-proxy | `go-js-proxy.0exec.com` | rendered DOM | you only need post-mount HTML; cheaper, lighter rate limit |
+| go-js-proxy-network | `go-js-proxy-network.0exec.com` | DOM + Network log + Console + Performance | you need to walk requests, scripts, cookies, console |
+
+The two proxies have **different API keys.** Set
+`JS_PROXY_DOM_API_KEY` and `JS_PROXY_NETWORK_API_KEY` independently.
+`JS_PROXY_API_KEY` is the back-compat fallback for either.
+
+```go
+import "github.com/baditaflorin/go-common/client"
+
+// Cheap path — DOM only, via go-js-proxy.
+res, _ := client.Fetch(ctx, url, client.WithJSRender(true))
+
+// Full payload — via go-js-proxy-network. Implies WithJSRender(true).
+res, _ := client.Fetch(ctx, url, client.WithNetworkLog(true))
+if res.HasNetwork() {
+    for _, ep := range client.XHREndpoints(res) { /* ... */ }
+}
+```
+
+### Canonical query flags — `use_js` / `use_network`
+
+Every service that takes a URL accepts the same two flags. Do NOT
+invent local variants (`rendered=1`, `js=on`, `mode=rendered`) — the
+catalog and hub won't know about them.
+
+| Flag | Effect | Proxy routed |
+|---|---|---|
+| `use_js=true` | render with JS, return DOM | go-js-proxy |
+| `use_network=true` | render + return network log + console + performance | go-js-proxy-network |
+
+Truthy values: `true`, `1`, `yes`, `on` (case-insensitive).
+`use_network=true` implies `use_js=true`.
+
+Handlers wire it in one line:
+
+```go
+opts := client.OptionsFromQuery(r)
+mode := client.ModeFromQuery(r) // "static" | "rendered_dom" | "rendered_network"
+res, err := client.Fetch(ctx, target, opts...)
+```
+
+### `client` netextract helpers — don't reparse `res.Network` by hand
+
+When `res.HasNetwork()` is true, use these instead of walking the
+network array manually. Each is pure, nil-safe, and dedicated to one
+primitive. Add new ones here, not in services.
+
+| Helper | Returns | Who consumes it |
+|---|---|---|
+| `XHREndpoints(res)` | XHR/fetch/WS calls deduped to `/users/{id}/...` templates | api-extractor, idor-finder, cors-scanner |
+| `GraphQLEndpoints(res)` | XHR POSTs whose URL or content-type smells GraphQL | graphql-introspection |
+| `JSAssets(res)` | every `<script>` the browser actually loaded | secrets-scanner, apikey-scanner |
+| `SourcemapCandidates(res)` | JSAssets advertising `SourceMap:` / `X-SourceMap:` | sourcemap-finder |
+| `IframeURLs(res)` | URLs of child documents in iframes | iframe-analyzer, clickjacking-tester |
+| `RedirectParams(res)` | observed `?next=`, `?return_to=`, `?redirect_uri=`, ... | open-redirect |
+| `SetCookiesAll(res)` | every `Set-Cookie` across every hop, not just final | session-management, cookie-checker |
+| `ConsoleErrors(res)` | console lines looking like errors / dev-mode warnings | debug-detector |
+| `By{ResourceType,HostSuffix,Method,StatusClass,SizeGreaterThan,ContentType}` | composable filters on `[]NetworkEntry` | everyone |
+
+### Flag discovery — `GET /capabilities`
+
+Every service auto-mounts `GET /capabilities` that returns the
+query-string flags it understands. The catalog and hub scrape this
+so users don't have to guess parameter names.
+
+```json
+{
+  "service": "go_apikey_scanner",
+  "version": "1.2.2",
+  "capabilities": [
+    {"name":"use_js",     "type":"bool", "cost":"rendered_dom"},
+    {"name":"use_network","type":"bool", "cost":"rendered_network",
+                          "implies":["use_js"]}
+  ]
+}
+```
+
+Register at server construction. Standard fetch flags first, then
+any service-specific knobs:
+
+```go
+srv := server.New(cfg,
+    server.WithCapability(client.FetchCapabilities...),   // use_js + use_network
+    server.WithCapability(client.Capability{
+        Name:        "vendor",
+        Description: "Restrict scan to one vendor",
+        Type:        "string",
+    }),
+)
+```
+
+**Rule:** every query flag must have a `Capability` entry. Reviewers
+treat undocumented flags as bugs — the catalog/hub render only what
+`/capabilities` returns.
+
+### Costs and rules
+
+- JS render is a hard requirement when requested — if the chosen
+  proxy is unreachable `Fetch` returns an error rather than silently
+  downgrading. A static fallback would corrupt every result.
+- The decision to use JS rendering belongs to each caller (per
+  request or per service config), not the library. Rendered fetches
+  are ~10-50× the cost of `http.Get`.
+- If you find yourself walking `res.Network` in a service to extract
+  something specific (websocket frames, mixed-content warnings, CSP
+  reports, beacon sends, font origins...), add it to
+  `client/netextract.go` instead. 1 lib edit + dep bump beats 113
+  service patches.
 
 ## Service conventions (required for fleet-runner compatibility)
 
