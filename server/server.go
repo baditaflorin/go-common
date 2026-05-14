@@ -9,6 +9,7 @@ import (
 
 	"github.com/baditaflorin/go-common/apikey"
 	"github.com/baditaflorin/go-common/config"
+	"github.com/baditaflorin/go-common/depcheck"
 	"github.com/baditaflorin/go-common/metrics"
 	"github.com/baditaflorin/go-common/middleware"
 )
@@ -18,6 +19,7 @@ type Server struct {
 	Mux         *http.ServeMux
 	Middlewares []middleware.Middleware
 	Stats       *metrics.Stats
+	Deps        *depcheck.Registry
 }
 
 type Option func(*Server)
@@ -56,20 +58,61 @@ func WithKeystoreAuth(localTokens ...string) Option {
 	}
 }
 
+// WithDependencies attaches a dep registry whose probes are run on every
+// /health request. Health JSON gains a "dependencies":[…] array and the
+// top-level "status" flips to "degraded" if any probe fails (HTTP stays
+// 200 so a soft-dep blip doesn't tear the container down). See
+// depcheck package doc for the JSON contract.
+//
+// Pass exactly one registry — calling WithDependencies twice replaces
+// the previous registry.
+func WithDependencies(r *depcheck.Registry) Option {
+	return func(s *Server) {
+		s.Deps = r
+	}
+}
+
 // New creates a new Server with optional configuration
 func New(cfg *config.Config, opts ...Option) *Server {
 	mux := http.NewServeMux()
 	stats := metrics.New()
 
-	// Register /health endpoint
+	srv := &Server{
+		Config:      cfg,
+		Mux:         mux,
+		Middlewares: []middleware.Middleware{},
+		Stats:       stats,
+	}
+
+	// Apply options first so dependency registry (and any other
+	// option-driven state) is visible to the /health handler we mount
+	// below.
+	for _, opt := range opts {
+		opt(srv)
+	}
+
+	// Register /health endpoint. Two shapes:
+	//   - no deps registered → flat {"status":"healthy", ...} (legacy)
+	//   - deps registered    → {"status":"healthy|degraded", ...,
+	//                            "dependencies":[…depcheck.Status]}
+	// HTTP status code is always 200 — degraded is a soft signal, not a
+	// liveness failure.
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{
+		payload := map[string]interface{}{
 			"status":  "healthy",
 			"service": cfg.AppName,
 			"version": cfg.Version,
-		})
+		}
+		if srv.Deps != nil {
+			statuses := srv.Deps.Snapshot(r.Context())
+			payload["dependencies"] = statuses
+			if !depcheck.AllOK(statuses) {
+				payload["status"] = "degraded"
+			}
+		}
+		_ = json.NewEncoder(w).Encode(payload)
 	})
 
 	// Register /version endpoint
@@ -85,18 +128,6 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(stats.Snapshot())
 	})
-
-	srv := &Server{
-		Config:      cfg,
-		Mux:         mux,
-		Middlewares: []middleware.Middleware{},
-		Stats:       stats,
-	}
-
-	// Apply options
-	for _, opt := range opts {
-		opt(srv)
-	}
 
 	// Add Default Middlewares
 	// 1. RequestID (Start)
