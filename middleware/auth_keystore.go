@@ -147,20 +147,23 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 	}
 }
 
+// extractToken pulls the API key from the three canonical sources, in
+// priority order:
+//
+//  1. Authorization: Bearer <key>     — what every SDK and API gateway sends
+//  2. X-API-Key: <key>                — legacy header alias
+//  3. ?api_key=<key>                  — demo / browser-playground only
+//
+// The legacy /t/<token>/ path-prefix extraction was removed in
+// go-common v0.11.0 (2026-05-14). Gateway returns 410 Gone for that
+// shape, so any caller still using it is broken at the edge anyway —
+// no need to honor it at the upstream. Defense in depth.
 func extractToken(r *http.Request) string {
 	if v := r.Header.Get("Authorization"); strings.HasPrefix(v, "Bearer ") {
 		return strings.TrimPrefix(v, "Bearer ")
 	}
 	if v := r.Header.Get("X-API-Key"); v != "" {
 		return v
-	}
-	for i, p := range strings.Split(r.URL.Path, "/") {
-		if p == "t" {
-			parts := strings.Split(r.URL.Path, "/")
-			if i+1 < len(parts) {
-				return parts[i+1]
-			}
-		}
 	}
 	return r.URL.Query().Get("api_key")
 }
