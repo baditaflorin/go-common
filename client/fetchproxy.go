@@ -1,8 +1,8 @@
-// fetchproxy.go is the unified fleet-internal "fetch a URL via the
-// shared proxy services" helper. It supersedes the per-service habit of
-// hand-rolling net/http.Get for HTML scraping: instead of every service
-// reimplementing redirect handling, encoding sniffing, SSRF guard,
-// Set-Cookie collection and UA rotation, callers do:
+// fetchproxy.go is the unified fleet-internal "fetch a URL" helper. It
+// supersedes the per-service habit of hand-rolling net/http.Get for HTML
+// scraping: instead of every service reimplementing redirect handling,
+// encoding sniffing, SSRF guard, Set-Cookie collection and UA rotation,
+// callers do:
 //
 //	res, err := client.Fetch(ctx, url)
 //
@@ -10,32 +10,40 @@
 // actually served the request. The helper picks a backend in this order:
 //
 //  1. js-proxy   (when WithJSRender(true) is set — full Chromium render,
-//                  returns rendered DOM + network[] + cookies_set[])
-//  2. html-proxy (the default — plain HTTP fetch with redirect trail,
-//                  returns headers + body + redirect_chain + set_cookie
-//                  trail across hops, no JS execution)
-//  3. direct     (last-resort fallback when neither proxy is reachable;
-//                  uses safehttp.NewClient for SSRF protection. Headers
-//                  and redirect chain are populated from the final
-//                  response and the redirect callback; cookies come from
-//                  Set-Cookie response headers along the chain. JS
-//                  rendering is unavailable on this path; if the caller
-//                  required JS, the call errors instead of silently
-//                  serving plain HTML.)
+//                 returns rendered DOM + network[] + cookies_set[]).
+//                 Requires JS_PROXY_URL + JS_PROXY_API_KEY. Fails hard
+//                 on error; we never silently downgrade to plain HTML
+//                 when the caller asked for a rendered DOM.
+//
+//  2. html-proxy (only when HTML_PROXY_URL is explicitly set — a
+//                 dedicated proxy service that handles
+//                 redirect/encoding/CF normalisation upstream of this
+//                 caller. Currently no fleet service ships this role;
+//                 the slot is reserved for when one does. Falls back
+//                 to direct on error.)
+//
+//  3. direct     (the DEFAULT path — uses safehttp.NewClient for SSRF
+//                 protection plus a CheckRedirect callback that captures
+//                 each hop's headers + Set-Cookie trail. The
+//                 "centralisation" lives in this library function, not
+//                 in a separate service: services that call Fetch all
+//                 share the same SSRF guard, redirect handler, cookie
+//                 collector, and UA. JS rendering is unavailable on
+//                 this path; opt in with WithJSRender if you need it.)
 //
 // FetchResult.Backend says which path won. FetchResult.Degraded is true
 // whenever the helper fell back from the requested backend; the
 // degradation reason is in DegradedReason. Callers can surface this via
 // depcheck or just log it; the data is always present.
 //
-// Environment variables (all optional except *_API_KEY):
+// Environment variables (all optional):
 //
-//	HTML_PROXY_URL      default https://go-html-proxy.0exec.com
-//	JS_PROXY_URL        default https://go-js-proxy-network.0exec.com
-//	HTML_PROXY_API_KEY  per-backend key (preferred for least-privilege)
-//	JS_PROXY_API_KEY    per-backend key
-//	FLEET_API_KEY       single fleet-wide key, used when *_API_KEY unset
-//	FETCHPROXY_ALLOW_DIRECT  "false" disables the direct-fetch fallback
+//	HTML_PROXY_URL          if set, route through this URL before direct
+//	HTML_PROXY_API_KEY      key for the html-proxy backend
+//	JS_PROXY_URL            default https://go-js-proxy-network.0exec.com
+//	JS_PROXY_API_KEY        required when WithJSRender(true)
+//	FLEET_API_KEY           single fleet-wide key, used when *_API_KEY unset
+//	FETCHPROXY_ALLOW_DIRECT "false" disables the direct-fetch fallback
 //
 // No keys are baked in: go-common is a public repo and must stay clean.
 // Services run in production with real keys injected via .env; for
@@ -135,7 +143,6 @@ type FetchResult struct {
 
 // Defaults & env-key names — exported for test/override use.
 const (
-	DefaultHTMLProxyURL = "https://go-html-proxy.0exec.com"
 	DefaultFetchTimeout = 25 * time.Second
 	DefaultBodyCap      = 32 << 20 // 32 MiB per response
 )
@@ -173,23 +180,31 @@ func Fetch(ctx context.Context, target string, opts ...FetchOption) (*FetchResul
 		return nil, fmt.Errorf("fetchproxy: js-proxy required but failed: %w", err)
 	}
 
-	res, err := fetchViaHTMLProxy(ctx, target, cfg)
-	if err == nil {
-		return res, nil
+	// html-proxy is opt-in: only attempt if HTML_PROXY_URL is explicitly
+	// set. The default path is direct safehttp (which is itself the
+	// "centralised" fetcher with SSRF guard + redirect tracking).
+	if os.Getenv("HTML_PROXY_URL") != "" {
+		res, err := fetchViaHTMLProxy(ctx, target, cfg)
+		if err == nil {
+			return res, nil
+		}
+		if !allowDirect {
+			return nil, fmt.Errorf("fetchproxy: html-proxy failed and direct fallback disabled: %w", err)
+		}
+		// Fall through to direct, marking degraded.
+		dRes, dErr := fetchDirect(ctx, target, cfg)
+		if dErr != nil {
+			return nil, fmt.Errorf("fetchproxy: html-proxy failed (%v) AND direct fetch failed: %w", err, dErr)
+		}
+		dRes.Degraded = true
+		dRes.DegradedReason = "html-proxy unreachable: " + err.Error()
+		return dRes, nil
 	}
-	htmlErr := err
 
 	if !allowDirect {
-		return nil, fmt.Errorf("fetchproxy: html-proxy failed and direct fallback disabled: %w", htmlErr)
+		return nil, errors.New("fetchproxy: HTML_PROXY_URL unset and direct fetch disabled")
 	}
-
-	res, derr := fetchDirect(ctx, target, cfg)
-	if derr != nil {
-		return nil, fmt.Errorf("fetchproxy: html-proxy failed (%v) AND direct fetch failed: %w", htmlErr, derr)
-	}
-	res.Degraded = true
-	res.DegradedReason = "html-proxy unreachable: " + htmlErr.Error()
-	return res, nil
+	return fetchDirect(ctx, target, cfg)
 }
 
 // FetchHTMLResult is what html-proxy returns. Matches the JSON shape
@@ -206,7 +221,7 @@ type htmlProxyResponse struct {
 }
 
 func fetchViaHTMLProxy(ctx context.Context, target string, cfg fetchConfig) (*FetchResult, error) {
-	base := envOr("HTML_PROXY_URL", DefaultHTMLProxyURL)
+	base := os.Getenv("HTML_PROXY_URL") // caller already checked it's non-empty
 	apiKey := envFirst("HTML_PROXY_API_KEY", "FLEET_API_KEY")
 	if apiKey == "" {
 		return nil, errors.New("html-proxy: HTML_PROXY_API_KEY or FLEET_API_KEY required")
@@ -434,9 +449,15 @@ func parseSetCookie(raw, setOn string) *FetchCookie {
 }
 
 // ProbeHTMLProxy is a depcheck-friendly probe for the html-proxy backend.
-// Hits its /health endpoint with a 2s budget. Returns nil if 200 OK.
+// Returns nil immediately if HTML_PROXY_URL is unset (no backend to
+// probe — services running on the direct path don't need a probe).
+// Otherwise hits its /health endpoint with a 2s budget; returns nil if
+// 200 OK.
 func ProbeHTMLProxy(ctx context.Context) error {
-	base := envOr("HTML_PROXY_URL", DefaultHTMLProxyURL)
+	base := os.Getenv("HTML_PROXY_URL")
+	if base == "" {
+		return nil
+	}
 	return probeHealth(ctx, base)
 }
 

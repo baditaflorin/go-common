@@ -61,16 +61,29 @@ func TestFetchViaHTMLProxyHappy(t *testing.T) {
 	}
 }
 
-func TestFetchHTMLProxyMissingKeyErrors(t *testing.T) {
+func TestFetchHTMLProxyOptIn(t *testing.T) {
+	// With HTML_PROXY_URL unset, fetch should go directly via safehttp
+	// without complaining about missing API keys.
+	t.Setenv("HTML_PROXY_URL", "")
 	t.Setenv("HTML_PROXY_API_KEY", "")
 	t.Setenv("FLEET_API_KEY", "")
-	// Direct fallback would also try without a key, but plain HTTP works
-	// for public URLs. So we explicitly disallow direct to surface the
-	// key-missing error.
+	// safehttp will block loopback/example.com-style targets in tests;
+	// we only assert the helper doesn't error out on missing key.
+	_, err := Fetch(context.Background(), "http://127.0.0.1:1")
+	if err != nil && strings.Contains(err.Error(), "API_KEY") {
+		t.Fatalf("should not require API_KEY when html-proxy is opt-in: %v", err)
+	}
+}
+
+func TestFetchHTMLProxyMissingKeyErrorsWhenOptedIn(t *testing.T) {
+	// HTML_PROXY_URL set but no key → opt-in path errors clearly.
+	t.Setenv("HTML_PROXY_URL", "http://example.invalid")
+	t.Setenv("HTML_PROXY_API_KEY", "")
+	t.Setenv("FLEET_API_KEY", "")
 	_, err := Fetch(context.Background(), "https://example.com",
 		WithAllowDirect(false))
 	if err == nil || !strings.Contains(err.Error(), "API_KEY") {
-		t.Fatalf("expected API_KEY error, got %v", err)
+		t.Fatalf("expected API_KEY error when html-proxy opted in but key missing, got %v", err)
 	}
 }
 
