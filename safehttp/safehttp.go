@@ -2,6 +2,7 @@ package safehttp
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -13,6 +14,54 @@ import (
 
 	"github.com/baditaflorin/go-common/graph"
 )
+
+// tls12FallbackTransport tries the primary (TLS 1.3-default) transport
+// first; if the response is a "tls: internal error" style failure, it
+// retries with a TLS 1.2-capped transport. This recovers from a real-
+// world bug class where servers ALPN-negotiate HTTP/2 on TLS 1.3 but
+// then send TLS alert 80 ("internal error") mid-handshake. Idempotent
+// — only retries on GET-shaped failures where the request body has
+// not been read.
+type tls12FallbackTransport struct {
+	primary  *http.Transport
+	fallback *http.Transport
+}
+
+func (t *tls12FallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.primary.RoundTrip(req)
+	if err == nil {
+		return resp, nil
+	}
+	if !isTLSInternalAlert(err) {
+		return resp, err
+	}
+	// Only safe to retry if the body is replayable. For GET/HEAD this
+	// is always true. For POST/PUT we'd need GetBody — bail in that case.
+	if req.Body != nil && req.GetBody == nil {
+		return resp, err
+	}
+	if req.GetBody != nil {
+		nb, gerr := req.GetBody()
+		if gerr != nil {
+			return resp, err
+		}
+		req.Body = nb
+	}
+	return t.fallback.RoundTrip(req)
+}
+
+// isTLSInternalAlert matches the TLS alert 80 ("internal error") that
+// some servers send when TLS 1.3 + HTTP/2 ALPN goes sideways. It is
+// distinct from "tls: handshake failure" and other failures we should
+// NOT retry on (cert mismatch, unknown CA, etc.).
+func isTLSInternalAlert(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "tls: internal error") ||
+		strings.Contains(s, "remote error: tls: internal error")
+}
 
 var (
 	// ErrBlocked is returned when a target resolves to a non-public network.
@@ -141,11 +190,21 @@ func NewClient(opts ...Option) *http.Client {
 		MaxIdleConns:          20,
 		IdleConnTimeout:       30 * time.Second,
 	}
-	// Wrap with the fleet-graph observer. No-op if GRAPH_ENABLED=false
-	// or no collector URL configured. Every outbound call from any
-	// fleet service flows through this transport, so this single line
-	// gives us fleet-wide outbound observation.
-	var rt http.RoundTripper = graph.RoundTripper(t)
+	// Mirror transport with TLS pinned to ≤ 1.2 — used only as a retry
+	// fallback when the default (TLS 1.3) handshake throws an "internal
+	// error". Some servers (e.g. older nginx + OpenSSL 3.x combos)
+	// negotiate TLS 1.3 ALPN and then send alert 80 mid-handshake; on
+	// macOS LibreSSL the same handshake succeeds, so what looks like
+	// "site is down" from Linux is actually a server-side TLS quirk.
+	// Falling back to 1.2 recovers the response in those cases.
+	t12 := t.Clone()
+	t12.TLSClientConfig = &tls.Config{MaxVersion: tls.VersionTLS12}
+
+	// Wrap with the fleet-graph observer + TLS-fallback. No-op if
+	// GRAPH_ENABLED=false or no collector URL configured. Every outbound
+	// call from any fleet service flows through this transport, so this
+	// single line gives us fleet-wide outbound observation.
+	var rt http.RoundTripper = graph.RoundTripper(&tls12FallbackTransport{primary: t, fallback: t12})
 	ua, maxR := o.userAgent, o.maxRedirects
 	return &http.Client{
 		Transport: rt,
