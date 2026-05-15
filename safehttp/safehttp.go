@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -75,9 +77,17 @@ var (
 // IsBlocked reports whether ip falls in any blocked range:
 // loopback, unspecified, multicast, link-local, private (RFC1918),
 // CGNAT (100.64.0.0/10), 0.0.0.0/8, or ULA (fc00::/7).
+//
+// Honors SAFEHTTP_ALLOW_PRIVATE_IPS — a comma-separated list of literal
+// IPs that bypass the private-network check. Use it ONLY for trusted
+// fleet egress targets (e.g. a LAN-IP loopback past the public NAT
+// hairpin); leaving it unset keeps the SSRF defense intact.
 func IsBlocked(ip net.IP) bool {
 	if ip == nil {
 		return true
+	}
+	if isAllowedPrivateIP(ip) {
+		return false
 	}
 	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
@@ -99,6 +109,49 @@ func IsBlocked(ip net.IP) bool {
 		return true
 	}
 	return false
+}
+
+// allowedPrivateIPs holds the once-parsed SAFEHTTP_ALLOW_PRIVATE_IPS list.
+// Mutable via SetAllowedPrivateIPs (mainly for tests). The default load
+// happens at package init from the env var.
+var (
+	allowedPrivateIPsMu sync.RWMutex
+	allowedPrivateIPs   = parseAllowedPrivateIPs(os.Getenv("SAFEHTTP_ALLOW_PRIVATE_IPS"))
+)
+
+func parseAllowedPrivateIPs(s string) []net.IP {
+	if s == "" {
+		return nil
+	}
+	out := make([]net.IP, 0, 4)
+	for _, part := range strings.Split(s, ",") {
+		if ip := net.ParseIP(strings.TrimSpace(part)); ip != nil {
+			out = append(out, ip)
+		}
+	}
+	return out
+}
+
+func isAllowedPrivateIP(ip net.IP) bool {
+	allowedPrivateIPsMu.RLock()
+	defer allowedPrivateIPsMu.RUnlock()
+	for _, allowed := range allowedPrivateIPs {
+		if allowed.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// SetAllowedPrivateIPs replaces the allowlist at runtime. Production
+// callers should prefer the env-var path so operators can add a new
+// fleet IP without rebuilding the binary.
+func SetAllowedPrivateIPs(ips []net.IP) {
+	allowedPrivateIPsMu.Lock()
+	defer allowedPrivateIPsMu.Unlock()
+	cpy := make([]net.IP, len(ips))
+	copy(cpy, ips)
+	allowedPrivateIPs = cpy
 }
 
 // GuardHost resolves host and returns ErrBlocked if any returned IP is in a
