@@ -236,6 +236,22 @@ func NewClient(opts ...Option) *http.Client {
 		opt(o)
 	}
 	t := &http.Transport{
+		// Honor the standard HTTP_PROXY / HTTPS_PROXY / NO_PROXY env vars.
+		// This is what every Go program on the planet expects out of an
+		// http.Transport; the previous absence meant `safehttp` clients
+		// silently bypassed every operator-configured egress proxy. In
+		// practice the fleet uses this to route active scans through
+		// Webshare residential proxies — direct egress from the dockerhost
+		// IP gets German-DC abuse complaints when scanners hit bug-bounty
+		// targets.
+		//
+		// SSRF interaction: when a proxy is in use, the dialer is called
+		// with the proxy's IP, not the target's. The target hostname is
+		// never resolved by this side. The SSRF guard still runs against
+		// the proxy IP (sanity-checks it's a real public host); the
+		// target-side guarantees move to the proxy operator. This is the
+		// correct trade — explicit env-var opt-in, no surprise behavior.
+		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           makeDialer(o.portCheck),
 		TLSHandshakeTimeout:   4 * time.Second,
 		ResponseHeaderTimeout: 5 * time.Second,
