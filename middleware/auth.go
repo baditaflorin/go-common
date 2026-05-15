@@ -13,7 +13,9 @@ import (
 //  2. URL path /t/{token}/...     (legacy support)
 //  3. ?api_key=<token> query param (browser-friendly)
 //
-// The /health and /version paths bypass auth regardless of token.
+// The /health, /version, and /capabilities paths bypass auth regardless
+// of token. /capabilities is scraped unauthenticated by the catalog and
+// hub so users can discover query flags.
 func TokenAuth(validTokens []string) Middleware {
 	validMap := make(map[string]bool)
 	for _, t := range validTokens {
@@ -25,7 +27,7 @@ func TokenAuth(validTokens []string) Middleware {
 			// Health/version always pass through. Check first so we don't
 			// need a token for these no matter how the middleware is
 			// wired up.
-			if r.URL.Path == "/health" || r.URL.Path == "/version" {
+			if r.URL.Path == "/health" || r.URL.Path == "/version" || r.URL.Path == "/capabilities" {
 				next.ServeHTTP(w, r)
 				return
 			}

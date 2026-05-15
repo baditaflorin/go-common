@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/baditaflorin/go-common/graph"
 )
 
 var (
@@ -139,9 +141,14 @@ func NewClient(opts ...Option) *http.Client {
 		MaxIdleConns:          20,
 		IdleConnTimeout:       30 * time.Second,
 	}
+	// Wrap with the fleet-graph observer. No-op if GRAPH_ENABLED=false
+	// or no collector URL configured. Every outbound call from any
+	// fleet service flows through this transport, so this single line
+	// gives us fleet-wide outbound observation.
+	var rt http.RoundTripper = graph.RoundTripper(t)
 	ua, maxR := o.userAgent, o.maxRedirects
 	return &http.Client{
-		Transport: t,
+		Transport: rt,
 		Timeout:   o.timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxR {

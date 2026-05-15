@@ -11,6 +11,7 @@ import (
 	"github.com/baditaflorin/go-common/client"
 	"github.com/baditaflorin/go-common/config"
 	"github.com/baditaflorin/go-common/depcheck"
+	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/metrics"
 	"github.com/baditaflorin/go-common/middleware"
 )
@@ -76,6 +77,12 @@ func WithDependencies(r *depcheck.Registry) Option {
 
 // New creates a new Server with optional configuration
 func New(cfg *config.Config, opts ...Option) *Server {
+	// Initialise the fleet-graph identity for this process. Safe to
+	// call multiple times; subsequent calls only update identity.
+	// All outbound (safehttp) + inbound (graph.Middleware below) events
+	// are tagged with cfg.AppName from here on.
+	graph.Init(cfg.AppName, cfg.Version)
+
 	mux := http.NewServeMux()
 	stats := metrics.New()
 
@@ -135,11 +142,14 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// See server/capabilities.go for the rationale.
 	mountCapabilities(srv)
 
-	// Add Default Middlewares
-	// 1. RequestID (Start)
-	// 2. Logging
-	// 3. Metrics (Record Status)
+	// Add Default Middlewares (executed in slice order — [0] is outermost)
+	// 1. Graph observer (outermost: sees final status + latency including
+	//    other middleware overhead, records inbound Event)
+	// 2. RequestID (Start)
+	// 3. Logging
+	// 4. Metrics (Record Status)
 	srv.Middlewares = append([]middleware.Middleware{
+		graph.Middleware,
 		middleware.RequestID,
 		middleware.Logging,
 		middleware.Metrics(stats),

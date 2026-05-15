@@ -85,8 +85,10 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 1. /health and /version always pass — fleet contract.
-			if r.URL.Path == "/health" || r.URL.Path == "/version" || r.URL.Path == "/_gw_health" {
+			// 1. /health, /version, /_gw_health, /capabilities always pass —
+			//    fleet contract. /capabilities is scraped unauthenticated by
+			//    the catalog and hub so users can discover query flags.
+			if r.URL.Path == "/health" || r.URL.Path == "/version" || r.URL.Path == "/_gw_health" || r.URL.Path == "/capabilities" {
 				next.ServeHTTP(w, r)
 				return
 			}
