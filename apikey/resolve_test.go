@@ -38,3 +38,40 @@ func TestResolve_EmptyValueSkipped(t *testing.T) {
 		t.Fatalf("got %+v, want SECOND=wins", r)
 	}
 }
+
+func TestHasFleetPrefix(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		want bool
+	}{
+		{"dynamic ak_", "ak_a1b2c3d4e5f6", true},
+		{"fallback fb_", "fb_static_demo_value", true},
+		{"empty", "", false},
+		{"public demo token", "default_token", false},
+		{"misconfigured truthy", "true", false},
+		{"misconfigured yes", "yes", false},
+		{"foreign prefix (e.g. AWS)", "AKIA1234567890", false},
+		{"prefix only, no body", "ak_", true}, // shape-only; keystore rejects empties
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := HasFleetPrefix(c.key); got != c.want {
+				t.Fatalf("HasFleetPrefix(%q) = %v, want %v", c.key, got, c.want)
+			}
+		})
+	}
+}
+
+func TestKeyPrefixConstants_StableValues(t *testing.T) {
+	// Pin the published prefix values as a contract. Changing either
+	// breaks every consumer's startup shape check until they bump
+	// go-common — should be a deliberate, coordinated migration.
+	if KeyPrefixDynamic != "ak_" {
+		t.Fatalf("KeyPrefixDynamic changed unexpectedly: %q", KeyPrefixDynamic)
+	}
+	if KeyPrefixFallback != "fb_" {
+		t.Fatalf("KeyPrefixFallback changed unexpectedly: %q", KeyPrefixFallback)
+	}
+}
+
