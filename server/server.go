@@ -23,6 +23,11 @@ type Server struct {
 	Stats        *metrics.Stats
 	Deps         *depcheck.Registry
 	Capabilities []client.Capability
+	// SchemaVersion is the integer that monotonically increases on every
+	// breaking JSON-shape change. Set via WithSchemaVersion(N); defaults
+	// to DefaultSchemaVersion. Exposed at GET /schema, embedded in
+	// GET /capabilities, and stamped on response.Envelope outputs.
+	SchemaVersion int
 }
 
 type Option func(*Server)
@@ -138,9 +143,18 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		json.NewEncoder(w).Encode(stats.Snapshot())
 	})
 
+	// Publish the schema version (defaulting if unset) before mounting
+	// /capabilities + /schema so both endpoints serialize the same value
+	// and response.Envelope picks up the service identity.
+	publishSchemaVersion(srv)
+
 	// Register /capabilities endpoint — fleet-wide flag discovery.
 	// See server/capabilities.go for the rationale.
 	mountCapabilities(srv)
+
+	// Register /schema endpoint — fleet-wide breaking-change signal.
+	// See server/schema.go for the rationale.
+	mountSchema(srv)
 
 	// Add Default Middlewares (executed in slice order — [0] is outermost)
 	// 1. Graph observer (outermost: sees final status + latency including

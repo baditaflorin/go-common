@@ -30,15 +30,19 @@ func TestCapabilities_EndpointReturnsRegisteredFlags(t *testing.T) {
 		t.Fatalf("status %d", rr.Code)
 	}
 	var got struct {
-		Service      string              `json:"service"`
-		Version      string              `json:"version"`
-		Capabilities []client.Capability `json:"capabilities"`
+		Service       string              `json:"service"`
+		Version       string              `json:"version"`
+		SchemaVersion int                 `json:"schema_version"`
+		Capabilities  []client.Capability `json:"capabilities"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if got.Service != "go_demo" || got.Version != "9.9.9" {
 		t.Errorf("identity wrong: %+v", got)
+	}
+	if got.SchemaVersion != DefaultSchemaVersion {
+		t.Errorf("schema_version: got %d want %d", got.SchemaVersion, DefaultSchemaVersion)
 	}
 	if len(got.Capabilities) < 3 {
 		t.Errorf("expected at least 3 capabilities (use_js, use_network, vendor), got %d", len(got.Capabilities))

@@ -46,20 +46,24 @@ func WithCapability(c ...client.Capability) Option {
 
 // capabilitiesPayload is what /capabilities returns. service + version
 // are echoed so a single fleet-wide scrape produces a self-describing
-// record per service.
+// record per service. schema_version is the same integer GET /schema
+// returns — colocating it here means the catalog scrape doesn't need
+// a second fetch to learn the envelope contract.
 type capabilitiesPayload struct {
-	Service      string               `json:"service"`
-	Version      string               `json:"version"`
-	Capabilities []client.Capability  `json:"capabilities"`
+	Service       string              `json:"service"`
+	Version       string              `json:"version"`
+	SchemaVersion int                 `json:"schema_version"`
+	Capabilities  []client.Capability `json:"capabilities"`
 }
 
 // mountCapabilities wires GET /capabilities on the server's mux. Called
 // from New() after all options have been applied.
 func mountCapabilities(s *Server) {
 	body, _ := json.Marshal(capabilitiesPayload{
-		Service:      s.Config.AppName,
-		Version:      s.Config.Version,
-		Capabilities: append([]client.Capability{}, s.Capabilities...),
+		Service:       s.Config.AppName,
+		Version:       s.Config.Version,
+		SchemaVersion: s.SchemaVersion,
+		Capabilities:  append([]client.Capability{}, s.Capabilities...),
 	})
 	s.Mux.HandleFunc("/capabilities", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
