@@ -210,6 +210,13 @@ type options struct {
 	maxRedirects int
 	userAgent    string
 	portCheck    bool
+
+	// Fleet integration hooks — see extras.go for the constructors
+	// (WithTraceCollector, WithBackoffCoordinator, WithDegradedSink).
+	// All three are opt-in; zero values preserve v0.15.0 behaviour.
+	traceURL     string
+	backoffURL   string
+	degradedSink *[]string
 }
 
 // Option configures NewClient.
@@ -274,6 +281,20 @@ func NewClient(opts ...Option) *http.Client {
 	// call from any fleet service flows through this transport, so this
 	// single line gives us fleet-wide outbound observation.
 	var rt http.RoundTripper = graph.RoundTripper(&tls12FallbackTransport{primary: t, fallback: t12})
+
+	// If any of the auto-trace / auto-backoff / degraded-sink opt-ins
+	// were set, wrap the transport once more so those hooks run on
+	// every outbound call. Backwards-compat: with none of the three
+	// configured, the chain matches v0.15.0 byte-for-byte.
+	if o.traceURL != "" || o.backoffURL != "" || o.degradedSink != nil {
+		rt = &extrasTransport{
+			inner:        rt,
+			traceURL:     o.traceURL,
+			backoffURL:   o.backoffURL,
+			degradedSink: o.degradedSink,
+			caller:       callerFromUA(o.userAgent),
+		}
+	}
 	ua, maxR := o.userAgent, o.maxRedirects
 	return &http.Client{
 		Transport: rt,
