@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -132,12 +133,12 @@ func (s *Stats) Snapshot() Stats {
 func byteCountDecimal(b uint64) string {
 	const unit = 1000
 	if b < unit {
-		return string(b) + " B"
+		return strconv.FormatUint(b, 10) + " B"
 	}
-	div, exp := int64(unit), 0
+	div, exp := uint64(unit), 0
 	for n := b / unit; n >= unit; n /= unit {
 		div *= unit
 		exp++
 	}
-	return string(b/uint64(div)) + string("kMGTPE"[exp]) + "B" // Simplified
+	return strconv.FormatUint(b/div, 10) + string("kMGTPE"[exp]) + "B"
 }
