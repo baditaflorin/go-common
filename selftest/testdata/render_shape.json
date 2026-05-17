@@ -1,0 +1,19 @@
+{
+  "service": "svc",
+  "version": "1.2.3",
+  "ok": false,
+  "checks": [
+    {
+      "name": "alpha",
+      "pass": true
+    },
+    {
+      "name": "beta",
+      "pass": false,
+      "err": "nope"
+    }
+  ],
+  "pass": 1,
+  "fail": 1,
+  "duration_ms": 0
+}
