@@ -162,9 +162,19 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// observations only). We deliberately call this BEFORE the async
 	// trace emit so failures in trace emission can't reorder the
 	// observation.
-	if t.observer != nil {
+	//
+	// Per-client observer takes precedence; otherwise fall back to the
+	// process-wide DefaultObserver resolved AT CALL TIME so that
+	// observers installed AFTER NewClient (the common server.New →
+	// safehttp.SetDefaultObserver flow, vs. package-level var clients
+	// constructed at init) are still seen.
+	obs := t.observer
+	if obs == nil {
+		obs = DefaultObserver()
+	}
+	if obs != nil {
 		viaProxy, proxyHost := t.resolveProxy(req)
-		t.observer.ObserveEgress(EgressEvent{
+		obs.ObserveEgress(EgressEvent{
 			Method:    req.Method,
 			Host:      host,
 			Scheme:    req.URL.Scheme,

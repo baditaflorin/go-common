@@ -40,6 +40,12 @@ type Server struct {
 	// WithKeystoreAuth automatically so apikey_auth_total and friends
 	// populate without per-service wiring.
 	PromAuthCollectors *promx.AuthCollectors
+
+	// promMetricsHandler is the default Prometheus /metrics handler.
+	// Start() wraps the final handler so it serves this only when the
+	// user has not registered their own /metrics on srv.Mux. Keeps
+	// services that already use promhttp.Handler() panic-free.
+	promMetricsHandler http.Handler
 }
 
 type Option func(*Server)
@@ -165,11 +171,14 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		w.Write([]byte(cfg.Version))
 	})
 
-	// Prometheus /metrics is the canonical scrape endpoint (Hub +
-	// fleet convention). The legacy JSON-Snapshot surface moves to
-	// /metrics/json so any consumer that depended on it can migrate
-	// without a flag day.
-	mux.Handle("/metrics", promx.Handler())
+	// /metrics is NOT mounted here on srv.Mux because services that
+	// already registered their own /metrics handler (e.g. with
+	// promhttp.Handler()) would panic with "multiple registrations"
+	// on their next redeploy. Instead, Start() wraps the final handler
+	// with metricsAwareHandler — if no /metrics route is registered by
+	// the time Start runs, the wrapper serves promx.Handler(). User
+	// registrations always win.
+	srv.promMetricsHandler = promx.Handler()
 	mux.HandleFunc("/metrics/json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -214,6 +223,12 @@ func (s *Server) Start() {
 
 	// Wrap the mux with middlewares
 	finalHandler := middleware.Chain(s.Mux, s.Middlewares...)
+	// Then wrap with the metrics-aware shim so /metrics serves the
+	// promx handler unless user code registered its own. Must run
+	// OUTSIDE the middleware chain because the inbound HTTP middleware
+	// wraps the response writer and we want /metrics scrapes to stay
+	// out of http_requests_total.
+	finalHandler = s.wrapMetrics(finalHandler)
 
 	srv := &http.Server{
 		Addr:         addr,
@@ -223,6 +238,38 @@ func (s *Server) Start() {
 	}
 
 	log.Fatal(srv.ListenAndServe())
+}
+
+// wrapMetrics returns a handler that serves promx.Handler() at /metrics
+// only when the user did not register their own /metrics on s.Mux.
+// Detection uses http.ServeMux.Handler — if the matched pattern equals
+// "/metrics", the user registered it explicitly and we defer to them.
+// Otherwise (pattern empty or different), we serve the promx fallback.
+//
+// /metrics requests bypass the middleware chain — they're scraped 30s
+// by Prometheus and would otherwise dominate http_requests_total. The
+// /metrics/json surface still flows through the chain (already mounted
+// on s.Mux earlier).
+func (s *Server) wrapMetrics(next http.Handler) http.Handler {
+	if s.promMetricsHandler == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			req := r.Clone(r.Context())
+			_, pattern := s.Mux.Handler(req)
+			if pattern == "/metrics" {
+				// User registered their own; defer to it via the full
+				// chain so their middleware applies.
+				next.ServeHTTP(w, r)
+				return
+			}
+			// Default path: serve promx directly, skip middleware.
+			s.promMetricsHandler.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // HealthBody is the JSON response shape for /health.

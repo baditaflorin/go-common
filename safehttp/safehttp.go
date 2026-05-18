@@ -322,24 +322,22 @@ func NewClient(opts ...Option) *http.Client {
 	// were set, wrap the transport once more so those hooks run on
 	// every outbound call. Backwards-compat: with none of the three
 	// configured, the chain matches v0.15.0 byte-for-byte.
-	// Fall back to the package-level default observer when the caller
-	// did not pass WithObserver. This is how go-common/server.New auto-
-	// wires promx without every consumer having to plumb WithObserver
-	// through every safehttp.NewClient site.
-	observer := o.observer
-	if observer == nil {
-		observer = DefaultObserver()
-	}
-	if o.traceURL != "" || o.backoffURL != "" || o.degradedSink != nil || observer != nil {
-		rt = &extrasTransport{
-			inner:        rt,
-			traceURL:     o.traceURL,
-			backoffURL:   o.backoffURL,
-			degradedSink: o.degradedSink,
-			observer:     observer,
-			proxyFn:      proxyFn,
-			caller:       callerFromUA(o.userAgent),
-		}
+	// Always wrap with extrasTransport so that a process-wide
+	// DefaultObserver installed AFTER NewClient (the canonical
+	// server.New → safehttp.SetDefaultObserver flow vs. package-level
+	// var clients) is still picked up — extrasTransport.RoundTrip
+	// resolves DefaultObserver at CALL time when observer is nil.
+	// Pre-v0.26 the wrap was conditional on at least one knob being
+	// configured; the unconditional wrap is a no-op when nothing is
+	// set (the hot path is one extra function call).
+	rt = &extrasTransport{
+		inner:        rt,
+		traceURL:     o.traceURL,
+		backoffURL:   o.backoffURL,
+		degradedSink: o.degradedSink,
+		observer:     o.observer,
+		proxyFn:      proxyFn,
+		caller:       callerFromUA(o.userAgent),
 	}
 	ua, maxR := o.userAgent, o.maxRedirects
 	return &http.Client{
