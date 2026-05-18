@@ -39,9 +39,17 @@ const PublicURL = "https://go-infrastructure-fetch-cache.0exec.com"
 const EnvCacheURL = "FLEET_FETCH_CACHE_URL"
 
 // EnvAPIKey is the env var name read by NewClient when no WithAPIKey
-// is set. Only meaningful when the cache URL points at the public
-// gateway (PublicURL); internal DefaultURL calls bypass keystore auth.
+// is set.
 const EnvAPIKey = "FLEET_FETCH_CACHE_API_KEY"
+
+// DefaultAPIKey is the pre-trusted local token (set via
+// server.WithKeystoreAuth("default_token") on the cache container).
+// NewClient defaults the API key to this when no override is given,
+// so internal callers don't need any wiring to satisfy the cache's
+// in-process keystore middleware. External callers should override
+// via WithAPIKey or FLEET_FETCH_CACHE_API_KEY (the default_token is
+// rate-limited at the public gateway).
+const DefaultAPIKey = "default_token"
 
 // Response is the result of a fetch. Body is the upstream body
 // verbatim; the cache-side metadata is broken out into typed fields
@@ -125,6 +133,9 @@ func NewClient(opts ...Option) *Client {
 	if c.apiKey == "" {
 		c.apiKey = os.Getenv(EnvAPIKey)
 	}
+	if c.apiKey == "" {
+		c.apiKey = DefaultAPIKey
+	}
 	if c.cacheClient == nil {
 		c.cacheClient = &http.Client{Timeout: c.timeout}
 	}
@@ -175,6 +186,13 @@ func (c *Client) GetWithMaxAge(ctx context.Context, targetURL string, maxAge tim
 	// Cache returned a 5xx → fallback.
 	if resp.StatusCode >= 500 {
 		return c.directFetch(ctx, targetURL, fmt.Errorf("cache status %d", resp.StatusCode))
+	}
+	// Cache returned a 4xx but the response has no X-FetchCache-*
+	// headers → the cache itself rejected us (auth, malformed input,
+	// rate limit), not an upstream-passed 4xx. Fall back so the
+	// producer still gets a real response.
+	if resp.StatusCode >= 400 && resp.Header.Get("X-FetchCache-Fetched-At") == "" {
+		return c.directFetch(ctx, targetURL, fmt.Errorf("cache rejected with status %d (no X-FetchCache headers)", resp.StatusCode))
 	}
 
 	body, err := io.ReadAll(resp.Body)
