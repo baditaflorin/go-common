@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -76,6 +79,15 @@ type extrasTransport struct {
 	degradedSink *[]string
 	degradedMu   sync.Mutex
 
+	// observer (optional) receives one EgressEvent per round-trip
+	// attempt. Used by promx to record fleet-canonical Prometheus
+	// metrics without coupling safehttp to client_golang.
+	observer EgressObserver
+	// proxyFn is the same function passed to http.Transport.Proxy so
+	// the observer can label each request with via_proxy / proxy_host.
+	// nil means WithoutProxy was set (always direct).
+	proxyFn func(*http.Request) (*url.URL, error)
+
 	caller string // service slug derived from User-Agent
 
 	// hostState tracks the last bad response per host so the
@@ -143,6 +155,28 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	} else if status > 0 {
 		t.clearFailure(host)
+	}
+
+	// Observer emit — inline, on the hot path. Implementations are
+	// contracted to be cheap and non-blocking (counter/histogram
+	// observations only). We deliberately call this BEFORE the async
+	// trace emit so failures in trace emission can't reorder the
+	// observation.
+	if t.observer != nil {
+		viaProxy, proxyHost := t.resolveProxy(req)
+		t.observer.ObserveEgress(EgressEvent{
+			Method:    req.Method,
+			Host:      host,
+			Scheme:    req.URL.Scheme,
+			Path:      req.URL.Path,
+			Status:    status,
+			Duration:  dur,
+			Bytes:     responseBytes(resp),
+			ViaProxy:  viaProxy,
+			ProxyHost: proxyHost,
+			Outcome:   classifyOutcome(status, err),
+			Err:       err,
+		})
 	}
 
 	// Async trace emit — never blocks the response. Snapshot the
@@ -429,6 +463,87 @@ func randomID() string {
 }
 
 var idCounter atomic.Uint64
+
+// resolveProxy mirrors what http.Transport will do internally: invoke the
+// configured Proxy func to decide if this request goes through a proxy. We
+// invoke the same function rather than introspect Transport state because
+// it's the only source of truth for env-var resolution (NO_PROXY,
+// HTTPS_PROXY vs HTTP_PROXY, scheme/host matching). Errors fall back to
+// "direct"; that matches Go's own behaviour.
+func (t *extrasTransport) resolveProxy(req *http.Request) (viaProxy bool, proxyHost string) {
+	if t.proxyFn == nil {
+		return false, ""
+	}
+	u, err := t.proxyFn(req)
+	if err != nil || u == nil {
+		return false, ""
+	}
+	return true, u.Host
+}
+
+// responseBytes returns Content-Length if set and parseable; 0 otherwise.
+// We deliberately don't drain the body — that would change request
+// semantics for the caller. Histograms record what's known; unknown is 0.
+func responseBytes(resp *http.Response) int64 {
+	if resp == nil {
+		return 0
+	}
+	if resp.ContentLength > 0 {
+		return resp.ContentLength
+	}
+	return 0
+}
+
+// classifyOutcome buckets a (status, err) pair into a small label-safe set.
+// Order matters: error classification first (network/SSRF/etc), then HTTP
+// status falls through. Returns OutcomeSuccess for 2xx, OutcomeRedirect for
+// 3xx (which only reaches here after CheckRedirect lets it through).
+func classifyOutcome(status int, err error) EgressOutcome {
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrBlocked):
+			return OutcomeBlocked
+		case isTimeoutErr(err):
+			return OutcomeTimeout
+		case isTLSErr(err):
+			return OutcomeTLSFail
+		case isDNSErr(err):
+			return OutcomeDNSFail
+		default:
+			return OutcomeNetError
+		}
+	}
+	switch {
+	case status >= 200 && status < 300:
+		return OutcomeSuccess
+	case status >= 300 && status < 400:
+		return OutcomeRedirect
+	case status >= 400 && status < 500:
+		return OutcomeClientError
+	case status >= 500 && status < 600:
+		return OutcomeServerError
+	}
+	return OutcomeNetError
+}
+
+func isTimeoutErr(err error) bool {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, os.ErrDeadlineExceeded)
+}
+
+func isTLSErr(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "tls:") || strings.Contains(s, "x509:")
+}
+
+func isDNSErr(err error) bool {
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr)
+}
 
 func hex16(v uint64) string {
 	const hexd = "0123456789abcdef"

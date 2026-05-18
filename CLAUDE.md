@@ -229,6 +229,7 @@ auth shapes documented above.
 | jsbundle     | `github.com/baditaflorin/go-common/jsbundle`      | source-map recovery for scanning JS bundles             |
 | apikey       | `github.com/baditaflorin/go-common/apikey`        | keystore client (`Verify`, `Cache`, admin endpoints)    |
 | middleware   | `github.com/baditaflorin/go-common/middleware`    | `TokenAuthKeystore` HTTP middleware (≥ v0.7.0)          |
+| promx        | `github.com/baditaflorin/go-common/promx`         | Prometheus registry + `/metrics` handler + egress observer (paired with `safehttp.WithObserver`) |
 
 ```go
 import (
