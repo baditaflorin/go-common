@@ -15,18 +15,32 @@ import (
 	"github.com/baditaflorin/go-common/safehttp"
 )
 
-// DefaultURL is the canonical fleet fetch-cache endpoint. Overridable
-// at runtime via the FLEET_FETCH_CACHE_URL env var or per-client via
-// WithCacheURL.
-const DefaultURL = "https://go-infrastructure-fetch-cache.0exec.com"
+// DefaultURL is the canonical fleet fetch-cache endpoint, addressed
+// by Docker container DNS so producers in the same Docker network
+// reach it without going through the public gateway (no TLS handshake,
+// no keystore round-trip, no proxy_egress detour through Webshare).
+//
+// Override at runtime via the FLEET_FETCH_CACHE_URL env var or per
+// client via WithCacheURL. External callers (outside the fleet
+// network) should set the env to the public URL:
+//
+//	FLEET_FETCH_CACHE_URL=https://go-infrastructure-fetch-cache.0exec.com
+const DefaultURL = "http://go_infrastructure_fetch_cache:18205"
+
+// PublicURL is the externally-resolvable HTTPS endpoint exposed at
+// the gateway. Use it when calling from outside the fleet's Docker
+// network. Auth is keystore-gated (X-API-Key or ?api_key=) at this
+// path; the internal DefaultURL skips auth because container-to-
+// container calls don't traverse the gateway.
+const PublicURL = "https://go-infrastructure-fetch-cache.0exec.com"
 
 // EnvCacheURL is the env var name read by NewClient when no
 // WithCacheURL is set.
 const EnvCacheURL = "FLEET_FETCH_CACHE_URL"
 
 // EnvAPIKey is the env var name read by NewClient when no WithAPIKey
-// is set. Optional: dockerhost-originated calls hit the gateway's
-// internal-allowlist short-circuit and don't need a key.
+// is set. Only meaningful when the cache URL points at the public
+// gateway (PublicURL); internal DefaultURL calls bypass keystore auth.
 const EnvAPIKey = "FLEET_FETCH_CACHE_API_KEY"
 
 // Response is the result of a fetch. Body is the upstream body
