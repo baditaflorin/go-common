@@ -217,6 +217,11 @@ type options struct {
 	traceURL     string
 	backoffURL   string
 	degradedSink *[]string
+
+	// Proxy posture — see WithoutProxy / RequireProxy. Defaults to
+	// "follow HTTPS_PROXY env if set, else direct" (Go std behaviour).
+	withoutProxy bool
+	requireProxy bool
 }
 
 // Option configures NewClient.
@@ -234,6 +239,21 @@ func WithUserAgent(ua string) Option { return func(o *options) { o.userAgent = u
 // WithPortCheck restricts outbound connections to ports 80 and 443 only.
 func WithPortCheck() Option { return func(o *options) { o.portCheck = true } }
 
+// WithoutProxy explicitly disables proxy use even if HTTP_PROXY /
+// HTTPS_PROXY are set in the environment. Use for services that
+// legitimately need a direct egress path (SSRF probers, smuggling
+// tests, port scanners) where routing through the fleet proxy would
+// defeat the purpose. Mutually exclusive with RequireProxy — passing
+// both panics at NewClient time.
+func WithoutProxy() Option { return func(o *options) { o.withoutProxy = true } }
+
+// RequireProxy asserts HTTPS_PROXY (or HTTP_PROXY) is set in the
+// environment at NewClient time. Services declared `proxy_egress:
+// true` in service.yaml should pass this so a misconfigured deploy
+// fails loudly at startup instead of silently leaking the dockerhost
+// IP. Mutually exclusive with WithoutProxy.
+func RequireProxy() Option { return func(o *options) { o.requireProxy = true } }
+
 // NewClient returns an *http.Client with a guarded transport. The transport
 // blocks private/internal IPs on every dial, including after redirects, making
 // it safe against DNS-rebind and open-redirect SSRF chains.
@@ -241,6 +261,16 @@ func NewClient(opts ...Option) *http.Client {
 	o := &options{timeout: 8 * time.Second, maxRedirects: 5}
 	for _, opt := range opts {
 		opt(o)
+	}
+	if o.withoutProxy && o.requireProxy {
+		panic("safehttp: WithoutProxy and RequireProxy are mutually exclusive")
+	}
+	if o.requireProxy && os.Getenv("HTTPS_PROXY") == "" && os.Getenv("https_proxy") == "" && os.Getenv("HTTP_PROXY") == "" && os.Getenv("http_proxy") == "" {
+		panic("safehttp: RequireProxy set but no HTTP(S)_PROXY env var found — refusing to start (service.yaml has proxy_egress: true but /opt/_shared/proxy.env was not mounted)")
+	}
+	proxyFn := http.ProxyFromEnvironment
+	if o.withoutProxy {
+		proxyFn = nil
 	}
 	t := &http.Transport{
 		// Honor the standard HTTP_PROXY / HTTPS_PROXY / NO_PROXY env vars.
@@ -258,7 +288,10 @@ func NewClient(opts ...Option) *http.Client {
 		// the proxy IP (sanity-checks it's a real public host); the
 		// target-side guarantees move to the proxy operator. This is the
 		// correct trade — explicit env-var opt-in, no surprise behavior.
-		Proxy:                 http.ProxyFromEnvironment,
+		//
+		// Override via WithoutProxy (force direct) or RequireProxy
+		// (fail-fast if env not set). See those options above.
+		Proxy:                 proxyFn,
 		DialContext:           makeDialer(o.portCheck),
 		TLSHandshakeTimeout:   4 * time.Second,
 		ResponseHeaderTimeout: 5 * time.Second,
