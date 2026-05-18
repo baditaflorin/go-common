@@ -276,6 +276,12 @@ type Cache struct {
 	FreshTTL time.Duration // how long a cached hit counts as "fresh" (no upstream call)
 	StaleTTL time.Duration // how long a cached hit can fall back to during upstream outage
 
+	// Observer (optional) receives one CacheEvent per Verify call.
+	// promx.NewAuthCollectors() returns an implementation that records
+	// fleet-canonical Prometheus metrics (cache hit rate, stale-serve
+	// rate during outages, upstream call latency).
+	Observer CacheObserver
+
 	mu      sync.RWMutex
 	entries map[string]cacheEntry
 }
@@ -310,14 +316,18 @@ func (c *Cache) Verify(ctx context.Context, key string) (*VerifyResult, error) {
 	c.mu.RUnlock()
 	if hadEntry && now.Sub(entry.verified) < c.FreshTTL {
 		r := entry.result
+		c.observe(CacheEvent{Result: CacheResultFresh, Age: now.Sub(entry.verified)})
 		return &r, nil
 	}
 
+	start := time.Now()
 	res, err := c.Inner.Verify(ctx, key)
+	dur := time.Since(start)
 	if err == nil {
 		c.mu.Lock()
 		c.entries[key] = cacheEntry{result: *res, verified: now}
 		c.mu.Unlock()
+		c.observe(CacheEvent{Result: CacheResultInnerOK, Duration: dur})
 		return res, nil
 	}
 	if errors.Is(err, ErrInvalidKey) {
@@ -325,14 +335,23 @@ func (c *Cache) Verify(ctx context.Context, key string) (*VerifyResult, error) {
 		c.mu.Lock()
 		delete(c.entries, key)
 		c.mu.Unlock()
+		c.observe(CacheEvent{Result: CacheResultInnerInvalid, Duration: dur})
 		return nil, err
 	}
 	// Upstream unavailable — see if we have a stale-but-tolerable cache.
 	if hadEntry && now.Sub(entry.verified) < c.StaleTTL {
 		r := entry.result
+		c.observe(CacheEvent{Result: CacheResultStale, Age: now.Sub(entry.verified), Duration: dur})
 		return &r, nil
 	}
+	c.observe(CacheEvent{Result: CacheResultInnerUnavailable, Duration: dur})
 	return nil, err
+}
+
+func (c *Cache) observe(ev CacheEvent) {
+	if c.Observer != nil {
+		c.Observer.ObserveCache(ev)
+	}
 }
 
 // Snapshot returns a copy of the current cache for observability /

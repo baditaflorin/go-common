@@ -59,6 +59,12 @@ type KeystoreOpts struct {
 	// Logger receives one-line audit lines for accepted/rejected requests.
 	// nil = use the default package log. Pass a no-op to silence.
 	Logger *log.Logger
+
+	// Observer (optional) receives one AuthEvent per request describing
+	// which code path made the decision and how long the verifier call
+	// took. promx.NewAuthCollectors() returns an implementation that
+	// records fleet-canonical Prometheus metrics.
+	Observer AuthObserver
 }
 
 func TokenAuthKeystore(opts KeystoreOpts) Middleware {
@@ -83,12 +89,19 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 		}
 	}
 
+	observe := func(src AuthSource, res AuthResult, d time.Duration) {
+		if opts.Observer != nil {
+			opts.Observer.ObserveAuth(AuthEvent{Source: src, Result: res, Duration: d})
+		}
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// 1. /health, /version, /_gw_health, /capabilities always pass —
 			//    fleet contract. /capabilities is scraped unauthenticated by
 			//    the catalog and hub so users can discover query flags.
 			if r.URL.Path == "/health" || r.URL.Path == "/version" || r.URL.Path == "/_gw_health" || r.URL.Path == "/capabilities" {
+				observe(AuthSourceBypass, AuthResultAllow, 0)
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -97,6 +110,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			//    nginx's auth_request_set captures X-Auth-User from the
 			//    keystore's /verify response. Presence ≈ keystore said yes.
 			if opts.TrustGatewayHeader != "" && r.Header.Get(opts.TrustGatewayHeader) != "" {
+				observe(AuthSourceGateway, AuthResultAllow, 0)
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -105,6 +119,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			//    TokenAuth checks: Bearer header, /t/<token>/ path, ?api_key=.
 			token := extractToken(r)
 			if token == "" {
+				observe(AuthSourceMissing, AuthResultDeny, 0)
 				deny(w, "missing token")
 				return
 			}
@@ -112,6 +127,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			// 4. Local-token fast path (the gateway's static fallback, demo
 			//    token, etc.). Avoids a network hop for the hot common case.
 			if local[token] {
+				observe(AuthSourceLocal, AuthResultAllow, 0)
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -121,23 +137,28 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			//    but-valid results for up to its StaleTTL.
 			ctx, cancel := context.WithTimeout(r.Context(), opts.VerifyTimeout)
 			defer cancel()
+			start := time.Now()
 			res, err := opts.Verifier.Verify(ctx, token)
+			dur := time.Since(start)
 			if err == nil {
 				// Surface user + scope to downstream handlers if anyone
 				// wants them. Headers are clobbered (not appended) so
 				// callers can't smuggle their own.
 				r.Header.Set("X-Auth-User", res.User)
 				r.Header.Set("X-Auth-Scope", res.Scope)
+				observe(AuthSourceKeystore, AuthResultAllow, dur)
 				next.ServeHTTP(w, r)
 				return
 			}
 			if errors.Is(err, apikey.ErrInvalidKey) {
+				observe(AuthSourceKeystore, AuthResultDeny, dur)
 				deny(w, "invalid token")
 				return
 			}
 			// Keystore unavailable AND no cached result. Fail closed —
 			// better a 503 than a free-for-all if the keystore is offline
 			// and the caller isn't on the local-tokens list.
+			observe(AuthSourceKeystore, AuthResultUnavailable, dur)
 			logf("keystore unavailable, denying caller: %v", err)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "5")

@@ -36,9 +36,19 @@ func Logging(next http.Handler) http.Handler {
 type wrappedWriter struct {
 	http.ResponseWriter
 	status int
+	bytes  int64
 }
 
 func (w *wrappedWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
+}
+
+// Write tracks the response byte count so middleware that cares about
+// response size (e.g. Prometheus http_response_size_bytes) doesn't need
+// to wrap the writer a second time.
+func (w *wrappedWriter) Write(b []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(b)
+	w.bytes += int64(n)
+	return n, err
 }
