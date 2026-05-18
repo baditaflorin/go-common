@@ -14,6 +14,8 @@ import (
 	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/metrics"
 	"github.com/baditaflorin/go-common/middleware"
+	"github.com/baditaflorin/go-common/promx"
+	"github.com/baditaflorin/go-common/safehttp"
 )
 
 type Server struct {
@@ -28,6 +30,16 @@ type Server struct {
 	// to DefaultSchemaVersion. Exposed at GET /schema, embedded in
 	// GET /capabilities, and stamped on response.Envelope outputs.
 	SchemaVersion int
+
+	// PromHTTPCollectors is the inbound HTTP collector set, auto-
+	// registered into the shared promx registry. Exposed so callers can
+	// inspect or, in rare cases, supply a custom RouteFunc (e.g. when
+	// wrapping a router that exposes a templated-path API).
+	PromHTTPCollectors *promx.HTTPCollectors
+	// PromAuthCollectors is the keystore-auth collector set. Passed to
+	// WithKeystoreAuth automatically so apikey_auth_total and friends
+	// populate without per-service wiring.
+	PromAuthCollectors *promx.AuthCollectors
 }
 
 type Option func(*Server)
@@ -59,9 +71,17 @@ func WithMiddleware(mws ...middleware.Middleware) Option {
 func WithKeystoreAuth(localTokens ...string) Option {
 	return func(s *Server) {
 		ks := apikey.NewCache(apikey.New())
+		// Wire promx observer on both halves of the auth path so the
+		// fleet auth dashboard populates without per-service wiring.
+		// s.PromAuthCollectors is set by New() before options run, so
+		// this assignment is always safe.
+		if s.PromAuthCollectors != nil {
+			ks.Observer = s.PromAuthCollectors
+		}
 		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
 			Verifier:    ks,
 			LocalTokens: localTokens,
+			Observer:    s.PromAuthCollectors,
 		}))
 	}
 }
@@ -91,16 +111,25 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	mux := http.NewServeMux()
 	stats := metrics.New()
 
+	// Auto-wire promx BEFORE options run so WithKeystoreAuth (and any
+	// future option that needs access to the prom collectors) sees a
+	// non-nil PromAuthCollectors / PromHTTPCollectors. AutoWire is
+	// idempotent across repeated server.New calls in tests — same
+	// process, same collectors.
+	egressColl, httpColl, authColl := promx.AutoWire(cfg.AppName, cfg.Version)
+	safehttp.SetDefaultObserver(egressColl)
+
 	srv := &Server{
-		Config:      cfg,
-		Mux:         mux,
-		Middlewares: []middleware.Middleware{},
-		Stats:       stats,
+		Config:             cfg,
+		Mux:                mux,
+		Middlewares:        []middleware.Middleware{},
+		Stats:              stats,
+		PromHTTPCollectors: httpColl,
+		PromAuthCollectors: authColl,
 	}
 
-	// Apply options first so dependency registry (and any other
-	// option-driven state) is visible to the /health handler we mount
-	// below.
+	// Apply options after promx collectors are wired so option handlers
+	// (e.g. WithKeystoreAuth) can attach themselves to the collectors.
 	for _, opt := range opts {
 		opt(srv)
 	}
@@ -136,11 +165,15 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		w.Write([]byte(cfg.Version))
 	})
 
-	// Register /metrics endpoint (Phase 3)
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+	// Prometheus /metrics is the canonical scrape endpoint (Hub +
+	// fleet convention). The legacy JSON-Snapshot surface moves to
+	// /metrics/json so any consumer that depended on it can migrate
+	// without a flag day.
+	mux.Handle("/metrics", promx.Handler())
+	mux.HandleFunc("/metrics/json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(stats.Snapshot())
+		_ = json.NewEncoder(w).Encode(stats.Snapshot())
 	})
 
 	// Publish the schema version (defaulting if unset) before mounting
@@ -161,12 +194,15 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	//    other middleware overhead, records inbound Event)
 	// 2. RequestID (Start)
 	// 3. Logging
-	// 4. Metrics (Record Status)
+	// 4. Metrics (Record Status) — JSON snapshot surface
+	// 5. PromHTTP (Record Status) — Prometheus surface; sits alongside #4
+	//    so both surfaces populate from the same request hot path.
 	srv.Middlewares = append([]middleware.Middleware{
 		graph.Middleware,
 		middleware.RequestID,
 		middleware.Logging,
 		middleware.Metrics(stats),
+		httpColl.Middleware(),
 	}, srv.Middlewares...)
 
 	return srv
