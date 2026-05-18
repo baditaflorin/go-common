@@ -222,6 +222,9 @@ type options struct {
 	// "follow HTTPS_PROXY env if set, else direct" (Go std behaviour).
 	withoutProxy bool
 	requireProxy bool
+
+	// Egress observer — see WithObserver. nil = no observation.
+	observer EgressObserver
 }
 
 // Option configures NewClient.
@@ -319,12 +322,14 @@ func NewClient(opts ...Option) *http.Client {
 	// were set, wrap the transport once more so those hooks run on
 	// every outbound call. Backwards-compat: with none of the three
 	// configured, the chain matches v0.15.0 byte-for-byte.
-	if o.traceURL != "" || o.backoffURL != "" || o.degradedSink != nil {
+	if o.traceURL != "" || o.backoffURL != "" || o.degradedSink != nil || o.observer != nil {
 		rt = &extrasTransport{
 			inner:        rt,
 			traceURL:     o.traceURL,
 			backoffURL:   o.backoffURL,
 			degradedSink: o.degradedSink,
+			observer:     o.observer,
+			proxyFn:      proxyFn,
 			caller:       callerFromUA(o.userAgent),
 		}
 	}
