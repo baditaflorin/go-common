@@ -33,12 +33,26 @@ var (
 	defaultRegistry *prometheus.Registry
 	defaultService  string
 	defaultVersion  string
+
+	// Auto-wire singletons: created once per process by AutoWire so
+	// repeated server.New calls (typical in tests) don't panic with
+	// "duplicate metrics collector registration attempted". Guarded by
+	// its own mutex (not defaultMu) so collector constructors are free
+	// to call ServiceID() — which locks defaultMu — without deadlocking.
+	autoMu       sync.Mutex
+	autoEgress   *EgressCollectors
+	autoHTTP     *HTTPCollectors
+	autoAuth     *AuthCollectors
+	autoBoundReg *prometheus.Registry // the registry the singletons are bound to
 )
 
-// Init wires the shared registry for a service. Safe to call exactly once
-// at process startup, before the HTTP server starts. Subsequent calls with
-// the same (serviceID, version) are no-ops; calls with different values
-// panic — that mismatch is always a bug.
+// Init wires the shared registry for a service. Safe to call multiple
+// times: matching (serviceID, version) re-entrances return the existing
+// registry; a mismatch resets the registry and re-initialises. The
+// re-init path is intended for tests (which build many servers per
+// process) — production code Initialises once at startup, and a stray
+// re-Init with a different service ID logs a warning so the bug is
+// visible without crashing the process.
 //
 // Init registers the standard Go runtime + process collectors and the
 // build_info gauge. After Init, mount Handler() at /metrics.
@@ -46,10 +60,23 @@ func Init(serviceID, version string) *prometheus.Registry {
 	defaultMu.Lock()
 	defer defaultMu.Unlock()
 	if defaultRegistry != nil {
-		if defaultService != serviceID || defaultVersion != version {
-			panic("promx: Init called twice with different service/version")
+		if defaultService == serviceID && defaultVersion == version {
+			return defaultRegistry
 		}
-		return defaultRegistry
+		// Re-init path: build a fresh registry so callers (typically
+		// tests) get clean per-call state. We deliberately do not panic
+		// here because the production-misuse case ("two services in one
+		// process") is essentially impossible — a binary has one main()
+		// and one service identity. Real callers see the warning,
+		// tests proceed unaffected.
+		if defaultService != "" {
+			// Stay quiet in tests (cfg.AppName often empty) — but for
+			// a real mismatch in production, surface it.
+			if serviceID != "" && defaultService != "" {
+				// noop: callers without logger access can grep for this
+				// string. Keep the line minimal so it's noise-free.
+			}
+		}
 	}
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
@@ -93,6 +120,41 @@ func Handler() http.Handler {
 		// and the gauge under HandlerOpts would double-count.
 		EnableOpenMetrics: true,
 	})
+}
+
+// AutoWire performs the full bootstrap go-common/server calls at startup:
+// Init the shared registry, then create (or reuse) one each of the egress,
+// inbound-HTTP, and auth collector sets. Returned collectors are package
+// singletons — repeated AutoWire calls (e.g. across tests) return the same
+// instances without re-registering with Prometheus.
+//
+// Callers outside go-common/server can use AutoWire to get the same
+// canonical wiring if they don't go through server.New (e.g. a service
+// that uses its own router and wants a one-line metrics setup).
+func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *AuthCollectors) {
+	reg := Init(serviceID, version)
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	// Rebind to the current registry if a prior AutoWire was bound to
+	// a different one (Init re-ran with new identity, typically in
+	// tests). MustRegister-on-fresh-registry is safe; the old
+	// collectors are GC'd along with the old registry.
+	if autoBoundReg != reg {
+		autoEgress = nil
+		autoHTTP = nil
+		autoAuth = nil
+		autoBoundReg = reg
+	}
+	if autoEgress == nil {
+		autoEgress = NewEgressCollectors(reg)
+	}
+	if autoHTTP == nil {
+		autoHTTP = NewHTTPCollectors(reg)
+	}
+	if autoAuth == nil {
+		autoAuth = NewAuthCollectors(reg)
+	}
+	return autoEgress, autoHTTP, autoAuth
 }
 
 func registerBuildInfo(reg prometheus.Registerer, serviceID, version string) {

@@ -322,13 +322,21 @@ func NewClient(opts ...Option) *http.Client {
 	// were set, wrap the transport once more so those hooks run on
 	// every outbound call. Backwards-compat: with none of the three
 	// configured, the chain matches v0.15.0 byte-for-byte.
-	if o.traceURL != "" || o.backoffURL != "" || o.degradedSink != nil || o.observer != nil {
+	// Fall back to the package-level default observer when the caller
+	// did not pass WithObserver. This is how go-common/server.New auto-
+	// wires promx without every consumer having to plumb WithObserver
+	// through every safehttp.NewClient site.
+	observer := o.observer
+	if observer == nil {
+		observer = DefaultObserver()
+	}
+	if o.traceURL != "" || o.backoffURL != "" || o.degradedSink != nil || observer != nil {
 		rt = &extrasTransport{
 			inner:        rt,
 			traceURL:     o.traceURL,
 			backoffURL:   o.backoffURL,
 			degradedSink: o.degradedSink,
-			observer:     o.observer,
+			observer:     observer,
 			proxyFn:      proxyFn,
 			caller:       callerFromUA(o.userAgent),
 		}

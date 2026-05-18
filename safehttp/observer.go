@@ -1,6 +1,9 @@
 package safehttp
 
-import "time"
+import (
+	"sync/atomic"
+	"time"
+)
 
 // EgressObserver receives one event per completed outbound HTTP attempt
 // (success, error, or timeout). Implementations MUST NOT block — observer
@@ -59,4 +62,40 @@ const (
 // without writing a custom observer.
 func WithObserver(o EgressObserver) Option {
 	return func(opts *options) { opts.observer = o }
+}
+
+// defaultObserver is the package-level observer used by NewClient when
+// the caller didn't pass WithObserver(...). Setters: SetDefaultObserver.
+// Reads use atomic.Value so the hot path (NewClient) does not block on
+// a mutex when no observer is configured.
+//
+// Used by go-common/server.New to register a promx-backed observer once
+// per process: every safehttp client constructed afterwards automatically
+// produces safehttp_egress_* metrics, without per-call WithObserver().
+var defaultObserver atomic.Value // holds EgressObserver
+
+// SetDefaultObserver installs a process-wide default observer. Calling
+// it after NewClient has already constructed clients is safe but only
+// affects subsequently-built clients — existing transports keep their
+// original (nil or per-call) observer.
+//
+// Pass nil to disable the default.
+func SetDefaultObserver(o EgressObserver) {
+	if o == nil {
+		defaultObserver.Store((EgressObserver)(nil))
+		return
+	}
+	defaultObserver.Store(o)
+}
+
+// DefaultObserver returns the current process-wide default, or nil if
+// none is set. Exposed mainly for tests; production code does not need
+// to read this directly.
+func DefaultObserver() EgressObserver {
+	v := defaultObserver.Load()
+	if v == nil {
+		return nil
+	}
+	o, _ := v.(EgressObserver)
+	return o
 }
