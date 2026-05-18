@@ -217,18 +217,37 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	return srv
 }
 
+// Handler returns the fully-wrapped HTTP handler — middleware chain
+// applied to s.Mux, plus the fleet-default /metrics and /selftest
+// shims. Useful for tests (httptest.NewServer(srv.Handler())) and
+// for callers that want to embed the server in a non-stdlib
+// listener. Start() uses this internally.
+func (s *Server) Handler() http.Handler {
+	return s.wrapDefaults(middleware.Chain(s.Mux, s.Middlewares...))
+}
+
 func (s *Server) Start() {
 	addr := ":" + s.Config.Port
 	fmt.Printf("Starting %s v%s on %s (Middleware+Metrics Enabled)\n", s.Config.AppName, s.Config.Version, addr)
 
 	// Wrap the mux with middlewares
 	finalHandler := middleware.Chain(s.Mux, s.Middlewares...)
-	// Then wrap with the metrics-aware shim so /metrics serves the
-	// promx handler unless user code registered its own. Must run
-	// OUTSIDE the middleware chain because the inbound HTTP middleware
-	// wraps the response writer and we want /metrics scrapes to stay
-	// out of http_requests_total.
-	finalHandler = s.wrapMetrics(finalHandler)
+	// Then wrap with the defaults-aware shim. Two endpoints are
+	// served outside the middleware chain when the service didn't
+	// register its own:
+	//   * /metrics  — fleet-canonical Prometheus scrape (bypasses
+	//                 inbound middleware so 30s Prom polls don't
+	//                 dominate http_requests_total).
+	//   * /selftest — fleet contract liveness probe consumed by
+	//                 fleet-runner deploy's smoke gate and
+	//                 go-fleet-selftest-aggregator. ADR-0015 says
+	//                 every service MUST answer 200 (or 404), but a
+	//                 service without a selftest.Suite registered
+	//                 falls through to its catchall handler and may
+	//                 return 400/500 by accident — which trips
+	//                 deploy auto-rollback. Mounting a default 200
+	//                 here closes that gap fleet-wide.
+	finalHandler = s.wrapDefaults(finalHandler)
 
 	srv := &http.Server{
 		Addr:         addr,
@@ -240,35 +259,61 @@ func (s *Server) Start() {
 	log.Fatal(srv.ListenAndServe())
 }
 
-// wrapMetrics returns a handler that serves promx.Handler() at /metrics
-// only when the user did not register their own /metrics on s.Mux.
-// Detection uses http.ServeMux.Handler — if the matched pattern equals
-// "/metrics", the user registered it explicitly and we defer to them.
-// Otherwise (pattern empty or different), we serve the promx fallback.
+// wrapDefaults serves fleet-canonical defaults for /metrics and
+// /selftest when the user did not register their own. Detection uses
+// http.ServeMux.Handler — if the matched pattern equals the route
+// itself, the user registered it and we defer to them through the
+// middleware chain. Otherwise we serve the default outside the chain
+// (zero contribution to http_requests_total / no auth requirement so
+// scrapers and smoke probes Just Work).
 //
-// /metrics requests bypass the middleware chain — they're scraped 30s
-// by Prometheus and would otherwise dominate http_requests_total. The
-// /metrics/json surface still flows through the chain (already mounted
-// on s.Mux earlier).
-func (s *Server) wrapMetrics(next http.Handler) http.Handler {
-	if s.promMetricsHandler == nil {
-		return next
-	}
+// /metrics  — promx.Handler() Prometheus text-exposition format.
+// /selftest — fleet-contract 200 OK with {service, version, status}.
+//             Services with real probes should mount selftest.Suite
+//             on s.Mux; this default exists so deploy smoke gates
+//             never see 400/500 from a catchall handler swallowing
+//             the request (the root cause of fleet-runner deploy
+//             auto-rollback on services that hadn't opted in).
+func (s *Server) wrapDefaults(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/metrics" {
-			req := r.Clone(r.Context())
-			_, pattern := s.Mux.Handler(req)
-			if pattern == "/metrics" {
-				// User registered their own; defer to it via the full
-				// chain so their middleware applies.
+		switch r.URL.Path {
+		case "/metrics":
+			if s.promMetricsHandler == nil {
 				next.ServeHTTP(w, r)
 				return
 			}
-			// Default path: serve promx directly, skip middleware.
+			_, pattern := s.Mux.Handler(r.Clone(r.Context()))
+			if pattern == "/metrics" {
+				next.ServeHTTP(w, r)
+				return
+			}
 			s.promMetricsHandler.ServeHTTP(w, r)
+			return
+		case "/selftest":
+			_, pattern := s.Mux.Handler(r.Clone(r.Context()))
+			if pattern == "/selftest" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			s.defaultSelftest(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// defaultSelftest emits the fleet-contract 200 OK body when no
+// selftest.Suite was registered. The note field flags the
+// no-implementation case to humans inspecting the response (and to
+// go-fleet-selftest-aggregator if it ever wants to surface coverage).
+func (s *Server) defaultSelftest(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"service": s.Config.AppName,
+		"version": s.Config.Version,
+		"status":  "ok",
+		"note":    "no selftest.Suite registered; default 200 handler in go-common/server",
 	})
 }
 
