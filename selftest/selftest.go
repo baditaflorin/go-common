@@ -167,7 +167,10 @@ type Response struct {
 // the rest of the suite still gets exercised. Concurrent callers do
 // not share mutable state — each Render owns its own results slice.
 func (s *Suite) Render(w http.ResponseWriter, r *http.Request) {
-	resp := s.run(r.Context())
+	// Propagate ?live=1 into the check context. Checks reach the
+	// bit via selftest.IsLive(ctx). See live.go.
+	ctx := withLive(r.Context(), r.URL.Query().Get("live") == "1")
+	resp := s.run(ctx)
 	status := http.StatusOK
 	if !resp.OK {
 		status = http.StatusServiceUnavailable
