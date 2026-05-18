@@ -55,7 +55,17 @@
 //
 // # Endpoint
 //
-// Default endpoint is https://go-infrastructure-fetch-cache.0exec.com.
-// Override per-process via the FLEET_FETCH_CACHE_URL env var, or per
-// client via WithCacheURL.
+// Default endpoint is http://go_infrastructure_fetch_cache:18205 —
+// the cache container's Docker DNS name, reachable from any other
+// container on the same Docker network without auth, TLS, or the
+// proxy_egress detour. This is what fleet producers should use.
+//
+// External callers (outside the fleet network) should override with
+// the public gateway URL via env:
+//
+//	export FLEET_FETCH_CACHE_URL=https://go-infrastructure-fetch-cache.0exec.com
+//	export FLEET_FETCH_CACHE_API_KEY=<your-key>
+//
+// The public path is keystore-gated; the internal path is not (auth
+// happens at the gateway, not the upstream container).
 package fleetfetch

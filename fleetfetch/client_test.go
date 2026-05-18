@@ -22,6 +22,19 @@ func TestNewClient_DefaultsAndEnv(t *testing.T) {
 	}
 }
 
+func TestNewClient_DefaultIsInternalContainerDNS(t *testing.T) {
+	// Make sure no leftover env interferes.
+	t.Setenv(EnvCacheURL, "")
+	t.Setenv(EnvAPIKey, "")
+	c := NewClient()
+	if c.cacheURL != DefaultURL {
+		t.Errorf("default cacheURL: got %q want %q", c.cacheURL, DefaultURL)
+	}
+	if DefaultURL != "http://go_infrastructure_fetch_cache:18205" {
+		t.Errorf("DefaultURL: got %q want internal container-DNS form", DefaultURL)
+	}
+}
+
 func TestNewClient_OptionsBeatEnv(t *testing.T) {
 	t.Setenv(EnvCacheURL, "https://env.example/")
 	c := NewClient(WithCacheURL("https://opt.example/"))
