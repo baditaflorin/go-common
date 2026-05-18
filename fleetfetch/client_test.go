@@ -35,6 +35,79 @@ func TestNewClient_DefaultIsInternalContainerDNS(t *testing.T) {
 	}
 }
 
+func TestNewClient_DefaultAPIKeyIsDefaultToken(t *testing.T) {
+	t.Setenv(EnvAPIKey, "")
+	c := NewClient()
+	if c.apiKey != DefaultAPIKey {
+		t.Errorf("default apiKey: got %q want %q", c.apiKey, DefaultAPIKey)
+	}
+}
+
+func TestGet_CacheReturns4xx_WithoutFetchCacheHeader_FallsBack(t *testing.T) {
+	// Cache returns 401 (no X-FetchCache-* headers) — simulates the
+	// in-process keystore rejecting an unauthenticated request.
+	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+	}))
+	defer cacheSrv.Close()
+
+	originHit := 0
+	originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originHit++
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "direct after 401")
+	}))
+	defer originSrv.Close()
+
+	c := NewClient(
+		WithCacheURL(cacheSrv.URL),
+		WithFallbackClient(&http.Client{Timeout: 5 * time.Second}),
+	)
+	r, err := c.Get(context.Background(), originSrv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.ViaFallback {
+		t.Error("expected ViaFallback=true on cache-side 4xx")
+	}
+	if string(r.Body) != "direct after 401" {
+		t.Errorf("body: %q", r.Body)
+	}
+	if originHit != 1 {
+		t.Errorf("origin hit count: %d", originHit)
+	}
+}
+
+func TestGet_CacheReturns4xx_WithFetchCacheHeader_PassesThrough(t *testing.T) {
+	// Cache returns 404 WITH X-FetchCache-* headers — meaning the
+	// upstream returned 404 and the cache faithfully passed it through.
+	// Should NOT fall back; the producer should see the real 404.
+	originHit := 0
+	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originHit++
+		w.Header().Set("X-FetchCache-Hit", "false")
+		w.Header().Set("X-FetchCache-Fetched-At", time.Now().UTC().Format(time.RFC3339))
+		w.WriteHeader(404)
+		_, _ = io.WriteString(w, "upstream 404")
+	}))
+	defer cacheSrv.Close()
+
+	c := NewClient(WithCacheURL(cacheSrv.URL))
+	r, err := c.Get(context.Background(), "https://example.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ViaFallback {
+		t.Error("upstream 4xx should NOT trigger fallback")
+	}
+	if r.Status != 404 {
+		t.Errorf("status: got %d want 404", r.Status)
+	}
+	if originHit != 1 {
+		t.Errorf("cache hit count: %d (no fallback expected)", originHit)
+	}
+}
+
 func TestNewClient_OptionsBeatEnv(t *testing.T) {
 	t.Setenv(EnvCacheURL, "https://env.example/")
 	c := NewClient(WithCacheURL("https://opt.example/"))
