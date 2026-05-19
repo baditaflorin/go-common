@@ -39,11 +39,15 @@ var (
 	// "duplicate metrics collector registration attempted". Guarded by
 	// its own mutex (not defaultMu) so collector constructors are free
 	// to call ServiceID() — which locks defaultMu — without deadlocking.
-	autoMu       sync.Mutex
-	autoEgress   *EgressCollectors
-	autoHTTP     *HTTPCollectors
-	autoAuth     *AuthCollectors
-	autoBoundReg *prometheus.Registry // the registry the singletons are bound to
+	autoMu        sync.Mutex
+	autoEgress    *EgressCollectors
+	autoHTTP      *HTTPCollectors
+	autoAuth      *AuthCollectors
+	autoSelftest  *SelftestCollectors
+	autoDep       *DepCollectors
+	autoRateCoord *RateCoordCollectors
+	autoPolicy    *PolicyCollectors
+	autoBoundReg  *prometheus.Registry // the registry the singletons are bound to
 )
 
 // Init wires the shared registry for a service. Safe to call multiple
@@ -143,6 +147,10 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 		autoEgress = nil
 		autoHTTP = nil
 		autoAuth = nil
+		autoSelftest = nil
+		autoDep = nil
+		autoRateCoord = nil
+		autoPolicy = nil
 		autoBoundReg = reg
 	}
 	if autoEgress == nil {
@@ -154,7 +162,62 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 	if autoAuth == nil {
 		autoAuth = NewAuthCollectors(reg)
 	}
+	if autoSelftest == nil {
+		autoSelftest = NewSelftestCollectors(reg)
+	}
+	if autoDep == nil {
+		autoDep = NewDepCollectors(reg)
+	}
+	if autoRateCoord == nil {
+		autoRateCoord = NewRateCoordCollectors(reg)
+	}
+	if autoPolicy == nil {
+		autoPolicy = NewPolicyCollectors(reg)
+		// policyeval has a process-wide default observer because
+		// policyeval.Evaluate is a free function (not a method on
+		// some Client we can SetObserver on). Wire the singleton
+		// here so any Evaluate / EvaluateLabeled call in the
+		// process produces metrics without per-call ceremony.
+		setPolicyDefaultObserver(autoPolicy)
+	}
 	return autoEgress, autoHTTP, autoAuth
+}
+
+// AutoSelftest returns the singleton SelftestCollectors created by
+// AutoWire. Returns nil if AutoWire has not been called. Wire it on
+// your selftest.Suite via selftest.WithObserver(promx.AutoSelftest()).
+func AutoSelftest() *SelftestCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoSelftest
+}
+
+// AutoDep returns the singleton DepCollectors created by AutoWire.
+// Returns nil if AutoWire has not been called. Wire on a depcheck
+// registry via deps.SetObserver(promx.AutoDep()).
+func AutoDep() *DepCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoDep
+}
+
+// AutoRateCoord returns the singleton RateCoordCollectors created by
+// AutoWire. Returns nil if AutoWire has not been called. Wire on a
+// ratecoord.Client via client.SetObserver(promx.AutoRateCoord()).
+func AutoRateCoord() *RateCoordCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoRateCoord
+}
+
+// AutoPolicy returns the singleton PolicyCollectors created by
+// AutoWire. Returns nil if AutoWire has not been called. AutoWire
+// has already called policyeval.SetDefaultObserver with this
+// instance, so callers do not need to wire it further.
+func AutoPolicy() *PolicyCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoPolicy
 }
 
 func registerBuildInfo(reg prometheus.Registerer, serviceID, version string) {

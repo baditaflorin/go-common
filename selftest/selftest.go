@@ -74,6 +74,7 @@ type Suite struct {
 	service      string
 	version      string
 	checkTimeout time.Duration
+	observer     Observer
 
 	mu     sync.RWMutex
 	checks []registered
@@ -171,6 +172,17 @@ func (s *Suite) Render(w http.ResponseWriter, r *http.Request) {
 	// bit via selftest.IsLive(ctx). See live.go.
 	ctx := withLive(r.Context(), r.URL.Query().Get("live") == "1")
 	resp := s.run(ctx)
+	if s.observer != nil {
+		s.observer.ObserveSelftest(Event{
+			Service:  resp.Service,
+			Version:  resp.Version,
+			OK:       resp.OK,
+			Pass:     resp.Pass,
+			Fail:     resp.Fail,
+			Duration: time.Duration(resp.DurationMs) * time.Millisecond,
+			Checks:   resp.Checks,
+		})
+	}
 	status := http.StatusOK
 	if !resp.OK {
 		status = http.StatusServiceUnavailable
