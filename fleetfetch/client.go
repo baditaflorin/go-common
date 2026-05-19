@@ -38,6 +38,13 @@ const PublicURL = "https://go-infrastructure-fetch-cache.0exec.com"
 // WithCacheURL is set.
 const EnvCacheURL = "FLEET_FETCH_CACHE_URL"
 
+// ForwardHeaderPrefix prefixes any caller-supplied per-request header
+// sent to the fleet fetch cache. The cache strips this prefix and
+// re-attaches the header to the upstream request, while also folding
+// it into the cache key so that different header sets (e.g.
+// Accept: application/rdap+json vs. default) don't collide.
+const ForwardHeaderPrefix = "X-FF-Forward-"
+
 // EnvAPIKey is the env var name read by NewClient when no WithAPIKey
 // is set.
 const EnvAPIKey = "FLEET_FETCH_CACHE_API_KEY"
@@ -76,6 +83,10 @@ type Client struct {
 	fallback    *http.Client     // SSRF-safe client used when cache is down
 	timeout     time.Duration
 
+	// defaultHeaders are sent on every Get; per-request headers passed
+	// to GetWithHeaders are merged on top (per-request wins).
+	defaultHeaders http.Header
+
 	// Counters for observability. Exposed via Stats().
 	hits       atomic.Int64
 	misses     atomic.Int64
@@ -113,6 +124,22 @@ func WithFallbackClient(h *http.Client) Option {
 	return func(c *Client) { c.fallback = h }
 }
 
+// WithDefaultHeaders sets headers attached to every fetch issued by
+// this client. Per-request headers passed to GetWithHeaders override
+// these on a per-name basis. Common use: a fleet-wide User-Agent or
+// Accept-Language. Values are forwarded through the cache (and
+// therefore included in the cache key) so the cache won't conflate
+// requests with different default headers.
+func WithDefaultHeaders(h http.Header) Option {
+	return func(c *Client) {
+		if h == nil {
+			c.defaultHeaders = nil
+			return
+		}
+		c.defaultHeaders = h.Clone()
+	}
+}
+
 // NewClient returns a Client wired with sensible defaults. Reads
 // FLEET_FETCH_CACHE_URL and FLEET_FETCH_CACHE_API_KEY from the env
 // when corresponding options aren't given.
@@ -148,15 +175,35 @@ func NewClient(opts ...Option) *Client {
 // Get fetches targetURL through the cache. On a cache 5xx/network
 // failure, falls back to a direct SSRF-safe fetch.
 func (c *Client) Get(ctx context.Context, targetURL string) (*Response, error) {
-	return c.GetWithMaxAge(ctx, targetURL, 0)
+	return c.fetch(ctx, targetURL, 0, nil)
 }
 
 // GetWithMaxAge is Get with an explicit max-age override (in seconds
 // on the wire). maxAge=0 = use cache default (60s).
 func (c *Client) GetWithMaxAge(ctx context.Context, targetURL string, maxAge time.Duration) (*Response, error) {
+	return c.fetch(ctx, targetURL, maxAge, nil)
+}
+
+// GetWithHeaders is Get with per-request headers forwarded to the
+// upstream fetch. Headers are sent to the cache prefixed with
+// ForwardHeaderPrefix; the cache strips the prefix, attaches them to
+// the upstream request, and includes them in the cache key so
+// requests with different header sets don't share an entry.
+//
+// Default headers configured via WithDefaultHeaders are merged in
+// first; per-request headers win on collisions. Pass nil to get the
+// same behavior as Get.
+func (c *Client) GetWithHeaders(ctx context.Context, targetURL string, headers http.Header) (*Response, error) {
+	return c.fetch(ctx, targetURL, 0, headers)
+}
+
+// fetch is the shared implementation behind Get/GetWithMaxAge/GetWithHeaders.
+func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Duration, perReqHeaders http.Header) (*Response, error) {
 	if targetURL == "" {
 		return nil, errors.New("fleetfetch: empty target url")
 	}
+	merged := mergeHeaders(c.defaultHeaders, perReqHeaders)
+
 	q := url.Values{}
 	q.Set("url", targetURL)
 	if maxAge > 0 {
@@ -175,29 +222,34 @@ func (c *Client) GetWithMaxAge(ctx context.Context, targetURL string, maxAge tim
 	if c.apiKey != "" {
 		req.Header.Set("X-API-Key", c.apiKey)
 	}
+	for name, vals := range merged {
+		for _, v := range vals {
+			req.Header.Add(ForwardHeaderPrefix+name, v)
+		}
+	}
 
 	resp, err := c.cacheClient.Do(req)
 	if err != nil {
 		// Network failure talking to the cache → fallback.
-		return c.directFetch(ctx, targetURL, fmt.Errorf("cache transport: %w", err))
+		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache transport: %w", err))
 	}
 	defer resp.Body.Close()
 
 	// Cache returned a 5xx → fallback.
 	if resp.StatusCode >= 500 {
-		return c.directFetch(ctx, targetURL, fmt.Errorf("cache status %d", resp.StatusCode))
+		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache status %d", resp.StatusCode))
 	}
 	// Cache returned a 4xx but the response has no X-FetchCache-*
 	// headers → the cache itself rejected us (auth, malformed input,
 	// rate limit), not an upstream-passed 4xx. Fall back so the
 	// producer still gets a real response.
 	if resp.StatusCode >= 400 && resp.Header.Get("X-FetchCache-Fetched-At") == "" {
-		return c.directFetch(ctx, targetURL, fmt.Errorf("cache rejected with status %d (no X-FetchCache headers)", resp.StatusCode))
+		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache rejected with status %d (no X-FetchCache headers)", resp.StatusCode))
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return c.directFetch(ctx, targetURL, fmt.Errorf("cache body: %w", err))
+		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache body: %w", err))
 	}
 
 	out := &Response{
@@ -231,7 +283,7 @@ func (c *Client) GetWithMaxAge(ctx context.Context, targetURL string, maxAge tim
 // directFetch is the fallback path when the cache is unreachable.
 // Uses the SSRF-safe fallback client to fetch targetURL directly
 // from origin. Returns a Response with ViaFallback=true.
-func (c *Client) directFetch(ctx context.Context, targetURL string, cacheErr error) (*Response, error) {
+func (c *Client) directFetch(ctx context.Context, targetURL string, headers http.Header, cacheErr error) (*Response, error) {
 	c.fallbacks.Add(1)
 
 	fctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -241,6 +293,11 @@ func (c *Client) directFetch(ctx context.Context, targetURL string, cacheErr err
 	if err != nil {
 		c.errs.Add(1)
 		return nil, fmt.Errorf("fleetfetch: fallback build (cache=%v): %w", cacheErr, err)
+	}
+	for name, vals := range headers {
+		for _, v := range vals {
+			req.Header.Add(name, v)
+		}
 	}
 	resp, err := c.fallback.Do(req)
 	if err != nil {
@@ -286,4 +343,21 @@ func (c *Client) Stats() Stats {
 		Fallbacks: c.fallbacks.Load(),
 		Errors:    c.errs.Load(),
 	}
+}
+
+// mergeHeaders returns base ∪ overlay with overlay overriding base on
+// per-name collisions. Either side may be nil. Returned map is safe
+// for the caller to mutate.
+func mergeHeaders(base, overlay http.Header) http.Header {
+	if len(base) == 0 && len(overlay) == 0 {
+		return nil
+	}
+	out := http.Header{}
+	for k, vs := range base {
+		out[http.CanonicalHeaderKey(k)] = append([]string(nil), vs...)
+	}
+	for k, vs := range overlay {
+		out[http.CanonicalHeaderKey(k)] = append([]string(nil), vs...)
+	}
+	return out
 }
