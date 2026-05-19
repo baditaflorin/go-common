@@ -58,9 +58,10 @@ type Status struct {
 
 // Registry is the fan-out registry of probes.
 type Registry struct {
-	mu      sync.RWMutex
-	entries []entry
-	timeout time.Duration
+	mu       sync.RWMutex
+	entries  []entry
+	timeout  time.Duration
+	observer Observer
 }
 
 type entry struct {
@@ -104,6 +105,7 @@ func (r *Registry) Snapshot(ctx context.Context) []Status {
 	r.mu.RLock()
 	entries := append([]entry(nil), r.entries...)
 	timeout := r.timeout
+	observer := r.observer
 	r.mu.RUnlock()
 
 	if len(entries) == 0 {
@@ -134,6 +136,16 @@ func (r *Registry) Snapshot(ctx context.Context) []Status {
 		}(i, e)
 	}
 	wg.Wait()
+	if observer != nil {
+		for _, s := range out {
+			observer.ObserveDep(Event{
+				Dep:     s.Name,
+				OK:      s.OK,
+				Latency: time.Duration(s.LatencyMs) * time.Millisecond,
+				Err:     s.Error,
+			})
+		}
+	}
 	return out
 }
 

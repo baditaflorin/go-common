@@ -103,6 +103,11 @@ func WithKeystoreAuth(localTokens ...string) Option {
 func WithDependencies(r *depcheck.Registry) Option {
 	return func(s *Server) {
 		s.Deps = r
+		// Auto-wire the dep observer if AutoWire has already run.
+		// Safe to call with nil — depcheck.SetObserver tolerates it.
+		if dc := promx.AutoDep(); dc != nil && r != nil {
+			r.SetObserver(dc)
+		}
 	}
 }
 
