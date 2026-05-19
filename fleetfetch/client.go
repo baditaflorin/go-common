@@ -198,10 +198,31 @@ func (c *Client) GetWithHeaders(ctx context.Context, targetURL string, headers h
 }
 
 // fetch is the shared implementation behind Get/GetWithMaxAge/GetWithHeaders.
-func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Duration, perReqHeaders http.Header) (*Response, error) {
+func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Duration, perReqHeaders http.Header) (fetchRes *Response, retErr error) {
 	if targetURL == "" {
 		return nil, errors.New("fleetfetch: empty target url")
 	}
+	start := time.Now()
+	defer func() {
+		ev := Event{Host: hostOf(targetURL), Duration: time.Since(start)}
+		switch {
+		case retErr != nil:
+			ev.Result = "error"
+		case fetchRes == nil:
+			ev.Result = "error"
+		case fetchRes.ViaFallback:
+			ev.Result = "fallback"
+			ev.Status = fetchRes.Status
+		case fetchRes.Hit:
+			ev.Result = "hit"
+			ev.Status = fetchRes.Status
+			ev.AgeSeconds = fetchRes.AgeSeconds
+		default:
+			ev.Result = "miss"
+			ev.Status = fetchRes.Status
+		}
+		emit(ev)
+	}()
 	merged := mergeHeaders(c.defaultHeaders, perReqHeaders)
 
 	q := url.Values{}

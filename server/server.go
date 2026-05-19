@@ -129,6 +129,12 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// process, same collectors.
 	egressColl, httpColl, authColl := promx.AutoWire(cfg.AppName, cfg.Version)
 	safehttp.SetDefaultObserver(egressColl)
+	// AutoWire has already installed process-wide observers for
+	// response.Envelope, degraded.Sink, fleetfetch.Client,
+	// circuitbreaker, workpool, backoffcoord, and the safehttp
+	// backoff-consult path. apikey admin observer is per-client and
+	// must be attached by callers that construct an apikey.Client
+	// directly (or by future server-side helpers that own one).
 
 	srv := &Server{
 		Config:             cfg,

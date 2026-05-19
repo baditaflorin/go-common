@@ -74,13 +74,22 @@ func Envelope(data any, schemaVersion int) map[string]any {
 		out["_service"] = serviceID
 	}
 
+	warning := ""
+	defer func() {
+		emitEnvelope(Event{
+			Service:       serviceID,
+			SchemaVersion: schemaVersion,
+			Warning:       warning,
+		})
+	}()
+
 	if data == nil {
 		return out
 	}
 
 	// Fast path: already a map.
 	if m, ok := data.(map[string]any); ok {
-		mergeInto(out, m)
+		warning = mergeInto(out, m)
 		return out
 	}
 
@@ -91,12 +100,13 @@ func Envelope(data any, schemaVersion int) map[string]any {
 		// under "data" via fmt so we still produce a usable envelope
 		// rather than crashing the request.
 		out["data"] = fmt.Sprintf("%v", data)
+		warning = "marshal_failed"
 		return out
 	}
 
 	var asMap map[string]any
 	if err := json.Unmarshal(raw, &asMap); err == nil && asMap != nil {
-		mergeInto(out, asMap)
+		warning = mergeInto(out, asMap)
 		return out
 	}
 
@@ -123,15 +133,19 @@ var reservedKeys = map[string]struct{}{
 // reserved key, dst's envelope-injected value is overwritten by src
 // and a warning is logged — the caller's data is the source of truth
 // when both define the same key.
-func mergeInto(dst, src map[string]any) {
+func mergeInto(dst, src map[string]any) (warning string) {
 	for k, v := range src {
 		if _, reserved := reservedKeys[k]; reserved {
 			if _, hasMeta := dst[k]; hasMeta {
 				fmt.Fprintf(os.Stderr,
 					"response.Envelope: payload key %q conflicts with reserved envelope key; preferring caller value\n",
 					k)
+				if warning == "" {
+					warning = "conflict_" + k
+				}
 			}
 		}
 		dst[k] = v
 	}
+	return warning
 }

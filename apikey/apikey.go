@@ -51,6 +51,11 @@ type Client struct {
 	AdminToken string        // default from APIKEY_SERVICE_ADMIN_TOKEN
 	HTTPClient *http.Client  // default: 5s timeout, no redirects
 	UserAgent  string        // default: "go-common/apikey"
+
+	// AdminObs (optional) receives one AdminEvent per Issue / Revoke /
+	// List / Purge call. promx.NewAdminCollectors returns an
+	// implementation that records fleet-canonical Prometheus metrics.
+	AdminObs AdminObserver
 }
 
 // New returns a Client wired from env vars. AdminToken may be empty if
@@ -218,13 +223,26 @@ func (c *Client) Purge(ctx context.Context) (int, error) {
 	return out.Purged, nil
 }
 
-func (c *Client) adminCall(ctx context.Context, method, path string, body []byte, out any) error {
+func (c *Client) adminCall(ctx context.Context, method, path string, body []byte, out any) (retErr error) {
+	start := time.Now()
+	result := "ok"
+	defer func() {
+		if c.AdminObs != nil {
+			c.AdminObs.ObserveAdmin(AdminEvent{
+				Op:       adminOpFromPath(path),
+				Result:   result,
+				Duration: time.Since(start),
+			})
+		}
+	}()
+
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, rdr)
 	if err != nil {
+		result = "client_error"
 		return fmt.Errorf("apikey %s %s: %w", method, path, err)
 	}
 	req.Header.Set("X-Admin-Token", c.AdminToken)
@@ -234,16 +252,20 @@ func (c *Client) adminCall(ctx context.Context, method, path string, body []byte
 	}
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
+		result = "transport_error"
 		return fmt.Errorf("%w: %v", ErrKeystoreUnavailable, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 500 {
+		result = "unavailable"
 		return fmt.Errorf("%w: HTTP %d", ErrKeystoreUnavailable, resp.StatusCode)
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
+		result = "unauthorized"
 		return errors.New("apikey: admin unauthorized (check APIKEY_SERVICE_ADMIN_TOKEN)")
 	}
 	if resp.StatusCode >= 400 {
+		result = "client_error"
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("apikey %s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(b)))
 	}
@@ -251,6 +273,24 @@ func (c *Client) adminCall(ctx context.Context, method, path string, body []byte
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// adminOpFromPath maps the admin URL path to a stable, low-cardinality
+// op label. Unknown paths fold to "_other" so a future endpoint
+// doesn't blow up cardinality before its own bucket is added.
+func adminOpFromPath(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/issue"):
+		return "issue"
+	case strings.HasPrefix(path, "/revoke"):
+		return "revoke"
+	case strings.HasPrefix(path, "/list"):
+		return "list"
+	case strings.HasPrefix(path, "/purge"):
+		return "purge"
+	default:
+		return "_other"
+	}
 }
 
 // ─── Graceful degradation ──────────────────────────────────────────────
