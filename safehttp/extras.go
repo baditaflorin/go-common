@@ -125,7 +125,24 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// consult the backoff coordinator. Fail-open on any error.
 	if t.backoffURL != "" {
 		if fail, ok := t.recentFailure(host); ok {
-			t.consultBackoff(req.Context(), host, fail)
+			start := time.Now()
+			waited := t.consultBackoff(req.Context(), host, fail)
+			if obs := DefaultBackoffObserver(); obs != nil {
+				outcome := "consulted_no_wait"
+				switch {
+				case waited < 0:
+					outcome = "unreachable"
+				case waited > 0:
+					outcome = "consulted_waited"
+				}
+				obs.ObserveBackoff(BackoffEvent{
+					Host:           host,
+					PriorStatus:    fail.status,
+					Outcome:        outcome,
+					ConsultLatency: time.Since(start),
+					Waited:         waited,
+				})
+			}
 		}
 	}
 
@@ -268,7 +285,7 @@ func (t *extrasTransport) recentFailure(host string) (hostFailure, bool) {
 // (capped by maxBackoffSleep). Bounded by coordinatorConnectTimeout
 // + coordinatorReadTimeout overall so a hung coordinator never
 // escalates to the caller.
-func (t *extrasTransport) consultBackoff(parentCtx context.Context, host string, fail hostFailure) {
+func (t *extrasTransport) consultBackoff(parentCtx context.Context, host string, fail hostFailure) (waited time.Duration) {
 	body := map[string]any{
 		"host": host,
 		"last_response": map[string]any{
@@ -279,7 +296,7 @@ func (t *extrasTransport) consultBackoff(parentCtx context.Context, host string,
 	}
 	buf, err := json.Marshal(body)
 	if err != nil {
-		return
+		return -1
 	}
 
 	// Hard cap: connect + read budget. Never block beyond this.
@@ -299,26 +316,26 @@ func (t *extrasTransport) consultBackoff(parentCtx context.Context, host string,
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.backoffURL+"/backoff", bytes.NewReader(buf))
 	if err != nil {
-		return
+		return -1
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := cli.Do(req)
 	if err != nil {
-		return // fail-open: silent fall-through
+		return -1 // fail-open: silent fall-through
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return
+		return 0
 	}
 	var dec struct {
 		WaitMS int64 `json:"wait_ms"`
 	}
 	lim := io.LimitReader(resp.Body, 1<<14)
 	if err := json.NewDecoder(lim).Decode(&dec); err != nil {
-		return
+		return 0
 	}
 	if dec.WaitMS <= 0 {
-		return
+		return 0
 	}
 	wait := time.Duration(dec.WaitMS) * time.Millisecond
 	if wait > maxBackoffSleep {
@@ -328,7 +345,9 @@ func (t *extrasTransport) consultBackoff(parentCtx context.Context, host string,
 	defer timer.Stop()
 	select {
 	case <-timer.C:
+		return wait
 	case <-parentCtx.Done():
+		return 0
 	}
 }
 

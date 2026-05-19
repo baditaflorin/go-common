@@ -37,3 +37,22 @@ const (
 	CacheResultInnerInvalid     CacheResult = "inner_invalid"     // upstream returned ErrInvalidKey (cache cleared)
 	CacheResultInnerUnavailable CacheResult = "inner_unavailable" // upstream errored and no cache to fall back on
 )
+
+// AdminObserver receives one event per Client.Issue / Revoke / List /
+// Purge call. Implementations MUST NOT block — callbacks run inline.
+// The canonical implementation lives in go-common/promx and records
+// apikey_admin_total{service, op, result} + duration histograms.
+//
+// Op is one of "issue", "revoke", "list", "purge". Result is one of
+// "ok", "unauthorized", "unavailable", "client_error",
+// "transport_error". Duration is the wall-clock time of the call.
+type AdminObserver interface {
+	ObserveAdmin(AdminEvent)
+}
+
+// AdminEvent is the per-admin-call payload handed to an AdminObserver.
+type AdminEvent struct {
+	Op       string
+	Result   string
+	Duration time.Duration
+}

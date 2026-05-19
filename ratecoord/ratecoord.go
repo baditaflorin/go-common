@@ -61,6 +61,16 @@ type Client struct {
 
 	fbRPS   float64
 	fbBurst int
+
+	observer Observer
+}
+
+// emit fires the observer if one is attached. Internal helper so the
+// hot path stays nil-safe without inline ceremony.
+func (c *Client) emit(ev Event) {
+	if c.observer != nil {
+		c.observer.ObserveRate(ev)
+	}
 }
 
 // New constructs a client from environment. Safe to call at package init.
@@ -120,6 +130,7 @@ func (c *Client) Wait(ctx context.Context, host string, weight int, maxWait time
 	// Try the coordinator first.
 	res, err := c.waitRemote(ctx, host, weight, maxWait)
 	if err == nil {
+		c.emit(Event{Host: host, Weight: weight, Waited: time.Duration(res.WaitedMs) * time.Millisecond, Allowed: true, FellBack: false, Reason: res.Reason})
 		return res, nil
 	}
 
@@ -131,17 +142,21 @@ func (c *Client) Wait(ctx context.Context, host string, weight int, maxWait time
 	start := time.Now()
 	lim := c.fallbackLimiter(host)
 	if err := lim.WaitN(waitCtx, weight); err != nil {
-		return &WaitResult{
+		out := &WaitResult{
 			WaitedMs: time.Since(start).Milliseconds(),
 			FellBack: true,
 			Reason:   "coordinator unreachable: " + err.Error(),
-		}, err
+		}
+		c.emit(Event{Host: host, Weight: weight, Waited: time.Duration(out.WaitedMs) * time.Millisecond, Allowed: false, FellBack: true, Reason: out.Reason})
+		return out, err
 	}
-	return &WaitResult{
+	out := &WaitResult{
 		WaitedMs: time.Since(start).Milliseconds(),
 		FellBack: true,
 		Reason:   "coordinator unreachable: " + err.Error(),
-	}, nil
+	}
+	c.emit(Event{Host: host, Weight: weight, Waited: time.Duration(out.WaitedMs) * time.Millisecond, Allowed: true, FellBack: true, Reason: out.Reason})
+	return out, nil
 }
 
 func (c *Client) fallbackLimiter(host string) *rate.Limiter {
