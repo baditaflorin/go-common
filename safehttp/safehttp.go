@@ -72,6 +72,11 @@ var (
 	ErrInvalidScheme = errors.New("scheme must be http or https")
 	// ErrMissingHost is returned when a URL has no host component.
 	ErrMissingHost = errors.New("missing host")
+	// ErrEgressNotAllowed is returned when a request targets a host that
+	// is not in the configured outbound allowlist (see WithEgressAllowlist
+	// / WithDenyAllEgress). The check fires AFTER the SSRF guard but
+	// BEFORE any network I/O — no DNS resolution, no TCP connect.
+	ErrEgressNotAllowed = errors.New("egress not allowed")
 )
 
 // IsBlocked reports whether ip falls in any blocked range:
@@ -225,6 +230,12 @@ type options struct {
 
 	// Egress observer — see WithObserver. nil = no observation.
 	observer EgressObserver
+
+	// egressAllowlist, when non-nil, restricts outbound requests to
+	// the listed hostnames (lowercased). nil means "no enforcement"
+	// — backwards-compatible default. An empty non-nil map means
+	// "deny all" (see WithDenyAllEgress). See WithEgressAllowlist.
+	egressAllowlist map[string]struct{}
 }
 
 // Option configures NewClient.
@@ -256,6 +267,48 @@ func WithoutProxy() Option { return func(o *options) { o.withoutProxy = true } }
 // fails loudly at startup instead of silently leaking the dockerhost
 // IP. Mutually exclusive with WithoutProxy.
 func RequireProxy() Option { return func(o *options) { o.requireProxy = true } }
+
+// WithEgressAllowlist restricts outbound requests to the given hostnames.
+// Any GET/POST/etc. whose URL.Hostname() is not in the list returns
+// ErrEgressNotAllowed without making a network call.
+//
+// Pass hostnames as exact matches: "api.hetzner.cloud",
+// "api.github.com". Wildcards are NOT supported — keep the rule literal
+// to force operators to register each fan-out destination explicitly
+// (typically sourced from service.yaml auth.calls_external).
+//
+// Matching is case-insensitive (DNS hostnames are case-insensitive per
+// RFC 1035) and ignores the URL port — only the bare host is compared.
+//
+// Not calling WithEgressAllowlist (the default) means "no allowlist
+// enforcement" — existing safehttp behavior is unchanged. To explicitly
+// forbid all outbound calls, use WithDenyAllEgress.
+//
+// The check runs AFTER the existing SSRF guard (private-IP blocking)
+// but BEFORE any network I/O is performed, so a blocked call resolves
+// no DNS and opens no socket.
+func WithEgressAllowlist(hosts ...string) Option {
+	return func(o *options) {
+		o.egressAllowlist = make(map[string]struct{}, len(hosts))
+		for _, h := range hosts {
+			h = strings.ToLower(strings.TrimSpace(h))
+			if h == "" {
+				continue
+			}
+			o.egressAllowlist[h] = struct{}{}
+		}
+	}
+}
+
+// WithDenyAllEgress is sugar for WithEgressAllowlist with no entries —
+// every outbound call returns ErrEgressNotAllowed. Intended for
+// services that MUST NOT make external calls (e.g. selftest-only
+// fixtures, sandbox harnesses).
+func WithDenyAllEgress() Option {
+	return func(o *options) {
+		o.egressAllowlist = map[string]struct{}{}
+	}
+}
 
 // NewClient returns an *http.Client with a guarded transport. The transport
 // blocks private/internal IPs on every dial, including after redirects, making
@@ -338,6 +391,17 @@ func NewClient(opts ...Option) *http.Client {
 		observer:     o.observer,
 		proxyFn:      proxyFn,
 		caller:       callerFromUA(o.userAgent),
+	}
+
+	// Egress allowlist — runs as the outermost wrapper so the check
+	// fires before any other transport (including extras' backoff
+	// consult and the underlying dialer's SSRF guard) attempts I/O.
+	// Nil egressAllowlist = no enforcement; matches v0.15.0 chain.
+	if o.egressAllowlist != nil {
+		rt = &egressAllowlistTransport{
+			inner: rt,
+			allow: o.egressAllowlist,
+		}
 	}
 	ua, maxR := o.userAgent, o.maxRedirects
 	return &http.Client{
@@ -442,4 +506,30 @@ var TestAllowedHosts = []string{
 	"8.8.8.8",
 	"1.1.1.1",
 	"93.184.216.34",
+}
+
+// egressAllowlistTransport rejects outbound requests whose target host
+// is not in the configured allowlist. The rejection happens BEFORE any
+// inner transport (including DNS, dialing, or TLS) is invoked, so a
+// blocked call never hits the wire. See WithEgressAllowlist.
+type egressAllowlistTransport struct {
+	inner http.RoundTripper
+	allow map[string]struct{}
+}
+
+func (t *egressAllowlistTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	rawHost := req.URL.Hostname()
+	// Preserve SSRF-guard ordering: if the target is a literal IP in
+	// a blocked range, return ErrBlocked first so operators see the
+	// stronger signal (SSRF attempt) rather than a generic
+	// "not allowed" message. DNS-resolved hostnames still go through
+	// the dialer's SSRF guard inside inner.RoundTrip.
+	if ip := net.ParseIP(rawHost); ip != nil && IsBlocked(ip) {
+		return nil, ErrBlocked
+	}
+	host := strings.ToLower(rawHost)
+	if _, ok := t.allow[host]; !ok {
+		return nil, fmt.Errorf("safehttp: %w: %s", ErrEgressNotAllowed, rawHost)
+	}
+	return t.inner.RoundTrip(req)
 }
