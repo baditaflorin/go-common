@@ -47,8 +47,8 @@ type realClock struct{}
 // This is what production code should use.
 func Real() Clock { return realClock{} }
 
-func (realClock) Now() time.Time                  { return time.Now() }
-func (realClock) Since(t time.Time) time.Duration { return time.Since(t) }
+func (realClock) Now() time.Time                         { return time.Now() }
+func (realClock) Since(t time.Time) time.Duration        { return time.Since(t) }
 func (realClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
 // ─── Mock clock ────────────────────────────────────────────────────────────

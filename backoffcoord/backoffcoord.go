@@ -32,10 +32,10 @@ import (
 )
 
 const (
-	DefaultURL              = "https://backoff-coordinator.0exec.com"
-	defaultConnectTimeout   = 500 * time.Millisecond
-	defaultReadTimeout      = 1 * time.Second
-	defaultMaxWait          = 5 * time.Second
+	DefaultURL            = "https://backoff-coordinator.0exec.com"
+	defaultConnectTimeout = 500 * time.Millisecond
+	defaultReadTimeout    = 1 * time.Second
+	defaultMaxWait        = 5 * time.Second
 )
 
 // Client talks to a backoff-coordinator instance. Construct one per
@@ -66,7 +66,7 @@ func New() *Client {
 		HTTP: &http.Client{
 			Timeout: defaultConnectTimeout + defaultReadTimeout,
 			Transport: &http.Transport{
-				DialContext: (&net.Dialer{Timeout: defaultConnectTimeout}).DialContext,
+				DialContext:           (&net.Dialer{Timeout: defaultConnectTimeout}).DialContext,
 				ResponseHeaderTimeout: defaultReadTimeout,
 				DisableKeepAlives:     true,
 			},

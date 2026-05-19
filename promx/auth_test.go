@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/baditaflorin/go-common/apikey"
+	"github.com/baditaflorin/go-common/header"
 	"github.com/baditaflorin/go-common/middleware"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -54,7 +55,7 @@ func TestAuthCollectorsGatewayHeader(t *testing.T) {
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 	r := httptest.NewRequest("GET", "/api/x", nil)
-	r.Header.Set("X-Auth-User", "alice")
+	r.Header.Set(header.AuthUser, "alice")
 	h.ServeHTTP(httptest.NewRecorder(), r)
 
 	if got := testutil.ToFloat64(auth.authTotal.WithLabelValues(auth.service, "gateway", "allow")); got != 1 {

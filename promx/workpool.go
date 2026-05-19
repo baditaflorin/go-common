@@ -15,7 +15,9 @@ import (
 //	pool_phase_total{service, pool, phase}  // counter: queued / started / finished / canceled / shed
 //
 // Saturation pattern: alert on
-//   `pool_inflight / on(service, pool) group_left pool_size >= 1`
+//
+//	`pool_inflight / on(service, pool) group_left pool_size >= 1`
+//
 // once we publish pool_size as a separate gauge — for now,
 // `pool_queue_depth > 0` is the canonical "you're starved" signal.
 type WorkpoolCollectors struct {

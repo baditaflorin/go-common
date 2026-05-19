@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/baditaflorin/go-common/config"
+	"github.com/baditaflorin/go-common/header"
 	"github.com/baditaflorin/go-common/middleware"
 	"github.com/baditaflorin/go-common/server"
 )
@@ -329,7 +330,7 @@ func TestCancellation_MaxInFlightDoesNotBlock(t *testing.T) {
 // error responds 401 and skips cancellation.
 func TestCancellation_AdminGateRefusesNonAdmin(t *testing.T) {
 	gate := func(r *http.Request) error {
-		if r.Header.Get("X-Admin-Token") != "secret" {
+		if r.Header.Get(header.AdminToken) != "secret" {
 			return errors.New("forbidden")
 		}
 		return nil
@@ -368,7 +369,7 @@ func TestCancellation_AdminGateRefusesNonAdmin(t *testing.T) {
 
 	// With the admin token, the cancel must succeed.
 	req2, _ := http.NewRequest(http.MethodDelete, ts.URL+"/cancel/"+id, nil)
-	req2.Header.Set("X-Admin-Token", "secret")
+	req2.Header.Set(header.AdminToken, "secret")
 	resp2, err := http.DefaultClient.Do(req2)
 	if err != nil {
 		t.Fatalf("delete err: %v", err)

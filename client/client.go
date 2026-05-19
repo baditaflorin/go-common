@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/baditaflorin/go-common/header"
 	"github.com/baditaflorin/go-common/middleware"
 )
 
@@ -26,7 +27,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	if ctx := req.Context(); ctx != nil {
 		reqID := middleware.GetRequestID(ctx)
 		if reqID != "" {
-			req.Header.Set("X-Request-ID", reqID)
+			req.Header.Set(header.RequestID, reqID)
 		}
 	}
 	return c.HTTPClient.Do(req)

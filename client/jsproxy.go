@@ -58,6 +58,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/baditaflorin/go-common/env"
 )
 
 // NetworkEntry is one row of the captured network log for a JS-rendered page.
@@ -147,7 +149,7 @@ func JSProxyDOM(ctx context.Context, targetURL string) (*ProxyResult, error) {
 	if apiKey == "" {
 		return nil, errors.New("jsproxy: JS_PROXY_DOM_API_KEY (or legacy JS_PROXY_API_KEY) env var is required")
 	}
-	base := envOr("JS_PROXY_DOM_URL", DefaultJSProxyDOMURL)
+	base := env.String("JS_PROXY_DOM_URL", DefaultJSProxyDOMURL)
 	return jsProxyDOM(ctx, base, apiKey, targetURL)
 }
 

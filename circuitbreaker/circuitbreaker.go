@@ -14,12 +14,12 @@
 // Semantics:
 //
 //   - closed:    requests pass through; failures increment the counter.
-//                When ≥ FailureThreshold consecutive failures happen,
-//                the breaker opens.
+//     When ≥ FailureThreshold consecutive failures happen,
+//     the breaker opens.
 //   - open:      requests fail-fast with ErrOpen until OpenFor elapses,
-//                at which point it flips to half-open.
+//     at which point it flips to half-open.
 //   - half-open: exactly one probe request is allowed through. Success
-//                resets to closed; failure flips back to open.
+//     resets to closed; failure flips back to open.
 //
 // Use Allow() as a pre-check on the hot path, then Success() or
 // Failure() on the outcome. The breaker neither retries nor sleeps;

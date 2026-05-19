@@ -93,7 +93,10 @@ func decodeJSON(r *http.Request, dst any) error {
 
 // regexpCache caches compiled regexps to avoid re-compiling on each request.
 var regexpCache = struct {
-	mu    interface{ Lock(); Unlock() }
+	mu interface {
+		Lock()
+		Unlock()
+	}
 	items map[string]*regexp.Regexp
 }{items: make(map[string]*regexp.Regexp)}
 
@@ -101,7 +104,10 @@ var regexpCache = struct {
 var reCache = newRegexpCache()
 
 type regCache struct {
-	mu    interface{ Lock(); Unlock() }
+	mu interface {
+		Lock()
+		Unlock()
+	}
 	items map[string]*regexp.Regexp
 }
 

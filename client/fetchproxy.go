@@ -10,26 +10,26 @@
 // actually served the request. The helper picks a backend in this order:
 //
 //  1. js-proxy   (when WithJSRender(true) is set — full Chromium render,
-//                 returns rendered DOM + network[] + cookies_set[]).
-//                 Requires JS_PROXY_URL + JS_PROXY_API_KEY. Fails hard
-//                 on error; we never silently downgrade to plain HTML
-//                 when the caller asked for a rendered DOM.
+//     returns rendered DOM + network[] + cookies_set[]).
+//     Requires JS_PROXY_URL + JS_PROXY_API_KEY. Fails hard
+//     on error; we never silently downgrade to plain HTML
+//     when the caller asked for a rendered DOM.
 //
 //  2. html-proxy (only when HTML_PROXY_URL is explicitly set — a
-//                 dedicated proxy service that handles
-//                 redirect/encoding/CF normalisation upstream of this
-//                 caller. Currently no fleet service ships this role;
-//                 the slot is reserved for when one does. Falls back
-//                 to direct on error.)
+//     dedicated proxy service that handles
+//     redirect/encoding/CF normalisation upstream of this
+//     caller. Currently no fleet service ships this role;
+//     the slot is reserved for when one does. Falls back
+//     to direct on error.)
 //
 //  3. direct     (the DEFAULT path — uses safehttp.NewClient for SSRF
-//                 protection plus a CheckRedirect callback that captures
-//                 each hop's headers + Set-Cookie trail. The
-//                 "centralisation" lives in this library function, not
-//                 in a separate service: services that call Fetch all
-//                 share the same SSRF guard, redirect handler, cookie
-//                 collector, and UA. JS rendering is unavailable on
-//                 this path; opt in with WithJSRender if you need it.)
+//     protection plus a CheckRedirect callback that captures
+//     each hop's headers + Set-Cookie trail. The
+//     "centralisation" lives in this library function, not
+//     in a separate service: services that call Fetch all
+//     share the same SSRF guard, redirect handler, cookie
+//     collector, and UA. JS rendering is unavailable on
+//     this path; opt in with WithJSRender if you need it.)
 //
 // FetchResult.Backend says which path won. FetchResult.Degraded is true
 // whenever the helper fell back from the requested backend; the
@@ -64,6 +64,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baditaflorin/go-common/env"
 	"github.com/baditaflorin/go-common/safehttp"
 )
 
@@ -264,13 +265,13 @@ func Fetch(ctx context.Context, target string, opts ...FetchOption) (*FetchResul
 // served by go-html-proxy's /fetch endpoint; kept in lockstep with that
 // service. See go-html-proxy/main.go for the canonical shape.
 type htmlProxyResponse struct {
-	URL           string     `json:"url"`
-	FinalURL      string     `json:"final_url"`
-	Status        int        `json:"status"`
+	URL           string            `json:"url"`
+	FinalURL      string            `json:"final_url"`
+	Status        int               `json:"status"`
 	Headers       map[string]string `json:"headers"`
-	Body          string     `json:"body"`
-	RedirectChain []FetchHop `json:"redirect_chain"`
-	CookiesSet    []FetchCookie `json:"cookies_set"`
+	Body          string            `json:"body"`
+	RedirectChain []FetchHop        `json:"redirect_chain"`
+	CookiesSet    []FetchCookie     `json:"cookies_set"`
 }
 
 func fetchViaHTMLProxy(ctx context.Context, target string, cfg fetchConfig) (*FetchResult, error) {
@@ -549,7 +550,7 @@ func ProbeJSProxy(ctx context.Context) error {
 // renders pages and never walks the network array — the cheaper
 // proxy will still serve you and that's the dep you should declare.
 func ProbeJSProxyDOM(ctx context.Context) error {
-	base := envOr("JS_PROXY_DOM_URL", DefaultJSProxyDOMURL)
+	base := env.String("JS_PROXY_DOM_URL", DefaultJSProxyDOMURL)
 	return probeHealth(ctx, base)
 }
 
@@ -571,13 +572,6 @@ func probeHealth(ctx context.Context, base string) error {
 		return fmt.Errorf("probe %s: status %d", base, resp.StatusCode)
 	}
 	return nil
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }
 
 func envFirst(keys ...string) string {

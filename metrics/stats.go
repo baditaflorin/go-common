@@ -28,9 +28,9 @@ type Stats struct {
 type LatencyStats struct {
 	TotalDuration time.Duration    `json:"-"`
 	AvgDuration   string           `json:"avg_duration"`
-	P50           string           `json:"p50"` // median latency
-	P95           string           `json:"p95"` // 95th percentile
-	P99           string           `json:"p99"` // 99th percentile
+	P50           string           `json:"p50"`     // median latency
+	P95           string           `json:"p95"`     // 95th percentile
+	P99           string           `json:"p99"`     // 99th percentile
 	Buckets       map[string]int64 `json:"buckets"` // <10ms, <100ms, <500ms, <1s, >1s
 
 	// rawSamples stores the last MaxLatencySamples durations for

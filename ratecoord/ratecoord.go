@@ -44,7 +44,7 @@ import (
 )
 
 const (
-	DefaultURL   = "https://rate-coordinator.0exec.com"
+	DefaultURL       = "https://rate-coordinator.0exec.com"
 	DefaultTimeoutMS = 5000
 )
 

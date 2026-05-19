@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/baditaflorin/go-common/apikey"
+	"github.com/baditaflorin/go-common/header"
 )
 
 // TokenAuthKeystore is the canonical fleet auth middleware once a service
@@ -26,15 +27,22 @@ import (
 // Migration path for a service:
 //
 //   - r := mux.NewRouter()
-//   + import "github.com/baditaflorin/go-common/middleware"
-//   + import "github.com/baditaflorin/go-common/apikey"
+//
+//   - import "github.com/baditaflorin/go-common/middleware"
+//
+//   - import "github.com/baditaflorin/go-common/apikey"
 //
 //     ks := apikey.NewCache(apikey.New())
+//
 //   - r.Use(middleware.TokenAuth([]string{os.Getenv("API_KEYS")…}))
-//   + r.Use(middleware.TokenAuthKeystore(middleware.KeystoreOpts{
-//   +     Verifier:    ks,
-//   +     LocalTokens: strings.Split(os.Getenv("API_KEYS"), ","),
-//   + }))
+//
+//   - r.Use(middleware.TokenAuthKeystore(middleware.KeystoreOpts{
+//
+//   - Verifier:    ks,
+//
+//   - LocalTokens: strings.Split(os.Getenv("API_KEYS"), ","),
+//
+//   - }))
 //
 // One-line library change → every service that bumps go-common picks up
 // keystore auth. No per-repo handler rewrite.
@@ -50,7 +58,7 @@ type KeystoreOpts struct {
 	// TrustGatewayHeader: if non-empty, requests carrying this header are
 	// treated as already-authenticated (the gateway sets X-Auth-User after
 	// the keystore returned 200). Skip both keystore and local check.
-	// Default "X-Auth-User".
+	// Default header.AuthUser.
 	TrustGatewayHeader string
 
 	// VerifyTimeout caps the upstream keystore call. Default 3s.
@@ -108,7 +116,7 @@ type ScopeChecker interface {
 
 func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 	if opts.TrustGatewayHeader == "" {
-		opts.TrustGatewayHeader = "X-Auth-User"
+		opts.TrustGatewayHeader = header.AuthUser
 	}
 	if opts.VerifyTimeout == 0 {
 		opts.VerifyTimeout = 3 * time.Second
@@ -154,7 +162,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				//     compromise or non-gateway path injection) can't
 				//     escalate. See KeystoreOpts.OutOfBandScopeCheck.
 				if opts.OutOfBandScopeCheck && opts.ScopeChecker != nil {
-					claimedScope := r.Header.Get("X-Auth-Scope")
+					claimedScope := r.Header.Get(header.AuthScope)
 					token := extractToken(r)
 					if token == "" {
 						// No key to re-verify against. Reject —
@@ -223,8 +231,8 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				// Surface user + scope to downstream handlers if anyone
 				// wants them. Headers are clobbered (not appended) so
 				// callers can't smuggle their own.
-				r.Header.Set("X-Auth-User", res.User)
-				r.Header.Set("X-Auth-Scope", res.Scope)
+				r.Header.Set(header.AuthUser, res.User)
+				r.Header.Set(header.AuthScope, res.Scope)
 				observe(AuthSourceKeystore, AuthResultAllow, dur)
 				next.ServeHTTP(w, r)
 				return
@@ -264,7 +272,7 @@ func extractToken(r *http.Request) string {
 	if v := r.Header.Get("Authorization"); strings.HasPrefix(v, "Bearer ") {
 		return strings.TrimPrefix(v, "Bearer ")
 	}
-	if v := r.Header.Get("X-API-Key"); v != "" {
+	if v := r.Header.Get(header.APIKey); v != "" {
 		return v
 	}
 	return r.URL.Query().Get("api_key")

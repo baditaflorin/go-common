@@ -35,13 +35,13 @@ func resetState(t *testing.T) {
 
 func TestTemplatisePath(t *testing.T) {
 	cases := map[string]string{
-		"/users/42":                       "/users/{id}",
-		"/users/42/posts":                 "/users/{id}/posts",
+		"/users/42":       "/users/{id}",
+		"/users/42/posts": "/users/{id}/posts",
 		"/share/550e8400-e29b-41d4-a716-446655440000": "/share/{uuid}",
-		"/api/v2/orders":                  "/api/v2/orders",
-		"/":                               "/",
-		"":                                "/",
-		"/users/42?foo=bar":               "/users/{id}",
+		"/api/v2/orders":                       "/api/v2/orders",
+		"/":                                    "/",
+		"":                                     "/",
+		"/users/42?foo=bar":                    "/users/{id}",
 		"/t/abc1234deadbeef5678cafebabe9999/x": "/t/{token}/x",
 	}
 	for in, want := range cases {
@@ -56,11 +56,11 @@ func TestCallerFromUA(t *testing.T) {
 	cases := map[string]string{
 		"go_apikey_scanner/1.2.3 (+https://github.com/baditaflorin/go_apikey_scanner)": "go_apikey_scanner",
 		"go-pentest-subfinder/0.1.0 (+...)":                                            "go-pentest-subfinder",
-		"Mozilla/5.0 (Macintosh)":                                                       "",
-		"curl/7.88.1":                                                                   "",
-		"":                                                                              "",
-		"randomthing":                                                                   "",
-		"Go-http-client/1.1":                                                            "",
+		"Mozilla/5.0 (Macintosh)":                                                      "",
+		"curl/7.88.1":                                                                  "",
+		"":                                                                             "",
+		"randomthing":                                                                  "",
+		"Go-http-client/1.1":                                                           "",
 	}
 	for in, want := range cases {
 		if got := callerFromUA(in); got != want {
@@ -71,13 +71,13 @@ func TestCallerFromUA(t *testing.T) {
 
 func TestTargetFromHost(t *testing.T) {
 	cases := map[string]string{
-		"go-js-proxy.0exec.com":          "go-js-proxy",
+		"go-js-proxy.0exec.com":           "go-js-proxy",
 		"go-pentest-subfinder.0crawl.com": "go-pentest-subfinder",
-		"go-js-proxy.0exec.com:443":      "go-js-proxy",
-		"example.com":                    "external:example.com",
-		"10.10.10.20":                    "internal:10.10.10.20",
-		"localhost":                      "internal:localhost",
-		"":                               "external:unknown",
+		"go-js-proxy.0exec.com:443":       "go-js-proxy",
+		"example.com":                     "external:example.com",
+		"10.10.10.20":                     "internal:10.10.10.20",
+		"localhost":                       "internal:localhost",
+		"":                                "external:unknown",
 	}
 	for in, want := range cases {
 		if got := targetFromHost(in); got != want {

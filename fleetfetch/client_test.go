@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/baditaflorin/go-common/header"
 )
 
 func TestNewClient_DefaultsAndEnv(t *testing.T) {
@@ -120,7 +122,7 @@ func TestGet_CacheHit(t *testing.T) {
 	var gotPath, gotKey string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path + "?" + r.URL.RawQuery
-		gotKey = r.Header.Get("X-API-Key")
+		gotKey = r.Header.Get(header.APIKey)
 		w.Header().Set("X-FetchCache-Hit", "true")
 		w.Header().Set("X-FetchCache-Age-Seconds", "42")
 		w.Header().Set("X-FetchCache-Final-Url", "https://example.com/")

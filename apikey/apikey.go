@@ -5,27 +5,27 @@
 // The keystore is the security crown jewel: if it falls, every 0exec
 // service falls. This package enforces three discipline:
 //
-//   1. A single HTTP client with timeouts (no caller-set unbounded retries).
-//   2. Constant-time admin-token header construction (mirrors server side).
-//   3. A LocalCache layer that absorbs short keystore outages without
-//      authenticating new keys — see Cache.Verify and Verifier interface.
+//  1. A single HTTP client with timeouts (no caller-set unbounded retries).
+//  2. Constant-time admin-token header construction (mirrors server side).
+//  3. A LocalCache layer that absorbs short keystore outages without
+//     authenticating new keys — see Cache.Verify and Verifier interface.
 //
 // Wire format
 //
-//   POST /verify   headers: X-Verify-Key=<key>
-//                  200  → valid (headers X-Auth-User, X-Auth-Scope)
-//                  401  → invalid / expired / revoked
-//                  5xx  → keystore problem; caller chooses degrade policy
+//	POST /verify   headers: X-Verify-Key=<key>
+//	               200  → valid (headers X-Auth-User, X-Auth-Scope)
+//	               401  → invalid / expired / revoked
+//	               5xx  → keystore problem; caller chooses degrade policy
 //
-//   POST /issue    headers: X-Admin-Token=<admin>; JSON body
-//   POST /revoke   headers: X-Admin-Token=<admin>; JSON body {"key":"..."}
-//   GET  /list     headers: X-Admin-Token=<admin>; returns {"keys":[...]}
-//   POST /purge    headers: X-Admin-Token=<admin>; no body
+//	POST /issue    headers: X-Admin-Token=<admin>; JSON body
+//	POST /revoke   headers: X-Admin-Token=<admin>; JSON body {"key":"..."}
+//	GET  /list     headers: X-Admin-Token=<admin>; returns {"keys":[...]}
+//	POST /purge    headers: X-Admin-Token=<admin>; no body
 //
 // Environment
 //
-//   APIKEY_SERVICE_URL          base URL (default: http://localhost:18021)
-//   APIKEY_SERVICE_ADMIN_TOKEN  the admin token; required for admin ops
+//	APIKEY_SERVICE_URL          base URL (default: http://localhost:18021)
+//	APIKEY_SERVICE_ADMIN_TOKEN  the admin token; required for admin ops
 //
 // Production URL + admin token live in private fleet-state/OPS.md.
 package apikey
@@ -42,15 +42,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/baditaflorin/go-common/env"
+	"github.com/baditaflorin/go-common/header"
 )
 
 // Client is a minimal, timeout-bounded HTTP client for the keystore.
 // Construct one per process and reuse — don't churn HTTPClient instances.
 type Client struct {
-	BaseURL    string        // default from APIKEY_SERVICE_URL
-	AdminToken string        // default from APIKEY_SERVICE_ADMIN_TOKEN
-	HTTPClient *http.Client  // default: 5s timeout, no redirects
-	UserAgent  string        // default: "go-common/apikey"
+	BaseURL    string       // default from APIKEY_SERVICE_URL
+	AdminToken string       // default from APIKEY_SERVICE_ADMIN_TOKEN
+	HTTPClient *http.Client // default: 5s timeout, no redirects
+	UserAgent  string       // default: "go-common/apikey"
 
 	// AdminObs (optional) receives one AdminEvent per Issue / Revoke /
 	// List / Purge call. promx.NewAdminCollectors returns an
@@ -62,7 +65,7 @@ type Client struct {
 // the caller only does /verify (no admin endpoints).
 func New() *Client {
 	return &Client{
-		BaseURL:    envOr("APIKEY_SERVICE_URL", "http://localhost:18021"),
+		BaseURL:    env.String("APIKEY_SERVICE_URL", "http://localhost:18021"),
 		AdminToken: os.Getenv("APIKEY_SERVICE_ADMIN_TOKEN"),
 		HTTPClient: &http.Client{
 			Timeout: 5 * time.Second,
@@ -72,13 +75,6 @@ func New() *Client {
 		},
 		UserAgent: "go-common/apikey",
 	}
-}
-
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
 }
 
 // ─── Errors ────────────────────────────────────────────────────────────
@@ -111,7 +107,7 @@ func (c *Client) Verify(ctx context.Context, key string) (*VerifyResult, error) 
 	if err != nil {
 		return nil, fmt.Errorf("apikey verify: build req: %w", err)
 	}
-	req.Header.Set("X-Verify-Key", key)
+	req.Header.Set(header.VerifyKey, key)
 	req.Header.Set("User-Agent", c.UserAgent)
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -121,8 +117,8 @@ func (c *Client) Verify(ctx context.Context, key string) (*VerifyResult, error) 
 	switch resp.StatusCode {
 	case http.StatusOK:
 		return &VerifyResult{
-			User:  resp.Header.Get("X-Auth-User"),
-			Scope: resp.Header.Get("X-Auth-Scope"),
+			User:  resp.Header.Get(header.AuthUser),
+			Scope: resp.Header.Get(header.AuthScope),
 		}, nil
 	case http.StatusUnauthorized:
 		return nil, ErrInvalidKey
@@ -245,7 +241,7 @@ func (c *Client) adminCall(ctx context.Context, method, path string, body []byte
 		result = "client_error"
 		return fmt.Errorf("apikey %s %s: %w", method, path, err)
 	}
-	req.Header.Set("X-Admin-Token", c.AdminToken)
+	req.Header.Set(header.AdminToken, c.AdminToken)
 	req.Header.Set("User-Agent", c.UserAgent)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")

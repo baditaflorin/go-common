@@ -27,10 +27,10 @@ import (
 type SelftestCollectors struct {
 	service string
 
-	checkPass    *prometheus.GaugeVec
-	checkRuns    *prometheus.CounterVec
-	runs         *prometheus.CounterVec
-	runDuration  *prometheus.HistogramVec
+	checkPass   *prometheus.GaugeVec
+	checkRuns   *prometheus.CounterVec
+	runs        *prometheus.CounterVec
+	runDuration *prometheus.HistogramVec
 }
 
 // NewSelftestCollectors registers the /selftest collectors on reg.

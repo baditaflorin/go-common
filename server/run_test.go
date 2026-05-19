@@ -10,9 +10,9 @@ func TestKebabAlias(t *testing.T) {
 		{"go_ad_density", "ad-density"},
 		{"go_a11y_quick", "a11y-quick"},
 		{"go_xss_scanner", "xss-scanner"},
-		{"go_scc", "scc"},                  // single-word stays single-word
-		{"plain", ""},                       // no go_ prefix, no underscores → no alias
-		{"already-kebab", ""},               // no go_ prefix, no underscores → no alias
+		{"go_scc", "scc"},     // single-word stays single-word
+		{"plain", ""},         // no go_ prefix, no underscores → no alias
+		{"already-kebab", ""}, // no go_ prefix, no underscores → no alias
 		{"snake_case_no_go_prefix", "snake-case-no-go-prefix"},
 	}
 	for _, c := range cases {

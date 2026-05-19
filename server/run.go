@@ -24,16 +24,16 @@ import (
 //
 // What it does, in order:
 //
-//   1. config.Load(serviceName, version)             — same as today
-//   2. WithKeystoreAuth("default_token") prepended   — fleet auth
-//   3. server.New(cfg, opts...)                      — /health, /version,
-//                                                      /metrics + base mw
-//   4. srv.Mux.HandleFunc("/", handler)              — catchall (post-gateway
-//                                                      strip lands here)
-//   5. srv.Mux.HandleFunc("/"+serviceName, handler)  — direct/internal entry
-//   6. srv.Mux.HandleFunc("/"+kebab, handler)        — public kebab alias
-//                                                      (only if different)
-//   7. srv.Start()                                   — listen forever
+//  1. config.Load(serviceName, version)             — same as today
+//  2. WithKeystoreAuth("default_token") prepended   — fleet auth
+//  3. server.New(cfg, opts...)                      — /health, /version,
+//     /metrics + base mw
+//  4. srv.Mux.HandleFunc("/", handler)              — catchall (post-gateway
+//     strip lands here)
+//  5. srv.Mux.HandleFunc("/"+serviceName, handler)  — direct/internal entry
+//  6. srv.Mux.HandleFunc("/"+kebab, handler)        — public kebab alias
+//     (only if different)
+//  7. srv.Start()                                   — listen forever
 //
 // Callers that need extra routes or custom middleware should use
 // server.New(cfg, opts...) + manual srv.Mux.HandleFunc(...) + srv.Start()

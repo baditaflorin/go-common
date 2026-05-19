@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/baditaflorin/go-common/header"
 	"github.com/baditaflorin/go-common/safehttp"
 )
 
@@ -62,15 +63,15 @@ const DefaultAPIKey = "default_token"
 // verbatim; the cache-side metadata is broken out into typed fields
 // so callers can log hit rates without parsing headers themselves.
 type Response struct {
-	Status     int
-	Header     http.Header
-	Body       []byte
-	FinalURL   string
-	Hit        bool          // true if served from cache
-	AgeSeconds int           // age of the cached entry; 0 on miss
-	UpstreamMS int64         // time the original upstream fetch took
-	FetchedAt  time.Time     // when the cached entry was created
-	ViaFallback bool         // true if cache was unreachable and we direct-fetched via safehttp
+	Status      int
+	Header      http.Header
+	Body        []byte
+	FinalURL    string
+	Hit         bool      // true if served from cache
+	AgeSeconds  int       // age of the cached entry; 0 on miss
+	UpstreamMS  int64     // time the original upstream fetch took
+	FetchedAt   time.Time // when the cached entry was created
+	ViaFallback bool      // true if cache was unreachable and we direct-fetched via safehttp
 }
 
 // Client wraps the HTTP plumbing for talking to the fleet fetch cache,
@@ -79,8 +80,8 @@ type Response struct {
 type Client struct {
 	cacheURL    string
 	apiKey      string
-	cacheClient *http.Client     // HTTP client used to talk to the cache itself
-	fallback    *http.Client     // SSRF-safe client used when cache is down
+	cacheClient *http.Client // HTTP client used to talk to the cache itself
+	fallback    *http.Client // SSRF-safe client used when cache is down
 	timeout     time.Duration
 
 	// defaultHeaders are sent on every Get; per-request headers passed
@@ -88,10 +89,10 @@ type Client struct {
 	defaultHeaders http.Header
 
 	// Counters for observability. Exposed via Stats().
-	hits       atomic.Int64
-	misses     atomic.Int64
-	fallbacks  atomic.Int64
-	errs       atomic.Int64
+	hits      atomic.Int64
+	misses    atomic.Int64
+	fallbacks atomic.Int64
+	errs      atomic.Int64
 }
 
 // Option configures a Client.
@@ -241,7 +242,7 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 		return nil, fmt.Errorf("fleetfetch: build cache request: %w", err)
 	}
 	if c.apiKey != "" {
-		req.Header.Set("X-API-Key", c.apiKey)
+		req.Header.Set(header.APIKey, c.apiKey)
 	}
 	for name, vals := range merged {
 		for _, v := range vals {

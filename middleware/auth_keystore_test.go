@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/baditaflorin/go-common/apikey"
+	"github.com/baditaflorin/go-common/header"
 )
 
 // stubVerifier lets tests control the keystore response without an
@@ -57,7 +58,7 @@ func TestKeystore_GatewayHeaderTrust(t *testing.T) {
 	}}
 	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v})
 	r := newReq("/scan?target=https://x")
-	r.Header.Set("X-Auth-User", "operator")
+	r.Header.Set(header.AuthUser, "operator")
 	code, _ := run(t, mw, r)
 	if code != http.StatusOK {
 		t.Fatalf("gateway-trusted: want 200 got %d", code)
@@ -164,8 +165,8 @@ func TestKeystore_OutOfBandScopeCheck_Match(t *testing.T) {
 		ScopeChecker:        sc,
 	})
 	r := newReq("/x?api_key=ak_real")
-	r.Header.Set("X-Auth-User", "alice")
-	r.Header.Set("X-Auth-Scope", "read")
+	r.Header.Set(header.AuthUser, "alice")
+	r.Header.Set(header.AuthScope, "read")
 	code, _ := run(t, mw, r)
 	if code != http.StatusOK {
 		t.Fatalf("match: want 200, got %d", code)
@@ -189,8 +190,8 @@ func TestKeystore_OutOfBandScopeCheck_Mismatch401(t *testing.T) {
 		ScopeChecker:        sc,
 	})
 	r := newReq("/x?api_key=ak_forged")
-	r.Header.Set("X-Auth-User", "alice")
-	r.Header.Set("X-Auth-Scope", "admin") // forged
+	r.Header.Set(header.AuthUser, "alice")
+	r.Header.Set(header.AuthScope, "admin") // forged
 	code, _ := run(t, mw, r)
 	if code != http.StatusUnauthorized {
 		t.Fatalf("mismatch: want 401 got %d", code)
@@ -214,8 +215,8 @@ func TestKeystore_OutOfBandScopeCheck_MissingTokenRejects(t *testing.T) {
 	r := newReq("/x")
 	// Forged gateway headers, but no token in the request — without
 	// the key we cannot re-verify, so reject.
-	r.Header.Set("X-Auth-User", "alice")
-	r.Header.Set("X-Auth-Scope", "admin")
+	r.Header.Set(header.AuthUser, "alice")
+	r.Header.Set(header.AuthScope, "admin")
 	code, _ := run(t, mw, r)
 	if code != http.StatusUnauthorized {
 		t.Fatalf("no-token: want 401 got %d", code)

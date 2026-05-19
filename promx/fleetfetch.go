@@ -16,9 +16,10 @@ import (
 //
 // "result" is one of: hit, miss, fallback, error. Cache hit rate per
 // service is one PromQL line:
-//   `sum(rate(fleet_fetch_total{result="hit"}[5m]))
-//    /
-//    sum(rate(fleet_fetch_total[5m]))`.
+//
+//	`sum(rate(fleet_fetch_total{result="hit"}[5m]))
+//	 /
+//	 sum(rate(fleet_fetch_total[5m]))`.
 //
 // fallback rate is the canary for cache outages.
 type FleetFetchCollectors struct {

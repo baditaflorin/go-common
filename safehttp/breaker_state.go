@@ -391,4 +391,3 @@ func ShutdownBreakerState(c *http.Client) error {
 	}
 	return s.Close()
 }
-

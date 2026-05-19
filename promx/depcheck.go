@@ -18,7 +18,8 @@ import (
 //
 // "result" is "ok" or "fail". The fleet-wide "who depends on what is
 // red right now?" query is one PromQL line:
-//   `min by (dep) (fleet_dep_probe_ok)`.
+//
+//	`min by (dep) (fleet_dep_probe_ok)`.
 type DepCollectors struct {
 	service string
 

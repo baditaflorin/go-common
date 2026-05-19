@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/baditaflorin/go-common/header"
 )
 
 // ErrNotConfigured is returned by Lookup when GRAPH_COLLECTOR_URL is
@@ -71,7 +73,7 @@ func LookupCtx(ctx context.Context, slug string) (Service, error) {
 		return Service{}, err
 	}
 	if s.cfg.apiKey != "" {
-		req.Header.Set("X-API-Key", s.cfg.apiKey)
+		req.Header.Set(header.APIKey, s.cfg.apiKey)
 	}
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)

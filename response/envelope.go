@@ -44,19 +44,19 @@ func SetServiceID(id string) { serviceID = id }
 //
 //   - _schema_version: the integer passed in (omitted when 0)
 //   - _service:        the service identity registered by server.New
-//                      (omitted when unset or when the payload already
-//                      defines _service — see conflict rule below)
+//     (omitted when unset or when the payload already
+//     defines _service — see conflict rule below)
 //   - _emitted_at:     RFC3339Nano UTC timestamp
 //
 // plus every top-level field of data:
 //
 //   - data == nil:              just the envelope keys
 //   - data is map[string]any:   keys merged in (envelope wins on its
-//                               own meta keys unless data conflicts)
+//     own meta keys unless data conflicts)
 //   - data is a struct/other:   marshalled to JSON, unmarshalled into
-//                               a map, then merged. Non-object JSON
-//                               (e.g. a bare array or string) is
-//                               placed under the "data" key.
+//     a map, then merged. Non-object JSON
+//     (e.g. a bare array or string) is
+//     placed under the "data" key.
 //
 // Conflict rule: if the user payload already carries one of the
 // reserved meta keys (_schema_version, _service, _emitted_at) we log

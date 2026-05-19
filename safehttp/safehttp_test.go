@@ -280,4 +280,3 @@ func TestWithoutProxyAndRequireProxy_Panic(t *testing.T) {
 	}()
 	_ = safehttp.NewClient(safehttp.WithoutProxy(), safehttp.RequireProxy())
 }
-

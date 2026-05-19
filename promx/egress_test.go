@@ -142,4 +142,3 @@ func TestHandlerServesMetrics(t *testing.T) {
 		t.Errorf("metrics body missing go_goroutines (Go collector should be registered)")
 	}
 }
-

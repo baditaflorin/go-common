@@ -7,10 +7,10 @@ const SchemaVersion = 1
 // Event is one observed fleet HTTP call. Both ends of the call record
 // independently — the collector deduplicates by (caller, target, ts).
 type Event struct {
-	Direction string `json:"dir"`        // "out" or "in"
-	Caller    string `json:"caller"`     // service slug (or "unknown" / "external:<host>")
-	Target    string `json:"target"`     // service slug (or "external:<host>")
-	Path      string `json:"path"`       // templatised, no query string
+	Direction string `json:"dir"`    // "out" or "in"
+	Caller    string `json:"caller"` // service slug (or "unknown" / "external:<host>")
+	Target    string `json:"target"` // service slug (or "external:<host>")
+	Path      string `json:"path"`   // templatised, no query string
 	Method    string `json:"method"`
 	Status    int    `json:"status"`
 	LatencyMs int64  `json:"latency_ms"`

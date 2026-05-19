@@ -37,7 +37,7 @@ const DefaultMaxInFlight = 10000
 // A typical implementation checks a header against a shared secret:
 //
 //	gate := func(r *http.Request) error {
-//	    if r.Header.Get("X-Admin-Token") != os.Getenv("ADMIN_TOKEN") {
+//	    if r.Header.Get(header.AdminToken) != os.Getenv("ADMIN_TOKEN") {
 //	        return errors.New("forbidden")
 //	    }
 //	    return nil

@@ -27,17 +27,17 @@ type EgressObserver interface {
 // cardinality). Host is the request URL's hostname (no port). Bytes is the
 // number of response body bytes observed if known, else 0.
 type EgressEvent struct {
-	Method     string
-	Host       string
-	Scheme     string
-	Path       string
-	Status     int           // 0 if Err != nil
-	Duration   time.Duration
-	Bytes      int64         // response body bytes; 0 if unknown
-	ViaProxy   bool          // true if the request was sent through an HTTP(S)_PROXY
-	ProxyHost  string        // host of the proxy used, "" if direct
-	Outcome    EgressOutcome // bucketed for label cardinality safety
-	Err        error         // nil on HTTP-level responses (even 4xx/5xx)
+	Method    string
+	Host      string
+	Scheme    string
+	Path      string
+	Status    int // 0 if Err != nil
+	Duration  time.Duration
+	Bytes     int64         // response body bytes; 0 if unknown
+	ViaProxy  bool          // true if the request was sent through an HTTP(S)_PROXY
+	ProxyHost string        // host of the proxy used, "" if direct
+	Outcome   EgressOutcome // bucketed for label cardinality safety
+	Err       error         // nil on HTTP-level responses (even 4xx/5xx)
 }
 
 // EgressOutcome buckets request results into a small, label-safe set.

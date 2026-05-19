@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"github.com/baditaflorin/go-common/header"
 )
 
 // sender runs a background goroutine that periodically drains the ring
@@ -99,7 +101,7 @@ func (s *sender) send(events []Event) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "go-common-graph/"+s.version+" ("+s.serviceID+")")
 	if s.cfg.apiKey != "" {
-		req.Header.Set("X-API-Key", s.cfg.apiKey)
+		req.Header.Set(header.APIKey, s.cfg.apiKey)
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {

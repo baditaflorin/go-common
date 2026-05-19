@@ -378,11 +378,12 @@ func (s *Server) Start() error {
 //
 // /metrics  — promx.Handler() Prometheus text-exposition format.
 // /selftest — fleet-contract 200 OK with {service, version, status}.
-//             Services with real probes should mount selftest.Suite
-//             on s.Mux; this default exists so deploy smoke gates
-//             never see 400/500 from a catchall handler swallowing
-//             the request (the root cause of fleet-runner deploy
-//             auto-rollback on services that hadn't opted in).
+//
+//	Services with real probes should mount selftest.Suite
+//	on s.Mux; this default exists so deploy smoke gates
+//	never see 400/500 from a catchall handler swallowing
+//	the request (the root cause of fleet-runner deploy
+//	auto-rollback on services that hadn't opted in).
 func (s *Server) wrapDefaults(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
