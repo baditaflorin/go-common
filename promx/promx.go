@@ -21,6 +21,7 @@ package promx
 
 import (
 	"net/http"
+	"runtime"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -39,15 +40,23 @@ var (
 	// "duplicate metrics collector registration attempted". Guarded by
 	// its own mutex (not defaultMu) so collector constructors are free
 	// to call ServiceID() — which locks defaultMu — without deadlocking.
-	autoMu        sync.Mutex
-	autoEgress    *EgressCollectors
-	autoHTTP      *HTTPCollectors
-	autoAuth      *AuthCollectors
-	autoSelftest  *SelftestCollectors
-	autoDep       *DepCollectors
-	autoRateCoord *RateCoordCollectors
-	autoPolicy    *PolicyCollectors
-	autoBoundReg  *prometheus.Registry // the registry the singletons are bound to
+	autoMu             sync.Mutex
+	autoEgress         *EgressCollectors
+	autoHTTP           *HTTPCollectors
+	autoAuth           *AuthCollectors
+	autoSelftest       *SelftestCollectors
+	autoDep            *DepCollectors
+	autoRateCoord      *RateCoordCollectors
+	autoPolicy         *PolicyCollectors
+	autoEnvelope       *EnvelopeCollectors
+	autoDegraded       *DegradedCollectors
+	autoAdmin          *AdminCollectors
+	autoBackoff        *BackoffCollectors
+	autoFleetFetch     *FleetFetchCollectors
+	autoCircuit        *CircuitCollectors
+	autoWorkpool       *WorkpoolCollectors
+	autoBackoffCoord   *BackoffCoordCollectors
+	autoBoundReg       *prometheus.Registry // the registry the singletons are bound to
 )
 
 // Init wires the shared registry for a service. Safe to call multiple
@@ -151,6 +160,14 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 		autoDep = nil
 		autoRateCoord = nil
 		autoPolicy = nil
+		autoEnvelope = nil
+		autoDegraded = nil
+		autoAdmin = nil
+		autoBackoff = nil
+		autoFleetFetch = nil
+		autoCircuit = nil
+		autoWorkpool = nil
+		autoBackoffCoord = nil
 		autoBoundReg = reg
 	}
 	if autoEgress == nil {
@@ -180,7 +197,97 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 		// process produces metrics without per-call ceremony.
 		setPolicyDefaultObserver(autoPolicy)
 	}
+	if autoEnvelope == nil {
+		autoEnvelope = NewEnvelopeCollectors(reg)
+		setEnvelopeDefaultObserver(autoEnvelope)
+	}
+	if autoDegraded == nil {
+		autoDegraded = NewDegradedCollectors(reg)
+		setDegradedDefaultObserver(autoDegraded)
+	}
+	if autoAdmin == nil {
+		autoAdmin = NewAdminCollectors(reg)
+	}
+	if autoBackoff == nil {
+		autoBackoff = NewBackoffCollectors(reg)
+		setSafehttpBackoffDefaultObserver(autoBackoff)
+	}
+	if autoFleetFetch == nil {
+		autoFleetFetch = NewFleetFetchCollectors(reg)
+		setFleetFetchDefaultObserver(autoFleetFetch)
+	}
+	if autoCircuit == nil {
+		autoCircuit = NewCircuitCollectors(reg)
+		setCircuitDefaultObserver(autoCircuit)
+	}
+	if autoWorkpool == nil {
+		autoWorkpool = NewWorkpoolCollectors(reg)
+		setWorkpoolDefaultObserver(autoWorkpool)
+	}
+	if autoBackoffCoord == nil {
+		autoBackoffCoord = NewBackoffCoordCollectors(reg)
+		setBackoffCoordDefaultObserver(autoBackoffCoord)
+	}
 	return autoEgress, autoHTTP, autoAuth
+}
+
+// AutoEnvelope returns the singleton EnvelopeCollectors.
+func AutoEnvelope() *EnvelopeCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoEnvelope
+}
+
+// AutoDegraded returns the singleton DegradedCollectors.
+func AutoDegraded() *DegradedCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoDegraded
+}
+
+// AutoAdmin returns the singleton AdminCollectors for apikey admin
+// calls. Attach via Client.AdminObs = promx.AutoAdmin().
+func AutoAdmin() *AdminCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoAdmin
+}
+
+// AutoBackoff returns the singleton safehttp BackoffCollectors.
+func AutoBackoff() *BackoffCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoBackoff
+}
+
+// AutoFleetFetch returns the singleton FleetFetchCollectors.
+func AutoFleetFetch() *FleetFetchCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoFleetFetch
+}
+
+// AutoCircuit returns the singleton CircuitCollectors.
+func AutoCircuit() *CircuitCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoCircuit
+}
+
+// AutoWorkpool returns the singleton WorkpoolCollectors.
+func AutoWorkpool() *WorkpoolCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoWorkpool
+}
+
+// AutoBackoffCoord returns the singleton BackoffCoordCollectors for
+// the backoffcoord.Client package (the standalone consult client, not
+// safehttp's transport-level hook).
+func AutoBackoffCoord() *BackoffCoordCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoBackoffCoord
 }
 
 // AutoSelftest returns the singleton SelftestCollectors created by
@@ -220,11 +327,45 @@ func AutoPolicy() *PolicyCollectors {
 	return autoPolicy
 }
 
+// BuildMeta carries optional build provenance reported alongside the
+// {service, version} label set on build_info. All fields are
+// best-effort: empty strings fold to "_unknown" so the label set is
+// stable. The canonical wiring is via ldflags at build time:
+//
+//	go build -ldflags "-X github.com/baditaflorin/go-common/promx.GitSHA=$(git rev-parse --short HEAD) \
+//	                    -X github.com/baditaflorin/go-common/promx.BuiltAt=$(date -u +%FT%TZ)"
+//
+// `go_version` is populated from runtime.Version() automatically.
+type BuildMeta struct {
+	GitSHA  string
+	BuiltAt string
+}
+
+// Package-level overrides for ldflags-driven provenance. Tests and
+// callers that don't use ldflags can also Set these before Init.
+var (
+	GitSHA  string
+	BuiltAt string
+)
+
 func registerBuildInfo(reg prometheus.Registerer, serviceID, version string) {
 	g := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "build_info",
 		Help: "Build/version metadata for the running service. Value is always 1.",
-	}, []string{"service", "version"})
-	g.WithLabelValues(serviceID, version).Set(1)
+	}, []string{"service", "version", "git_sha", "built_at", "go_version"})
+	g.WithLabelValues(
+		serviceID,
+		version,
+		fallback(GitSHA, "_unknown"),
+		fallback(BuiltAt, "_unknown"),
+		runtime.Version(),
+	).Set(1)
 	reg.MustRegister(g)
+}
+
+func fallback(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
