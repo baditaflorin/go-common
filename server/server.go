@@ -1,11 +1,15 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/baditaflorin/go-common/apikey"
@@ -53,7 +57,25 @@ type Server struct {
 	// for the API + lifecycle. The /readyz endpoint is mounted
 	// unconditionally and inspects this field on every request.
 	drain *drainConfig
+
+	// maxBodyBytes is the maximum request body size enforced by the
+	// body-limit middleware. 0 means no limit (not recommended).
+	// Set via WithMaxBodyBytes; default is DefaultMaxBodyBytes.
+	maxBodyBytes int64
+
+	// drainTimeout is how long Start() waits for in-flight requests
+	// to finish after receiving SIGTERM. Set via WithDrainTimeout.
+	drainTimeout time.Duration
 }
+
+// DefaultMaxBodyBytes is the default request body size limit applied
+// by server.New unless overridden with WithMaxBodyBytes.
+// 4 MiB matches the validate.Bind default and common reverse-proxy limits.
+const DefaultMaxBodyBytes = 4 << 20 // 4 MiB
+
+// DefaultDrainTimeout is how long Start waits for in-flight requests
+// after receiving SIGTERM before forcing closure.
+const DefaultDrainTimeout = 30 * time.Second
 
 type Option func(*Server)
 
@@ -62,6 +84,21 @@ func WithMiddleware(mws ...middleware.Middleware) Option {
 	return func(s *Server) {
 		s.Middlewares = append(s.Middlewares, mws...)
 	}
+}
+
+// WithMaxBodyBytes sets the maximum request body size. Requests that
+// exceed this limit are rejected with HTTP 413 Request Entity Too Large
+// before reaching any handler. Default: DefaultMaxBodyBytes (4 MiB).
+// Pass 0 to disable the limit (not recommended in production).
+func WithMaxBodyBytes(n int64) Option {
+	return func(s *Server) { s.maxBodyBytes = n }
+}
+
+// WithDrainTimeout sets how long Start() waits for in-flight requests
+// to complete after receiving SIGTERM before forcing closure.
+// Default: DefaultDrainTimeout (30 s).
+func WithDrainTimeout(d time.Duration) Option {
+	return func(s *Server) { s.drainTimeout = d }
 }
 
 // WithKeystoreAuth mounts the canonical fleet auth middleware
@@ -150,6 +187,8 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		Stats:              stats,
 		PromHTTPCollectors: httpColl,
 		PromAuthCollectors: authColl,
+		maxBodyBytes:       DefaultMaxBodyBytes,
+		drainTimeout:       DefaultDrainTimeout,
 	}
 
 	// Apply options after promx collectors are wired so option handlers
@@ -226,18 +265,24 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// Add Default Middlewares (executed in slice order — [0] is outermost)
 	// 1. Graph observer (outermost: sees final status + latency including
 	//    other middleware overhead, records inbound Event)
-	// 2. RequestID (Start)
-	// 3. Logging
-	// 4. Metrics (Record Status) — JSON snapshot surface
-	// 5. PromHTTP (Record Status) — Prometheus surface; sits alongside #4
-	//    so both surfaces populate from the same request hot path.
-	srv.Middlewares = append([]middleware.Middleware{
+	// 2. RequestID
+	// 3. Logging (injects per-request slog logger into context)
+	// 4. BodyLimit (rejects oversized bodies before auth / handler)
+	// 5. Metrics (Record Status) — JSON snapshot surface
+	// 6. PromHTTP (Record Status) — Prometheus surface
+	defaultMWs := []middleware.Middleware{
 		graph.Middleware,
 		middleware.RequestID,
 		middleware.Logging,
+	}
+	if srv.maxBodyBytes > 0 {
+		defaultMWs = append(defaultMWs, bodyLimitMiddleware(srv.maxBodyBytes))
+	}
+	defaultMWs = append(defaultMWs,
 		middleware.Metrics(stats),
 		httpColl.Middleware(),
-	}, srv.Middlewares...)
+	)
+	srv.Middlewares = append(defaultMWs, srv.Middlewares...)
 
 	return srv
 }
@@ -251,61 +296,76 @@ func (s *Server) Handler() http.Handler {
 	return s.wrapDefaults(middleware.Chain(s.Mux, s.Middlewares...))
 }
 
-func (s *Server) Start() {
+// Start listens on PORT, serves requests, and performs a graceful
+// shutdown when SIGTERM or SIGINT is received. It blocks until the
+// server has drained all in-flight requests or the drain timeout
+// elapses, then returns. log.Fatal is no longer used here — callers
+// should handle the returned error themselves:
+//
+//	if err := srv.Start(); err != nil {
+//	    log.Fatal(err)
+//	}
+func (s *Server) Start() error {
 	addr := ":" + s.Config.Port
-	fmt.Printf("Starting %s v%s on %s (Middleware+Metrics Enabled)\n", s.Config.AppName, s.Config.Version, addr)
+	fmt.Printf("Starting %s v%s on %s\n", s.Config.AppName, s.Config.Version, addr)
 
-	// Wrap the mux with middlewares
-	finalHandler := middleware.Chain(s.Mux, s.Middlewares...)
-	// Then wrap with the defaults-aware shim. Two endpoints are
-	// served outside the middleware chain when the service didn't
-	// register its own:
-	//   * /metrics  — fleet-canonical Prometheus scrape (bypasses
-	//                 inbound middleware so 30s Prom polls don't
-	//                 dominate http_requests_total).
-	//   * /selftest — fleet contract liveness probe consumed by
-	//                 fleet-runner deploy's smoke gate and
-	//                 go-fleet-selftest-aggregator. ADR-0015 says
-	//                 every service MUST answer 200 (or 404), but a
-	//                 service without a selftest.Suite registered
-	//                 falls through to its catchall handler and may
-	//                 return 400/500 by accident — which trips
-	//                 deploy auto-rollback. Mounting a default 200
-	//                 here closes that gap fleet-wide.
-	finalHandler = s.wrapDefaults(finalHandler)
+	finalHandler := s.wrapDefaults(middleware.Chain(s.Mux, s.Middlewares...))
 
-	srv := &http.Server{
+	httpSrv := &http.Server{
 		Addr:         addr,
 		Handler:      finalHandler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
-	// Without WithGracefulDrain: keep legacy behavior — block on
-	// ListenAndServe forever, exit on error. Go's default signal
-	// handling kills the process on SIGTERM/SIGINT.
-	if s.drain == nil {
-		log.Fatal(srv.ListenAndServe())
-		return
+	if s.drain != nil {
+		// WithGracefulDrain path: wire the shutdown closure so BeginDrain
+		// (called by the signal handler, or directly by tests) can drive
+		// http.Server.Shutdown on the right *http.Server instance.
+		s.drain.shutdownFn = httpSrv.Shutdown
+		stopSignals := s.installSignalHandler()
+		defer stopSignals()
+
+		err := httpSrv.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server: ListenAndServe error: %v", err)
+		}
+		// Block until the drain goroutine finishes.
+		<-s.drain.shutdownDone
+		return nil
 	}
 
-	// With WithGracefulDrain: wire the shutdown closure so BeginDrain
-	// (called by the signal handler, or directly by tests) can drive
-	// http.Server.Shutdown on the right *http.Server instance.
-	s.drain.shutdownFn = srv.Shutdown
-	stopSignals := s.installSignalHandler()
-	defer stopSignals()
+	// Default graceful-shutdown path: catch SIGTERM/SIGINT and drain.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigCh)
 
-	err := srv.ListenAndServe()
-	// http.ErrServerClosed is the expected outcome when Shutdown ran;
-	// any other error means the listener died unexpectedly.
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("server: ListenAndServe error: %v", err)
+	errCh := make(chan error, 1)
+	go func() {
+		if err := httpSrv.ListenAndServe(); err != nil {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("server: listen error: %w", err)
+		}
+		return nil
+	case sig := <-sigCh:
+		log.Printf("server: received %v, draining (timeout %s)…", sig, s.drainTimeout)
 	}
 
-	// Block until the drain goroutine finishes — Shutdown may still
-	// be flushing in-flight requests after ListenAndServe returned.
-	<-s.drain.shutdownDone
+	ctx, cancel := context.WithTimeout(context.Background(), s.drainTimeout)
+	defer cancel()
+	if err := httpSrv.Shutdown(ctx); err != nil {
+		log.Printf("server: graceful shutdown error: %v", err)
+		return err
+	}
+	log.Printf("server: stopped cleanly")
+	return nil
 }
 
 // wrapDefaults serves fleet-canonical defaults for /metrics and
@@ -391,4 +451,18 @@ func VersionHandler(version string) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(b)
 	})
+}
+
+// bodyLimitMiddleware wraps each handler so that request bodies
+// exceeding maxBytes are rejected with HTTP 413 before being read.
+// This prevents memory exhaustion from malicious oversized payloads.
+func bodyLimitMiddleware(maxBytes int64) middleware.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

@@ -63,6 +63,30 @@ func WithCheckTimeout(d time.Duration) Option {
 	}
 }
 
+// Category classifies a check by its probe semantics, matching
+// Kubernetes and fleet-runner conventions.
+//
+//	CategoryLiveness   — is the process alive and not deadlocked?
+//	                     Failing = container restart.
+//	CategoryReadiness  — is the service ready to accept traffic?
+//	                     Failing = removed from load balancer.
+//	CategoryStartup    — did the service initialise correctly?
+//	                     Failing = prevents readiness from being checked.
+//	CategoryAny        — matches all categories (used by ?category= filter).
+type Category string
+
+const (
+	// CategoryLiveness checks whether the process is alive and not hung.
+	CategoryLiveness Category = "liveness"
+	// CategoryReadiness checks whether the service can serve traffic.
+	CategoryReadiness Category = "readiness"
+	// CategoryStartup checks whether one-time initialisation completed.
+	CategoryStartup Category = "startup"
+	// CategoryAny is a wildcard that matches all checks. Returned when no
+	// ?category= query parameter is provided.
+	CategoryAny Category = ""
+)
+
 // Suite is a registered set of named checks executed sequentially by
 // Render. One suite per service is the intended pattern (held in a
 // package-level var).
@@ -81,8 +105,9 @@ type Suite struct {
 }
 
 type registered struct {
-	name string
-	fn   CheckFunc
+	name     string
+	fn       CheckFunc
+	category Category
 }
 
 // NewSuite returns an empty Suite tagged with the calling service's
@@ -101,29 +126,36 @@ func NewSuite(service, version string, opts ...Option) *Suite {
 	return s
 }
 
-// Check registers a named check. fn is invoked once per Render call,
-// in registration order, with a child context that carries the
-// suite's per-check timeout. Safe for concurrent registration at
-// boot; do not register after the first Render — concurrent
-// registration + iteration is undefined behaviour.
+// Check registers a named check in CategoryAny (matches all category
+// filters). fn is invoked once per Render call, in registration order,
+// with a child context that carries the suite's per-check timeout. Safe
+// for concurrent registration at boot; do not register after the first
+// Render — concurrent registration + iteration is undefined behaviour.
 //
-// Empty names and nil fns are silently dropped — neither makes sense
-// in a response and both are usually bugs in the caller.
+// Empty names and nil fns are silently dropped.
 func (s *Suite) Check(name string, fn CheckFunc) {
+	s.CheckIn(name, CategoryAny, fn)
+}
+
+// CheckIn registers a named check in the given category. Orchestrators
+// can request only a specific category via ?category=readiness (or
+// liveness, startup). Checks in CategoryAny always match.
+func (s *Suite) CheckIn(name string, cat Category, fn CheckFunc) {
 	if name == "" || fn == nil {
 		return
 	}
 	s.mu.Lock()
-	s.checks = append(s.checks, registered{name: name, fn: fn})
+	s.checks = append(s.checks, registered{name: name, fn: fn, category: cat})
 	s.mu.Unlock()
 }
 
 // CheckResult is one row in the JSON response. Err is empty when
 // Pass is true.
 type CheckResult struct {
-	Name string `json:"name"`
-	Pass bool   `json:"pass"`
-	Err  string `json:"err,omitempty"`
+	Name     string   `json:"name"`
+	Category Category `json:"category,omitempty"`
+	Pass     bool     `json:"pass"`
+	Err      string   `json:"err,omitempty"`
 }
 
 // Response is the canonical /selftest payload. The aggregator
@@ -138,11 +170,19 @@ type Response struct {
 	Pass       int           `json:"pass"`
 	Fail       int           `json:"fail"`
 	DurationMs int64         `json:"duration_ms"`
+	// Category echoes the ?category= filter used, or empty for all.
+	Category Category `json:"category,omitempty"`
 }
 
-// Render runs every registered check sequentially against a child
-// context of r.Context() carrying the suite's per-check timeout,
-// then writes the canonical JSON payload below to w:
+// Render runs registered checks (optionally filtered by ?category=)
+// sequentially against a child context of r.Context() carrying the
+// suite's per-check timeout, then writes the canonical JSON payload
+// below to w.
+//
+// Query parameters:
+//
+//	?category=liveness|readiness|startup  — run only checks in that category
+//	?live=1                               — sets IsLive(ctx) flag for checks
 //
 //	{
 //	  "service": "<service>",
@@ -168,10 +208,10 @@ type Response struct {
 // the rest of the suite still gets exercised. Concurrent callers do
 // not share mutable state — each Render owns its own results slice.
 func (s *Suite) Render(w http.ResponseWriter, r *http.Request) {
-	// Propagate ?live=1 into the check context. Checks reach the
-	// bit via selftest.IsLive(ctx). See live.go.
-	ctx := withLive(r.Context(), r.URL.Query().Get("live") == "1")
-	resp := s.run(ctx)
+	q := r.URL.Query()
+	ctx := withLive(r.Context(), q.Get("live") == "1")
+	cat := Category(q.Get("category"))
+	resp := s.run(ctx, cat)
 	if s.observer != nil {
 		s.observer.ObserveSelftest(Event{
 			Service:  resp.Service,
@@ -199,18 +239,15 @@ func (s *Suite) Handler() http.Handler {
 	return http.HandlerFunc(s.Render)
 }
 
-// run executes the checks and assembles the Response. Split out so
-// tests can assert against a Response struct without an
+// run executes the checks (filtered by cat) and assembles the Response.
+// Split out so tests can assert against a Response struct without an
 // httptest.Recorder roundtrip.
-func (s *Suite) run(parent context.Context) Response {
+func (s *Suite) run(parent context.Context, cat Category) Response {
 	if parent == nil {
 		parent = context.Background()
 	}
 
-	// Snapshot the slice under the read lock so registration races
-	// (a misbehaving caller that registers after first Render) don't
-	// produce a torn read. The snapshot is local to this call —
-	// concurrent Render invocations each get their own.
+	// Snapshot the slice under the read lock.
 	s.mu.RLock()
 	snapshot := make([]registered, len(s.checks))
 	copy(snapshot, s.checks)
@@ -221,8 +258,18 @@ func (s *Suite) run(parent context.Context) Response {
 	start := time.Now()
 
 	for _, c := range snapshot {
+		// Filter: run only checks that match the requested category.
+		// CategoryAny on a check matches every filter.
+		// CategoryAny filter (empty string) runs all checks.
+		if cat != CategoryAny && c.category != CategoryAny && c.category != cat {
+			continue
+		}
 		err := runOne(parent, c.fn, s.checkTimeout)
-		cr := CheckResult{Name: c.name, Pass: err == nil}
+		cr := CheckResult{
+			Name:     c.name,
+			Category: c.category,
+			Pass:     err == nil,
+		}
 		if err != nil {
 			cr.Err = err.Error()
 			fail++
@@ -240,6 +287,7 @@ func (s *Suite) run(parent context.Context) Response {
 		Pass:       pass,
 		Fail:       fail,
 		DurationMs: time.Since(start).Milliseconds(),
+		Category:   cat,
 	}
 }
 
