@@ -236,6 +236,13 @@ type options struct {
 	// — backwards-compatible default. An empty non-nil map means
 	// "deny all" (see WithDenyAllEgress). See WithEgressAllowlist.
 	egressAllowlist map[string]struct{}
+
+	// Persistent local breaker-state cache — opt-in via
+	// WithPersistentBreakerState (see breaker_state.go). Only takes
+	// effect when extrasTransport is already in the chain (i.e. at
+	// least one of traceURL/backoffURL/degradedSink is set), since
+	// the state to persist lives on that transport.
+	breakerState *breakerStateConfig
 }
 
 // Option configures NewClient.
@@ -383,7 +390,7 @@ func NewClient(opts ...Option) *http.Client {
 	// Pre-v0.26 the wrap was conditional on at least one knob being
 	// configured; the unconditional wrap is a no-op when nothing is
 	// set (the hot path is one extra function call).
-	rt = &extrasTransport{
+	extras := &extrasTransport{
 		inner:        rt,
 		traceURL:     o.traceURL,
 		backoffURL:   o.backoffURL,
@@ -392,6 +399,7 @@ func NewClient(opts ...Option) *http.Client {
 		proxyFn:      proxyFn,
 		caller:       callerFromUA(o.userAgent),
 	}
+	rt = extras
 
 	// Egress allowlist — runs as the outermost wrapper so the check
 	// fires before any other transport (including extras' backoff
@@ -404,7 +412,7 @@ func NewClient(opts ...Option) *http.Client {
 		}
 	}
 	ua, maxR := o.userAgent, o.maxRedirects
-	return &http.Client{
+	client := &http.Client{
 		Transport: rt,
 		Timeout:   o.timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -420,6 +428,11 @@ func NewClient(opts ...Option) *http.Client {
 			return nil
 		},
 	}
+	if o.breakerState != nil && extras != nil {
+		store := newBreakerStore(o.breakerState, extras)
+		registerBreakerStore(client, store)
+	}
+	return client
 }
 
 func makeDialer(portCheck bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
