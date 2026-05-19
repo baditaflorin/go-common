@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -46,6 +47,12 @@ type Server struct {
 	// user has not registered their own /metrics on srv.Mux. Keeps
 	// services that already use promhttp.Handler() panic-free.
 	promMetricsHandler http.Handler
+
+	// drain holds the graceful-drain configuration when
+	// WithGracefulDrain has been applied; nil otherwise. See drain.go
+	// for the API + lifecycle. The /readyz endpoint is mounted
+	// unconditionally and inspects this field on every request.
+	drain *drainConfig
 }
 
 type Option func(*Server)
@@ -175,6 +182,13 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		_ = json.NewEncoder(w).Encode(payload)
 	})
 
+	// Register /readyz endpoint — the readiness probe consulted by
+	// load balancers. Always installed (independent of
+	// WithGracefulDrain) so the route is uniform across the fleet; it
+	// returns 200 in normal operation and flips to 503 only after
+	// BeginDrain has been called on a drain-enabled server.
+	mountReadyz(srv)
+
 	// Register /version endpoint
 	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
@@ -267,7 +281,31 @@ func (s *Server) Start() {
 		WriteTimeout: 10 * time.Second,
 	}
 
-	log.Fatal(srv.ListenAndServe())
+	// Without WithGracefulDrain: keep legacy behavior — block on
+	// ListenAndServe forever, exit on error. Go's default signal
+	// handling kills the process on SIGTERM/SIGINT.
+	if s.drain == nil {
+		log.Fatal(srv.ListenAndServe())
+		return
+	}
+
+	// With WithGracefulDrain: wire the shutdown closure so BeginDrain
+	// (called by the signal handler, or directly by tests) can drive
+	// http.Server.Shutdown on the right *http.Server instance.
+	s.drain.shutdownFn = srv.Shutdown
+	stopSignals := s.installSignalHandler()
+	defer stopSignals()
+
+	err := srv.ListenAndServe()
+	// http.ErrServerClosed is the expected outcome when Shutdown ran;
+	// any other error means the listener died unexpectedly.
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatalf("server: ListenAndServe error: %v", err)
+	}
+
+	// Block until the drain goroutine finishes — Shutdown may still
+	// be flushing in-flight requests after ListenAndServe returned.
+	<-s.drain.shutdownDone
 }
 
 // wrapDefaults serves fleet-canonical defaults for /metrics and
