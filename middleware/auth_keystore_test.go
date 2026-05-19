@@ -135,3 +135,89 @@ func TestKeystore_MissingTokenIs401(t *testing.T) {
 		t.Fatalf("missing token: want 401 got %d", code)
 	}
 }
+
+// stubScopeChecker lets tests force a particular VerifyScope outcome.
+type stubScopeChecker struct {
+	verifyScope func(ctx context.Context, key, claimedScope string) error
+	calls       int
+}
+
+func (s *stubScopeChecker) VerifyScope(ctx context.Context, key, claimedScope string) error {
+	s.calls++
+	return s.verifyScope(ctx, key, claimedScope)
+}
+
+func TestKeystore_OutOfBandScopeCheck_Match(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		t.Fatal("primary verifier must not be hit on gateway-trust path")
+		return nil, nil
+	}}
+	sc := &stubScopeChecker{verifyScope: func(ctx context.Context, key, claimed string) error {
+		if key != "ak_real" || claimed != "read" {
+			t.Fatalf("unexpected verify-scope args: key=%q scope=%q", key, claimed)
+		}
+		return nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{
+		Verifier:            v,
+		OutOfBandScopeCheck: true,
+		ScopeChecker:        sc,
+	})
+	r := newReq("/x?api_key=ak_real")
+	r.Header.Set("X-Auth-User", "alice")
+	r.Header.Set("X-Auth-Scope", "read")
+	code, _ := run(t, mw, r)
+	if code != http.StatusOK {
+		t.Fatalf("match: want 200, got %d", code)
+	}
+	if sc.calls != 1 {
+		t.Errorf("expected 1 VerifyScope call, got %d", sc.calls)
+	}
+}
+
+func TestKeystore_OutOfBandScopeCheck_Mismatch401(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		t.Fatal("primary verifier must not be hit on gateway-trust path")
+		return nil, nil
+	}}
+	sc := &stubScopeChecker{verifyScope: func(ctx context.Context, key, claimed string) error {
+		return apikey.ErrScopeMismatch
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{
+		Verifier:            v,
+		OutOfBandScopeCheck: true,
+		ScopeChecker:        sc,
+	})
+	r := newReq("/x?api_key=ak_forged")
+	r.Header.Set("X-Auth-User", "alice")
+	r.Header.Set("X-Auth-Scope", "admin") // forged
+	code, _ := run(t, mw, r)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("mismatch: want 401 got %d", code)
+	}
+}
+
+func TestKeystore_OutOfBandScopeCheck_MissingTokenRejects(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		t.Fatal("primary verifier must not be hit on gateway-trust path")
+		return nil, nil
+	}}
+	sc := &stubScopeChecker{verifyScope: func(ctx context.Context, key, claimed string) error {
+		t.Fatal("VerifyScope must not be called without a token")
+		return nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{
+		Verifier:            v,
+		OutOfBandScopeCheck: true,
+		ScopeChecker:        sc,
+	})
+	r := newReq("/x")
+	// Forged gateway headers, but no token in the request — without
+	// the key we cannot re-verify, so reject.
+	r.Header.Set("X-Auth-User", "alice")
+	r.Header.Set("X-Auth-Scope", "admin")
+	code, _ := run(t, mw, r)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("no-token: want 401 got %d", code)
+	}
+}

@@ -65,6 +65,45 @@ type KeystoreOpts struct {
 	// took. promx.NewAuthCollectors() returns an implementation that
 	// records fleet-canonical Prometheus metrics.
 	Observer AuthObserver
+
+	// OutOfBandScopeCheck enables defense-in-depth verification that the
+	// gateway-supplied X-Auth-Scope matches what the keystore actually
+	// reports for the principal. Opt-in (default false) because it costs
+	// one extra keystore call per (key, scope) per 5 min per service.
+	//
+	// Threat model: if the gateway were ever compromised (or a non-gateway
+	// caller forged X-Auth-* headers and bypassed nginx via the docker
+	// mesh), a service trusting only the gateway header would honor a
+	// forged scope. With this on, every request whose scope is consumed
+	// for an authorization decision is independently re-verified via
+	// apikey.Client.VerifyScope, which calls /verify and compares the
+	// keystore's authoritative scope to the claimed one.
+	//
+	// On mismatch the request is rejected 401. On keystore outage the
+	// request follows the same fail-closed path as the primary keystore
+	// check (503).
+	//
+	// The check only runs on the gateway-header trust path (step 2) —
+	// the keystore-lookup path (step 5) already sets X-Auth-Scope from
+	// the same authoritative response and is not vulnerable.
+	//
+	// Requires ScopeChecker to be set (typically the underlying
+	// *apikey.Client) AND the request to carry a usable token (Bearer /
+	// X-API-Key / ?api_key). If only the gateway header is set with no
+	// key, the check cannot run and the request is rejected.
+	OutOfBandScopeCheck bool
+
+	// ScopeChecker performs the out-of-band re-verification. Required
+	// when OutOfBandScopeCheck is true. Typically the underlying
+	// *apikey.Client (the *apikey.Cache wrapper used as Verifier does
+	// not expose VerifyScope — keep a reference to the raw client).
+	ScopeChecker ScopeChecker
+}
+
+// ScopeChecker is the abstract interface for out-of-band scope
+// verification. *apikey.Client satisfies it via its VerifyScope method.
+type ScopeChecker interface {
+	VerifyScope(ctx context.Context, key, claimedScope string) error
 }
 
 func TokenAuthKeystore(opts KeystoreOpts) Middleware {
@@ -110,6 +149,46 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			//    nginx's auth_request_set captures X-Auth-User from the
 			//    keystore's /verify response. Presence ≈ keystore said yes.
 			if opts.TrustGatewayHeader != "" && r.Header.Get(opts.TrustGatewayHeader) != "" {
+				// 2a. Optional defense-in-depth: re-verify the scope
+				//     out-of-band so a forged X-Auth-Scope (gateway
+				//     compromise or non-gateway path injection) can't
+				//     escalate. See KeystoreOpts.OutOfBandScopeCheck.
+				if opts.OutOfBandScopeCheck && opts.ScopeChecker != nil {
+					claimedScope := r.Header.Get("X-Auth-Scope")
+					token := extractToken(r)
+					if token == "" {
+						// No key to re-verify against. Reject —
+						// a request with X-Auth-User but no token
+						// could only come from a header forger.
+						deny(w, "out-of-band scope check requires a token")
+						return
+					}
+					ctx, cancel := context.WithTimeout(r.Context(), opts.VerifyTimeout)
+					err := opts.ScopeChecker.VerifyScope(ctx, token, claimedScope)
+					cancel()
+					if err != nil {
+						if errors.Is(err, apikey.ErrScopeMismatch) {
+							logf("scope mismatch: user=%q claimed=%q: %v",
+								r.Header.Get(opts.TrustGatewayHeader), claimedScope, err)
+							deny(w, "scope mismatch")
+							return
+						}
+						if errors.Is(err, apikey.ErrInvalidKey) {
+							deny(w, "invalid token")
+							return
+						}
+						// Keystore unavailable — fail closed (same
+						// shape as the primary lookup path below).
+						logf("scope check unavailable, denying caller: %v", err)
+						w.Header().Set("Content-Type", "application/json")
+						w.Header().Set("Retry-After", "5")
+						w.WriteHeader(http.StatusServiceUnavailable)
+						_ = json.NewEncoder(w).Encode(map[string]string{
+							"error": "auth backend unavailable; retry shortly",
+						})
+						return
+					}
+				}
 				observe(AuthSourceGateway, AuthResultAllow, 0)
 				next.ServeHTTP(w, r)
 				return
