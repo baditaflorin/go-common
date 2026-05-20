@@ -83,6 +83,30 @@ func TestDecodeCursorEmpty(t *testing.T) {
 	}
 }
 
+func TestParseParamsWithDefaults(t *testing.T) {
+	tests := []struct {
+		url          string
+		defLimit     int
+		maxLimit     int
+		wantLimit    int
+	}{
+		{"/x", 100, 1000, 100},
+		{"/x?limit=50", 100, 1000, 50},
+		{"/x?limit=2000", 100, 1000, 1000},
+		{"/x?limit=0", 100, 1000, 100},
+		{"/x?limit=-1", 100, 1000, 100},
+		{"/x?limit=abc", 100, 1000, 100},
+	}
+	for _, tc := range tests {
+		r := httptest.NewRequest("GET", tc.url, nil)
+		p := pagination.ParseParamsWithDefaults(r, tc.defLimit, tc.maxLimit)
+		if p.Limit != tc.wantLimit {
+			t.Errorf("url=%s def=%d max=%d: got limit %d, want %d",
+				tc.url, tc.defLimit, tc.maxLimit, p.Limit, tc.wantLimit)
+		}
+	}
+}
+
 func TestNewPage(t *testing.T) {
 	items := []string{"a", "b", "c"}
 	next := pagination.EncodeCursor("d")

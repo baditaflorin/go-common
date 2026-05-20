@@ -137,6 +137,45 @@ func ParseParams(r *http.Request) Params {
 	return p
 }
 
+// ParseParamsWithDefaults is like ParseParams but lets the caller
+// override the fleet-wide defaults. Use this when an endpoint has a
+// domain-specific default or cap that differs from DefaultLimit/MaxLimit
+// (e.g. audit-log endpoints that default to 100 items and cap at 1000).
+func ParseParamsWithDefaults(r *http.Request, defaultLimit, maxLimit int) Params {
+	q := r.URL.Query()
+	p := Params{
+		Limit:  defaultLimit,
+		Cursor: "",
+		Offset: 0,
+	}
+
+	if s := q.Get("limit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			p.Limit = n
+		}
+	}
+	if p.Limit > maxLimit {
+		p.Limit = maxLimit
+	}
+	if p.Limit < 1 {
+		p.Limit = 1
+	}
+
+	if s := strings.TrimSpace(q.Get("cursor")); s != "" {
+		p.Cursor = s
+	}
+
+	if p.Cursor == "" {
+		if s := q.Get("offset"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n >= 0 {
+				p.Offset = n
+			}
+		}
+	}
+
+	return p
+}
+
 // ─── Cursor helpers ───────────────────────────────────────────────────────
 
 // EncodeCursor encodes an arbitrary string value as a URL-safe base64
