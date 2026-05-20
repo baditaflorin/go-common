@@ -165,7 +165,25 @@ func NewClient(opts ...Option) *Client {
 		c.apiKey = DefaultAPIKey
 	}
 	if c.cacheClient == nil {
-		c.cacheClient = &http.Client{Timeout: c.timeout}
+		// Proxy: nil is load-bearing here.
+		//
+		// Services with proxy_egress: true in service.yaml have HTTPS_PROXY
+		// (and sometimes HTTP_PROXY) injected into their container environment
+		// from /opt/_shared/proxy.env at deploy time. Go's default transport
+		// picks those vars up via http.ProxyFromEnvironment, so a bare
+		// &http.Client{} would route the cache call through Webshare.
+		//
+		// The cache URL is a Docker-internal hostname (go_infrastructure_fetch_cache)
+		// that is invisible to any external proxy — Webshare cannot resolve it and
+		// returns target_connect_resolve_failed after a 21-second timeout.
+		//
+		// Proxy: nil disables env-based proxy lookup for this transport only.
+		// Public-internet enrichment calls use a separate client (the fallback
+		// field) which correctly inherits the proxy settings.
+		c.cacheClient = &http.Client{
+			Transport: &http.Transport{Proxy: nil},
+			Timeout:   c.timeout,
+		}
 	}
 	if c.fallback == nil {
 		c.fallback = safehttp.NewClient(safehttp.WithTimeout(c.timeout))
