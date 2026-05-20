@@ -19,6 +19,7 @@ import (
 	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/metrics"
 	"github.com/baditaflorin/go-common/middleware"
+	openapipkg "github.com/baditaflorin/go-common/openapi"
 	"github.com/baditaflorin/go-common/promx"
 	"github.com/baditaflorin/go-common/safehttp"
 )
@@ -152,6 +153,31 @@ func WithDependencies(r *depcheck.Registry) Option {
 		if dc := promx.AutoDep(); dc != nil && r != nil {
 			r.SetObserver(dc)
 		}
+	}
+}
+
+// WithOpenAPI registers a GET /openapi.json handler that serves spec as JSON.
+// The spec is serialised once at startup — mutations to spec after this call
+// are not reflected.  Build the spec with openapi.New() and optionally enrich
+// it with openapi.ScanDir() before passing it here.
+//
+//	spec := openapi.New(cfg.AppName, cfg.Version)
+//	srv := server.New(cfg, server.WithOpenAPI(spec))
+//
+// The canonical fleet endpoints (/health, /version, /selftest) are already
+// included by openapi.New() — services do not need to add them manually.
+func WithOpenAPI(spec *openapipkg.Spec) Option {
+	return func(s *Server) {
+		data, err := spec.JSON()
+		if err != nil {
+			// spec is invalid JSON — panic early rather than serve garbage.
+			panic("openapi spec serialization failed: " + err.Error())
+		}
+		s.Mux.HandleFunc("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data) //nolint:errcheck // client disconnect is not actionable
+		})
 	}
 }
 
