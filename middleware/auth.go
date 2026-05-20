@@ -27,7 +27,7 @@ func TokenAuth(validTokens []string) Middleware {
 			// Health/version always pass through. Check first so we don't
 			// need a token for these no matter how the middleware is
 			// wired up.
-			if r.URL.Path == "/health" || r.URL.Path == "/version" || r.URL.Path == "/capabilities" {
+			if r.URL.Path == "/health" || r.URL.Path == "/version" || r.URL.Path == "/capabilities" || r.URL.Path == "/openapi.json" {
 				next.ServeHTTP(w, r)
 				return
 			}
