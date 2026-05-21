@@ -72,7 +72,41 @@ type Response struct {
 	UpstreamMS  int64     // time the original upstream fetch took
 	FetchedAt   time.Time // when the cached entry was created
 	ViaFallback bool      // true if cache was unreachable and we direct-fetched via safehttp
+
+	// Render reports the renderer mode the cache actually honored
+	// for this response. May differ from the requested mode if the
+	// cache's allow/deny policy downgraded the request (e.g. asked
+	// for "js" but the host wasn't on the allow list → cache served
+	// "" / default). Empty string for older caches that don't emit
+	// X-FetchCache-Render.
+	Render string
+	// Via reports which renderer produced this response on a cache
+	// miss: "direct", "js-proxy", or "html-proxy". Empty on cache
+	// hits (the cache doesn't remember which renderer originally
+	// served the cached entry) and on older caches.
+	Via string
 }
+
+// Render mode wire constants. These are the values sent as ?render=<mode>
+// to go_infrastructure_fetch_cache v0.2+. Older caches ignore the param
+// and serve the default (direct) shape, so clients can opt in without
+// coordinating a fleet-wide cache upgrade.
+const (
+	// RenderDefault sends no render param — the cache uses its
+	// SSRF-safe direct fetch (pre-v0.2 behavior). Cheapest; lowest
+	// latency; no JS execution.
+	RenderDefault = ""
+	// RenderJS asks the cache to route through go-js-proxy (chromedp).
+	// Returns post-JS DOM. Falls back through go-html-proxy and
+	// finally direct if either proxy is unhealthy. Cache key is
+	// distinct from default so JS-rendered and curl shapes don't
+	// collide.
+	RenderJS = "js"
+	// RenderHTML asks the cache to route through go-html-proxy
+	// (Webshare egress + UA rotation). No JS execution. Cheaper than
+	// js but still better than direct for origins that block fleet IPs.
+	RenderHTML = "html"
+)
 
 // Client wraps the HTTP plumbing for talking to the fleet fetch cache,
 // with transparent fallback to a SSRF-safe direct fetch when the cache
@@ -83,6 +117,7 @@ type Client struct {
 	cacheClient *http.Client // HTTP client used to talk to the cache itself
 	fallback    *http.Client // SSRF-safe client used when cache is down
 	timeout     time.Duration
+	render      string // "" | "js" | "html"; forwarded as ?render=<mode>
 
 	// defaultHeaders are sent on every Get; per-request headers passed
 	// to GetWithHeaders are merged on top (per-request wins).
@@ -123,6 +158,20 @@ func WithTimeout(d time.Duration) Option {
 // observability wrapper on the SSRF-safe path.
 func WithFallbackClient(h *http.Client) Option {
 	return func(c *Client) { c.fallback = h }
+}
+
+// WithRender pins the upstream renderer for every fetch issued by
+// this client. Accepts "" (default, direct fetch), "js" (chromedp via
+// go-js-proxy), or "html" (Webshare egress via go-html-proxy). When
+// the cache's allow/deny policy refuses the requested mode for a given
+// host, the cache silently downgrades to direct — the client can
+// inspect Response.Header.Get("X-FetchCache-Render") to tell which
+// mode actually served.
+//
+// Default unset → no ?render= query param sent → cache uses its
+// pre-v0.2 direct path. Existing producers don't need any code change.
+func WithRender(mode string) Option {
+	return func(c *Client) { c.render = mode }
 }
 
 // WithDefaultHeaders sets headers attached to every fetch issued by
@@ -194,13 +243,13 @@ func NewClient(opts ...Option) *Client {
 // Get fetches targetURL through the cache. On a cache 5xx/network
 // failure, falls back to a direct SSRF-safe fetch.
 func (c *Client) Get(ctx context.Context, targetURL string) (*Response, error) {
-	return c.fetch(ctx, targetURL, 0, nil)
+	return c.fetch(ctx, targetURL, 0, nil, c.render)
 }
 
 // GetWithMaxAge is Get with an explicit max-age override (in seconds
 // on the wire). maxAge=0 = use cache default (60s).
 func (c *Client) GetWithMaxAge(ctx context.Context, targetURL string, maxAge time.Duration) (*Response, error) {
-	return c.fetch(ctx, targetURL, maxAge, nil)
+	return c.fetch(ctx, targetURL, maxAge, nil, c.render)
 }
 
 // GetWithHeaders is Get with per-request headers forwarded to the
@@ -213,11 +262,19 @@ func (c *Client) GetWithMaxAge(ctx context.Context, targetURL string, maxAge tim
 // first; per-request headers win on collisions. Pass nil to get the
 // same behavior as Get.
 func (c *Client) GetWithHeaders(ctx context.Context, targetURL string, headers http.Header) (*Response, error) {
-	return c.fetch(ctx, targetURL, 0, headers)
+	return c.fetch(ctx, targetURL, 0, headers, c.render)
+}
+
+// GetRendered fetches targetURL with a per-call render override. Pass
+// RenderJS / RenderHTML / RenderDefault. Useful when the client-wide
+// default doesn't fit a particular call (e.g. a JS-rendering client
+// that needs a single cheap default-mode lookup).
+func (c *Client) GetRendered(ctx context.Context, targetURL string, mode string) (*Response, error) {
+	return c.fetch(ctx, targetURL, 0, nil, mode)
 }
 
 // fetch is the shared implementation behind Get/GetWithMaxAge/GetWithHeaders.
-func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Duration, perReqHeaders http.Header) (fetchRes *Response, retErr error) {
+func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Duration, perReqHeaders http.Header, render string) (fetchRes *Response, retErr error) {
 	if targetURL == "" {
 		return nil, errors.New("fleetfetch: empty target url")
 	}
@@ -248,6 +305,11 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	q.Set("url", targetURL)
 	if maxAge > 0 {
 		q.Set("max_age", strconv.FormatInt(int64(maxAge.Seconds()), 10))
+	}
+	if render != "" {
+		// Older caches (<v0.2) ignore unknown query params, so this is
+		// always safe to send — they'll just serve the default shape.
+		q.Set("render", render)
 	}
 	reqURL := c.cacheURL + "/fetch?" + q.Encode()
 
@@ -308,6 +370,8 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	if v := resp.Header.Get("X-FetchCache-Fetched-At"); v != "" {
 		out.FetchedAt, _ = time.Parse(time.RFC3339, v)
 	}
+	out.Render = resp.Header.Get("X-FetchCache-Render")
+	out.Via = resp.Header.Get("X-FetchCache-Via")
 	if out.FinalURL == "" {
 		out.FinalURL = targetURL
 	}
