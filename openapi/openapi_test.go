@@ -147,6 +147,49 @@ func handleSubmit(w http.ResponseWriter, r *http.Request) {}
 	}
 }
 
+// TestScannerParam verifies @param lines are parsed and attached to the
+// operation as OpenAPI Parameter objects.
+func TestScannerParam(t *testing.T) {
+	src := `package handlers
+
+// @openapi GET /check
+// @summary Check something
+// @tag tool
+// @param query url string true URL to check
+// @param query target string false Alias for url
+// @response 200 {"ok":true}
+func handleCheck(w http.ResponseWriter, r *http.Request) {}
+`
+	spec := New("svc", "0.1")
+	n := scanReader(bufio.NewScanner(strings.NewReader(src)), spec)
+
+	if n != 1 {
+		t.Fatalf("expected 1 route, got %d", n)
+	}
+	item, ok := spec.Paths["/check"]
+	if !ok {
+		t.Fatal("expected /check in spec")
+	}
+	op := item.Get
+	if op == nil {
+		t.Fatal("expected GET on /check")
+	}
+	if len(op.Parameters) != 2 {
+		t.Fatalf("expected 2 params, got %d: %+v", len(op.Parameters), op.Parameters)
+	}
+	url := op.Parameters[0]
+	if url.Name != "url" || url.In != "query" || !url.Required || url.Schema == nil || url.Schema.Type != "string" {
+		t.Errorf("param[0] wrong: %+v", url)
+	}
+	target := op.Parameters[1]
+	if target.Name != "target" || target.In != "query" || target.Required {
+		t.Errorf("param[1] wrong: %+v", target)
+	}
+	if target.Description != "Alias for url" {
+		t.Errorf("param[1] description: got %q, want %q", target.Description, "Alias for url")
+	}
+}
+
 // TestScannerMalformedAnnotation ensures malformed @openapi lines are
 // silently skipped without panicking.
 func TestScannerMalformedAnnotation(t *testing.T) {

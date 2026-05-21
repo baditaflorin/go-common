@@ -18,10 +18,18 @@ import (
 //	// @openapi GET /example
 //	// @summary Returns an example response
 //	// @tag example
+//	// @param query url string true URL to scan
+//	// @param query target string false Alias for url
 //	// @response 200 {"message":"string"}
 //	func handleExample(w http.ResponseWriter, r *http.Request) { … }
 //
-// Only @openapi, @summary, @tag, and @response are consumed.  Unknown
+// @param format: @param <in> <name> <type> <required> <description...>
+//   in:       query | path | header | cookie
+//   type:     string | integer | boolean | number
+//   required: true | false
+//   description: remainder of the line (spaces allowed, no quoting needed)
+//
+// Only @openapi, @summary, @tag, @param, and @response are consumed.  Unknown
 // @-prefixed lines are silently ignored so the format can be extended
 // forwards-compatibly.
 func ScanDir(dir string, spec *Spec) (int, error) {
@@ -73,6 +81,7 @@ func scanReader(scanner *bufio.Scanner, spec *Spec) int {
 		path     string
 		summary  string
 		tags     []string
+		params   []Parameter
 		response Response // first @response line wins
 	}
 
@@ -88,9 +97,10 @@ func scanReader(scanner *bufio.Scanner, spec *Spec) int {
 			// Non-comment line — flush any in-progress annotation block.
 			if cur != nil {
 				op := Operation{
-					Summary:   cur.summary,
-					Tags:      cur.tags,
-					Responses: make(map[string]Response),
+					Summary:    cur.summary,
+					Tags:       cur.tags,
+					Parameters: cur.params,
+					Responses:  make(map[string]Response),
 				}
 				if cur.response.Description != "" {
 					op.Responses["200"] = cur.response
@@ -137,6 +147,29 @@ func scanReader(scanner *bufio.Scanner, spec *Spec) int {
 				cur.tags = append(cur.tags, tag)
 			}
 
+		case strings.HasPrefix(body, "@param "):
+			// @param <in> <name> <type> <required> <description...>
+			fields := strings.Fields(body[len("@param "):])
+			if len(fields) < 2 {
+				continue // malformed — skip
+			}
+			p := Parameter{
+				In:   fields[0],
+				Name: fields[1],
+			}
+			if len(fields) >= 3 {
+				p.Schema = &Schema{Type: fields[2]}
+			} else {
+				p.Schema = &Schema{Type: "string"}
+			}
+			if len(fields) >= 4 && fields[3] == "true" {
+				p.Required = true
+			}
+			if len(fields) >= 5 {
+				p.Description = strings.Join(fields[4:], " ")
+			}
+			cur.params = append(cur.params, p)
+
 		case strings.HasPrefix(body, "@response "):
 			rest := strings.TrimSpace(body[len("@response "):])
 			// rest is "<statusCode> <description or JSON example>"
@@ -161,9 +194,10 @@ func scanReader(scanner *bufio.Scanner, spec *Spec) int {
 	// annotation at the very end of a file with no trailing newline).
 	if cur != nil {
 		op := Operation{
-			Summary:   cur.summary,
-			Tags:      cur.tags,
-			Responses: make(map[string]Response),
+			Summary:    cur.summary,
+			Tags:       cur.tags,
+			Parameters: cur.params,
+			Responses:  make(map[string]Response),
 		}
 		if cur.response.Description != "" {
 			op.Responses["200"] = cur.response
