@@ -280,3 +280,89 @@ func TestWithoutProxyAndRequireProxy_Panic(t *testing.T) {
 	}()
 	_ = safehttp.NewClient(safehttp.WithoutProxy(), safehttp.RequireProxy())
 }
+
+// FLEET_REQUIRE_PROXY env switch — fleet-wide enforcement that
+// promotes any NewClient() caller to RequireProxy posture so a
+// service that forgot the option still fails-fast on missing
+// HTTPS_PROXY instead of silently leaking the dockerhost IP.
+// fleet-runner deploy renders this env into every proxy_egress:
+// true service.
+
+func TestFleetRequireProxyEnv_PanicsWithoutHTTPSProxy(t *testing.T) {
+	t.Setenv("FLEET_REQUIRE_PROXY", "1")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("https_proxy", "")
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("http_proxy", "")
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic when FLEET_REQUIRE_PROXY=1 without HTTP(S)_PROXY")
+		}
+	}()
+	_ = safehttp.NewClient() // no options — env alone must trip the guard
+}
+
+func TestFleetRequireProxyEnv_OKWhenHTTPSProxySet(t *testing.T) {
+	t.Setenv("FLEET_REQUIRE_PROXY", "1")
+	t.Setenv("HTTPS_PROXY", "http://example.invalid:3128")
+	c := safehttp.NewClient()
+	if c == nil {
+		t.Fatal("nil client")
+	}
+}
+
+func TestFleetRequireProxyEnv_WithoutProxyEscapeHatchWins(t *testing.T) {
+	// SSRF probers / port scanners pass WithoutProxy explicitly.
+	// FLEET_REQUIRE_PROXY must NOT promote them — otherwise a
+	// fleet-wide enable would break direct-egress tooling that
+	// is legitimate by design.
+	t.Setenv("FLEET_REQUIRE_PROXY", "1")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("https_proxy", "")
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("http_proxy", "")
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("WithoutProxy must override FLEET_REQUIRE_PROXY, got panic: %v", r)
+		}
+	}()
+	c := safehttp.NewClient(safehttp.WithoutProxy())
+	if c == nil {
+		t.Fatal("nil client")
+	}
+}
+
+func TestFleetRequireProxyEnv_AcceptsTruthyVariants(t *testing.T) {
+	for _, v := range []string{"1", "true", "TRUE", "yes", "Yes", " true "} {
+		t.Run(strings.ReplaceAll(v, " ", "_"), func(t *testing.T) {
+			t.Setenv("FLEET_REQUIRE_PROXY", v)
+			t.Setenv("HTTPS_PROXY", "")
+			t.Setenv("https_proxy", "")
+			t.Setenv("HTTP_PROXY", "")
+			t.Setenv("http_proxy", "")
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatalf("expected panic for FLEET_REQUIRE_PROXY=%q", v)
+				}
+			}()
+			_ = safehttp.NewClient()
+		})
+	}
+}
+
+func TestFleetRequireProxyEnv_FalsyValuesNoOp(t *testing.T) {
+	for _, v := range []string{"", "0", "false", "no", "off", "anything-else"} {
+		t.Run("v="+v, func(t *testing.T) {
+			t.Setenv("FLEET_REQUIRE_PROXY", v)
+			t.Setenv("HTTPS_PROXY", "")
+			t.Setenv("https_proxy", "")
+			t.Setenv("HTTP_PROXY", "")
+			t.Setenv("http_proxy", "")
+			// must NOT panic
+			c := safehttp.NewClient()
+			if c == nil {
+				t.Fatal("nil client")
+			}
+		})
+	}
+}
