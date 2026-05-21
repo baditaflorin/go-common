@@ -273,7 +273,28 @@ func WithoutProxy() Option { return func(o *options) { o.withoutProxy = true } }
 // true` in service.yaml should pass this so a misconfigured deploy
 // fails loudly at startup instead of silently leaking the dockerhost
 // IP. Mutually exclusive with WithoutProxy.
+//
+// Fleet-wide enforcement: when the environment variable
+// FLEET_REQUIRE_PROXY=1 is set (rendered by fleet-runner deploy for
+// every service with proxy_egress: true), NewClient behaves as if
+// RequireProxy() was passed even when the caller forgot to. This is
+// the belt-and-suspenders gate that catches every caller that grabs
+// safehttp.NewClient() without thinking about proxy posture — see
+// the 2026-05-21 Hetzner abuse complaint where five fleet tools
+// leaked from the dockerhost IP because their NewClient() calls
+// omitted RequireProxy() and the HTTPS_PROXY env happened to be
+// unset at startup. WithoutProxy() still wins so SSRF probers,
+// smuggling tests, and port scanners can opt out explicitly.
 func RequireProxy() Option { return func(o *options) { o.requireProxy = true } }
+
+// fleetRequireProxyEnv returns true when FLEET_REQUIRE_PROXY is set
+// to a truthy value (1/true/yes, case-insensitive). Rendered into
+// per-service env by fleet-runner deploy when service.yaml has
+// proxy_egress: true.
+func fleetRequireProxyEnv() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("FLEET_REQUIRE_PROXY")))
+	return v == "1" || v == "true" || v == "yes"
+}
 
 // WithEgressAllowlist restricts outbound requests to the given hostnames.
 // Any GET/POST/etc. whose URL.Hostname() is not in the list returns
@@ -327,6 +348,16 @@ func NewClient(opts ...Option) *http.Client {
 	}
 	if o.withoutProxy && o.requireProxy {
 		panic("safehttp: WithoutProxy and RequireProxy are mutually exclusive")
+	}
+	// Fleet-wide enforcement: FLEET_REQUIRE_PROXY=1 promotes any
+	// caller to RequireProxy posture unless they explicitly opted
+	// out with WithoutProxy. fleet-runner deploy renders this env
+	// var into every service whose service.yaml has proxy_egress:
+	// true, so a caller that forgot to pass RequireProxy() still
+	// fails-fast on a missing HTTPS_PROXY instead of silently
+	// leaking the dockerhost IP.
+	if !o.withoutProxy && !o.requireProxy && fleetRequireProxyEnv() {
+		o.requireProxy = true
 	}
 	if o.requireProxy && os.Getenv("HTTPS_PROXY") == "" && os.Getenv("https_proxy") == "" && os.Getenv("HTTP_PROXY") == "" && os.Getenv("http_proxy") == "" {
 		panic("safehttp: RequireProxy set but no HTTP(S)_PROXY env var found — refusing to start (service.yaml has proxy_egress: true but /opt/_shared/proxy.env was not mounted)")
