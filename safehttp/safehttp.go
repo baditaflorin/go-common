@@ -401,6 +401,23 @@ func NewClient(opts ...Option) *http.Client {
 	}
 	rt = extras
 
+	// User-Agent injection — wraps the transport so EVERY outbound
+	// request carries the configured UA. Pre-v0.35.0 the WithUserAgent
+	// option only set the UA on redirect-follow requests via the
+	// Client.CheckRedirect hook, so the INITIAL request still went
+	// out with Go's default "Go-http-client/1.1". Upstreams that gate
+	// on UA (Wikidata WDQS T400119, GitHub, many CDNs) silently 403'd
+	// every fleet caller. The injection is no-op when WithUserAgent
+	// is not set, preserving v0.15.0 behavior for opted-out callers.
+	//
+	// Per-request override path: if the caller explicitly sets a
+	// User-Agent header on the *Request before sending, that value
+	// wins — we only inject when the header is unset. This matters
+	// for scrapers / fingerprinters that need per-call UA control.
+	if o.userAgent != "" {
+		rt = &uaTransport{inner: rt, ua: o.userAgent}
+	}
+
 	// Egress allowlist — runs as the outermost wrapper so the check
 	// fires before any other transport (including extras' backoff
 	// consult and the underlying dialer's SSRF guard) attempts I/O.
@@ -519,6 +536,35 @@ var TestAllowedHosts = []string{
 	"8.8.8.8",
 	"1.1.1.1",
 	"93.184.216.34",
+}
+
+// uaTransport injects the configured User-Agent on outbound requests
+// that don't already have one set. The earlier shape — relying solely
+// on Client.CheckRedirect to set the header — only covered redirect-
+// follow requests, so the INITIAL request always went out with Go's
+// default "Go-http-client/1.1". That was the silent bug fixed in
+// v0.35.0: any fleet caller passing WithUserAgent was being 403'd by
+// UA-gating upstreams (Wikidata WDQS T400119 was the canary).
+//
+// Per-request override semantics: we only inject when the header is
+// unset (req.Header.Get returns "" for missing). Callers that set a
+// per-request UA via req.Header.Set keep that value — required for
+// scrapers / scanners that fingerprint per-call.
+//
+// Request mutation is via req.Clone — http.RoundTripper contracts
+// forbid modifying the caller's *Request, and a shared *Request can
+// race with the goroutine that constructed it.
+type uaTransport struct {
+	inner http.RoundTripper
+	ua    string
+}
+
+func (t *uaTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.ua != "" && req.Header.Get("User-Agent") == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("User-Agent", t.ua)
+	}
+	return t.inner.RoundTrip(req)
 }
 
 // egressAllowlistTransport rejects outbound requests whose target host
