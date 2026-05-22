@@ -48,10 +48,22 @@
 //
 // # Resilience
 //
-// If the cache returns 5xx or the request times out, fleetfetch
-// transparently falls back to a direct safehttp.NewClient fetch
-// (with SSRF guard intact). The caller never sees the cache outage
-// as a fetch failure — only as a missing hit.
+// If the cache returns 5xx, rejects the request (4xx with no
+// X-FetchCache-* headers), or is unreachable at the transport level
+// (connection refused / DNS / no route), fleetfetch transparently
+// falls back to a direct safehttp.NewClient fetch (with SSRF guard
+// intact). The caller never sees a cache outage as a fetch failure —
+// only as a missing hit (Response.ViaFallback, metric result="fallback").
+//
+// A *slow* cache is treated differently from a *dead* one. When the
+// request to the cache exceeds the client timeout — typically a cold
+// miss while the cache fetches a slow origin — the default is NOT to
+// fall back: direct-fetching the same slow origin would hit the same
+// latency, bypass the cache's singleflight de-dup, and register as
+// direct egress (proxy bypass). Instead Get returns ErrCacheTimeout
+// (metric result="timeout"), which the caller can retry against a
+// now-warming cache. Opt into best-effort direct fetch on timeout with
+// WithFallbackOnTimeout when a body matters more than avoiding egress.
 //
 // # Endpoint
 //

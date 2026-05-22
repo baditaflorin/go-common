@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -123,12 +124,30 @@ type Client struct {
 	// to GetWithHeaders are merged on top (per-request wins).
 	defaultHeaders http.Header
 
+	// fallbackOnTimeout controls what happens when the cache is
+	// reachable but too slow (the request to the cache exceeds
+	// `timeout`). Default false: a slow cache is NOT treated like a
+	// dead one — we surface ErrCacheTimeout instead of direct-fetching
+	// the same (likely-slow) origin and bypassing the cache's
+	// singleflight. Set true via WithFallbackOnTimeout to opt into
+	// best-effort direct fetch on timeout.
+	fallbackOnTimeout bool
+
 	// Counters for observability. Exposed via Stats().
 	hits      atomic.Int64
 	misses    atomic.Int64
 	fallbacks atomic.Int64
+	timeouts  atomic.Int64
 	errs      atomic.Int64
 }
+
+// ErrCacheTimeout is returned by Get when the call to the fetch cache
+// exceeds the client timeout and WithFallbackOnTimeout was not set. It
+// signals "the cache is reachable but slow" (typically a cold miss on
+// a slow origin), as distinct from "the cache is down" (which still
+// transparently falls back to a direct fetch). Callers can retry — a
+// second attempt usually lands on a now-warm cache entry.
+var ErrCacheTimeout = errors.New("fleetfetch: cache request timed out")
 
 // Option configures a Client.
 type Option func(*Client)
@@ -148,9 +167,27 @@ func WithAPIKey(k string) Option {
 }
 
 // WithTimeout sets the per-request timeout for both the cache-side
-// call and the fallback direct fetch. Default 15s.
+// call and the fallback direct fetch. Default 15s. This bounds how
+// long a cold miss (where the cache fetches a slow origin) may take
+// before the cache call is considered a timeout — set it generously
+// enough that a normal cold-miss upstream fetch completes inside the
+// cache call rather than tripping ErrCacheTimeout. See
+// WithFallbackOnTimeout for the slow-cache behavior.
 func WithTimeout(d time.Duration) Option {
 	return func(c *Client) { c.timeout = d }
+}
+
+// WithFallbackOnTimeout makes a slow cache (a cache request that
+// exceeds the client timeout) fall back to a direct SSRF-safe fetch,
+// the same as a dead cache. Off by default: a timeout usually means
+// the cache is mid-fetch of a slow origin, so direct-fetching the same
+// origin would hit the same latency AND bypass the cache's
+// singleflight de-dup. Leaving this off keeps slow-cache events out of
+// the "direct egress / proxy bypass" metric (they're reported as
+// result="timeout", not result="fallback"). Turn it on only when a
+// best-effort body matters more than avoiding redundant egress.
+func WithFallbackOnTimeout() Option {
+	return func(c *Client) { c.fallbackOnTimeout = true }
 }
 
 // WithFallbackClient replaces the default safehttp-based fallback
@@ -282,6 +319,8 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	defer func() {
 		ev := Event{Host: hostOf(targetURL), Duration: time.Since(start)}
 		switch {
+		case errors.Is(retErr, ErrCacheTimeout):
+			ev.Result = "timeout"
 		case retErr != nil:
 			ev.Result = "error"
 		case fetchRes == nil:
@@ -332,7 +371,27 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 
 	resp, err := c.cacheClient.Do(req)
 	if err != nil {
-		// Network failure talking to the cache → fallback.
+		// Caller's own context expired/cancelled — they gave up.
+		// Don't fall back or direct-fetch; just propagate.
+		if ctx.Err() != nil {
+			c.errs.Add(1)
+			return nil, fmt.Errorf("fleetfetch: caller context done: %w", ctx.Err())
+		}
+		// Cache reachable but slow (our per-request deadline fired, not
+		// a transport failure). A direct fetch of the same origin would
+		// hit the same latency and bypass singleflight, so by default
+		// we surface a timeout instead of bypassing the cache.
+		if isTimeout(err) {
+			c.timeouts.Add(1)
+			if !c.fallbackOnTimeout {
+				c.errs.Add(1)
+				return nil, fmt.Errorf("%w: %v", ErrCacheTimeout, err)
+			}
+			return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache timeout: %w", err))
+		}
+		// Genuine transport failure (refused / DNS / no route): the
+		// cache is unreachable, so a direct fetch is the right
+		// degradation.
 		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache transport: %w", err))
 	}
 	defer resp.Body.Close()
@@ -437,6 +496,7 @@ type Stats struct {
 	Hits      int64
 	Misses    int64
 	Fallbacks int64
+	Timeouts  int64
 	Errors    int64
 }
 
@@ -445,8 +505,23 @@ func (c *Client) Stats() Stats {
 		Hits:      c.hits.Load(),
 		Misses:    c.misses.Load(),
 		Fallbacks: c.fallbacks.Load(),
+		Timeouts:  c.timeouts.Load(),
 		Errors:    c.errs.Load(),
 	}
+}
+
+// isTimeout reports whether err represents a deadline/timeout (as
+// opposed to a connection-level transport failure). Used to tell a
+// slow-but-reachable cache apart from a dead one.
+func isTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return false
 }
 
 // mergeHeaders returns base ∪ overlay with overlay overriding base on

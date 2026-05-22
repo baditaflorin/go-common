@@ -2,6 +2,7 @@ package fleetfetch
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -216,6 +217,80 @@ func TestGet_CacheReturns5xx_FallsBackToDirect(t *testing.T) {
 	}
 	if s := c.Stats(); s.Fallbacks != 1 {
 		t.Errorf("stats: %+v", s)
+	}
+}
+
+func TestGet_CacheTimeout_DoesNotFallBackByDefault(t *testing.T) {
+	// Cache is reachable but slower than the client timeout.
+	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(200)
+	}))
+	defer cacheSrv.Close()
+
+	originHit := 0
+	originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originHit++
+		w.WriteHeader(200)
+	}))
+	defer originSrv.Close()
+
+	c := NewClient(
+		WithCacheURL(cacheSrv.URL),
+		WithTimeout(40*time.Millisecond),
+		WithFallbackClient(&http.Client{Timeout: 5 * time.Second}),
+	)
+	_, err := c.Get(context.Background(), originSrv.URL)
+	if err == nil {
+		t.Fatal("expected ErrCacheTimeout, got nil")
+	}
+	if !errors.Is(err, ErrCacheTimeout) {
+		t.Fatalf("expected ErrCacheTimeout, got %v", err)
+	}
+	if originHit != 0 {
+		t.Errorf("must NOT direct-fetch origin on timeout by default; origin hit %d times", originHit)
+	}
+	if s := c.Stats(); s.Timeouts != 1 || s.Fallbacks != 0 {
+		t.Errorf("stats: %+v (want Timeouts=1, Fallbacks=0)", s)
+	}
+}
+
+func TestGet_CacheTimeout_FallsBackWhenOptedIn(t *testing.T) {
+	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(200)
+	}))
+	defer cacheSrv.Close()
+
+	originHit := 0
+	originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originHit++
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "direct after timeout")
+	}))
+	defer originSrv.Close()
+
+	c := NewClient(
+		WithCacheURL(cacheSrv.URL),
+		WithTimeout(40*time.Millisecond),
+		WithFallbackOnTimeout(),
+		WithFallbackClient(&http.Client{Timeout: 5 * time.Second}),
+	)
+	r, err := c.Get(context.Background(), originSrv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.ViaFallback {
+		t.Error("expected ViaFallback=true when WithFallbackOnTimeout is set")
+	}
+	if string(r.Body) != "direct after timeout" {
+		t.Errorf("body: %q", r.Body)
+	}
+	if originHit != 1 {
+		t.Errorf("origin hit count: %d", originHit)
+	}
+	if s := c.Stats(); s.Timeouts != 1 || s.Fallbacks != 1 {
+		t.Errorf("stats: %+v (want Timeouts=1, Fallbacks=1)", s)
 	}
 }
 

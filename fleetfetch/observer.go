@@ -31,8 +31,13 @@ type Observer interface {
 //
 //	"hit"       — served from the cache, X-FetchCache-Hit=true
 //	"miss"      — cache fetched upstream then returned to us
-//	"fallback"  — cache unreachable; we direct-fetched via safehttp
-//	"error"     — both cache and fallback failed
+//	"fallback"  — cache unreachable (5xx / rejected / transport
+//	              failure); we direct-fetched via safehttp
+//	"timeout"   — cache reachable but too slow; we did NOT fall back
+//	              (unless WithFallbackOnTimeout) — distinct from
+//	              "fallback" so a slow cache doesn't pollute the
+//	              direct-egress / proxy-bypass metric
+//	"error"     — both cache and fallback failed, or caller context done
 type Event struct {
 	Host       string // hostname of the targetURL (not the cache)
 	Result     string

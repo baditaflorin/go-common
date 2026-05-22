@@ -14,14 +14,19 @@ import (
 //	fleet_fetch_duration_seconds{service, result}
 //	fleet_fetch_cache_age_seconds{service, host}
 //
-// "result" is one of: hit, miss, fallback, error. Cache hit rate per
-// service is one PromQL line:
+// "result" is one of: hit, miss, fallback, timeout, error. Cache hit
+// rate per service is one PromQL line:
 //
 //	`sum(rate(fleet_fetch_total{result="hit"}[5m]))
 //	 /
 //	 sum(rate(fleet_fetch_total[5m]))`.
 //
-// fallback rate is the canary for cache outages.
+// fallback rate (result="fallback") is the canary for cache outages
+// and the source of the "direct egress / proxy bypass" panel — it
+// counts only genuine direct fetches around an unreachable cache.
+// timeout rate (result="timeout") is the separate canary for a
+// reachable-but-slow cache; it does NOT imply direct egress unless the
+// caller set fleetfetch.WithFallbackOnTimeout.
 type FleetFetchCollectors struct {
 	service string
 	cap     *hostCardCap
