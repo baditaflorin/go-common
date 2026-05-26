@@ -125,3 +125,112 @@ func TestUnknownSupplierReturnsNone(t *testing.T) {
 		t.Fatalf("unknown supplier should return none, got %q", s.Name())
 	}
 }
+
+// --- multi supplier tests ---------------------------------------------------
+
+func TestMultiSupplier_SingleURL(t *testing.T) {
+	cfg := proxysupplier.Config{
+		Supplier:  "multi",
+		ProxyURLs: "http://user:pass@proxy1.example.com:1338",
+	}
+	s := proxysupplier.NewFromConfig(cfg)
+	if s.Name() != "multi" {
+		t.Fatalf("want multi, got %q", s.Name())
+	}
+	got := s.ProxyURL()
+	if got != "http://user:pass@proxy1.example.com:1338" {
+		t.Fatalf("unexpected ProxyURL: %q", got)
+	}
+}
+
+func TestMultiSupplier_WeightedDistribution(t *testing.T) {
+	cfg := proxysupplier.Config{
+		Supplier:     "multi",
+		ProxyURLs:    "http://user:pass@proxy1.example.com:1338,http://user:pass@proxy2.example.com:80",
+		ProxyWeights: "90,10",
+	}
+	s := proxysupplier.NewFromConfig(cfg)
+	if s.Name() != "multi" {
+		t.Fatalf("want multi, got %q", s.Name())
+	}
+
+	counts := map[string]int{}
+	const n = 10000
+	for i := 0; i < n; i++ {
+		counts[s.ProxyURL()]++
+	}
+	p1 := float64(counts["http://user:pass@proxy1.example.com:1338"]) / n
+	// With weights 90:10 we expect proxy1 ~90% of the time.
+	// Allow ±5% tolerance to avoid flaky tests.
+	if p1 < 0.85 || p1 > 0.95 {
+		t.Fatalf("proxy1 got %.1f%% of requests, want ~90%%", p1*100)
+	}
+}
+
+func TestMultiSupplier_EqualWeightDefault(t *testing.T) {
+	cfg := proxysupplier.Config{
+		Supplier:  "multi",
+		ProxyURLs: "http://a.example.com:80,http://b.example.com:80",
+		// no ProxyWeights — should default to equal
+	}
+	s := proxysupplier.NewFromConfig(cfg)
+	counts := map[string]int{}
+	const n = 10000
+	for i := 0; i < n; i++ {
+		counts[s.ProxyURL()]++
+	}
+	pA := float64(counts["http://a.example.com:80"]) / n
+	if pA < 0.45 || pA > 0.55 {
+		t.Fatalf("equal-weight: proxy A got %.1f%%, want ~50%%", pA*100)
+	}
+}
+
+func TestMultiSupplier_EmptyURLsReturnsNone(t *testing.T) {
+	cfg := proxysupplier.Config{
+		Supplier:  "multi",
+		ProxyURLs: "",
+	}
+	s := proxysupplier.NewFromConfig(cfg)
+	if s.Name() != "none" {
+		t.Fatalf("empty PROXY_URLS: want none, got %q", s.Name())
+	}
+}
+
+func TestMultiSupplier_LoopbackDropped(t *testing.T) {
+	cfg := proxysupplier.Config{
+		Supplier:  "multi",
+		ProxyURLs: "http://127.0.0.1:8080,http://proxy.example.com:80",
+		// loopback entry should be silently dropped
+	}
+	s := proxysupplier.NewFromConfig(cfg)
+	if s.Name() != "multi" {
+		t.Fatalf("want multi (one live entry remains), got %q", s.Name())
+	}
+	for i := 0; i < 100; i++ {
+		if got := s.ProxyURL(); got != "http://proxy.example.com:80" {
+			t.Fatalf("loopback not dropped: got %q", got)
+		}
+	}
+}
+
+func TestMultiSupplier_HTTPClient_PerRequestProxy(t *testing.T) {
+	cfg := proxysupplier.Config{
+		Supplier:     "multi",
+		ProxyURLs:    "http://proxy1.example.com:80,http://proxy2.example.com:80",
+		ProxyWeights: "50,50",
+	}
+	s := proxysupplier.NewFromConfig(cfg)
+	client := proxysupplier.HTTPClient(s, 2*time.Second)
+	if client == nil {
+		t.Fatal("expected non-nil client")
+	}
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok || tr.Proxy == nil {
+		t.Fatal("Transport.Proxy should be set")
+	}
+	req, _ := http.NewRequest(http.MethodGet, "http://example.com/", nil)
+	u, err := tr.Proxy(req)
+	if err != nil || u == nil {
+		t.Fatalf("Proxy() returned url=%v err=%v", u, err)
+	}
+}
