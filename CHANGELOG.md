@@ -4,6 +4,26 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.37.0 — 2026-05-26
+
+### Added
+
+- **`proxysupplier` package** — fleet-canonical egress-proxy supplier
+  factory. Single source of truth for which upstream proxy to use; adding
+  a new provider means one `case` here + `fleet-runner update-dep`, not
+  edits across every consumer repo.
+  - `Supplier` interface: `Name() string`, `ProxyURL() string`
+  - `Config` struct + `EnvConfig()` (reads canonical fleet env vars)
+  - `New()` — convenience one-liner for env-driven selection
+  - `NewFromConfig(Config)` — explicit factory for struct-config services
+  - `HTTPClient(Supplier, time.Duration) *http.Client` — returns nil for
+    the "none" supplier (caller falls back to `safehttp`)
+  - Supported suppliers: `"plain_proxies"` (PROXY\_HOST/PORT/USER/PASS),
+    `"env"` (EXTERNAL\_PROXY\_URL → PROXY\_HOST/PORT fallback), `"none"`
+  - Self-proxy guard on every supplier: loopback literals + own hostname +
+    DNS resolution; falls back to `noneSupplier` if triggered
+  - 8 unit tests
+
 ## v0.36.1 — 2026-05-26
 
 ### Fixed
