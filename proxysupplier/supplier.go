@@ -21,8 +21,17 @@
 //
 //   - "plain_proxies" — PlainProxies DC; reads PROXY_HOST / PROXY_PORT /
 //     PROXY_USERNAME / PROXY_PASSWORD
-//   - "env"           — legacy: reads EXTERNAL_PROXY_URL, then falls back to
+//   - "env"           — reads EXTERNAL_PROXY_URL, then falls back to
 //     PROXY_HOST / PROXY_PORT / PROXY_PROTOCOL / PROXY_USERNAME / PROXY_PASSWORD
+//   - "multi"         — weighted random across a pool; reads PROXY_URLS
+//     (comma-separated list of proxy URLs) and optionally PROXY_WEIGHTS
+//     (comma-separated integers, same length as PROXY_URLS; defaults to
+//     equal weight). Each outbound request independently picks a proxy
+//     proportional to its weight. Self-proxy entries are silently dropped.
+//     Example:
+//       PROXY_SUPPLIER=multi
+//       PROXY_URLS=http://u:p@host1:1338,http://u:p@host2:80
+//       PROXY_WEIGHTS=70,30
 //   - "none" / ""     — direct connection (default)
 //
 // A self-proxy guard is always applied: if the resolved URL routes back to
@@ -32,10 +41,12 @@ package proxysupplier
 
 import (
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -52,7 +63,7 @@ type Supplier interface {
 // Config holds the raw proxy configuration values. Populate it from env vars,
 // a struct config, or a YAML file — whatever the calling service uses.
 type Config struct {
-	// Supplier selects the backend: "plain_proxies", "env", "none" / "".
+	// Supplier selects the backend: "plain_proxies", "env", "multi", "none" / "".
 	Supplier string
 
 	// PlainProxies / generic URL-based suppliers
@@ -64,6 +75,13 @@ type Config struct {
 
 	// Legacy env-style: full URL takes precedence over Host/Port fields.
 	ExternalProxyURL string
+
+	// Multi-proxy pool (PROXY_SUPPLIER=multi).
+	// ProxyURLs is a comma-separated list of proxy URLs.
+	// ProxyWeights is an optional comma-separated list of positive integers
+	// with the same length as ProxyURLs. Defaults to equal weight when empty.
+	ProxyURLs    string
+	ProxyWeights string
 }
 
 // EnvConfig builds a Config by reading the canonical fleet env vars.
@@ -80,6 +98,8 @@ func EnvConfig() Config {
 		Password:         os.Getenv("PROXY_PASSWORD"),
 		Protocol:         os.Getenv("PROXY_PROTOCOL"),
 		ExternalProxyURL: os.Getenv("EXTERNAL_PROXY_URL"),
+		ProxyURLs:        os.Getenv("PROXY_URLS"),
+		ProxyWeights:     os.Getenv("PROXY_WEIGHTS"),
 	}
 }
 
@@ -115,6 +135,13 @@ func NewFromConfig(cfg Config) Supplier {
 		}
 		s = &urlSupplier{name: "env", rawURL: rawURL}
 
+	case "multi":
+		ms := newMultiSupplier(cfg.ProxyURLs, cfg.ProxyWeights)
+		if ms == nil {
+			return noneSupplier{}
+		}
+		return ms // self-proxy guard already applied inside newMultiSupplier
+
 	default:
 		return noneSupplier{}
 	}
@@ -129,6 +156,9 @@ func NewFromConfig(cfg Config) Supplier {
 // Returns nil when s is "none" — the caller should use its default client
 // (e.g. safehttp) instead.
 //
+// For multi-proxy suppliers the Proxy function is evaluated per-request so
+// each outbound call independently draws from the weighted pool.
+//
 //	client := proxysupplier.HTTPClient(s, 8*time.Second)
 //	if client == nil {
 //	    client = safehttp.NewClient(...)
@@ -137,13 +167,17 @@ func HTTPClient(s Supplier, timeout time.Duration) *http.Client {
 	if s.ProxyURL() == "" {
 		return nil
 	}
-	proxyURL, err := url.Parse(s.ProxyURL())
-	if err != nil {
-		return nil
-	}
 	return &http.Client{
 		Transport: &http.Transport{
-			Proxy:               http.ProxyURL(proxyURL),
+			// Proxy is called per-request; single-URL suppliers always return
+			// the same URL, multi-proxy suppliers pick a weighted-random one.
+			Proxy: func(req *http.Request) (*url.URL, error) {
+				raw := s.ProxyURL()
+				if raw == "" {
+					return nil, nil
+				}
+				return url.Parse(raw)
+			},
 			MaxIdleConns:        100,
 			MaxIdleConnsPerHost: 10,
 		},
@@ -165,6 +199,82 @@ type urlSupplier struct {
 
 func (s *urlSupplier) Name() string     { return s.name }
 func (s *urlSupplier) ProxyURL() string { return s.rawURL }
+
+// --- multiSupplier ----------------------------------------------------------
+
+// multiEntry is a single proxy in the weighted pool.
+type multiEntry struct {
+	rawURL string
+	weight int
+}
+
+// multiSupplier picks a proxy URL for each request using weighted random
+// selection. It satisfies [Supplier].
+type multiSupplier struct {
+	entries  []multiEntry
+	total    int
+}
+
+// newMultiSupplier parses proxyURLs (comma-separated) and weights
+// (comma-separated integers; optional). Entries that resolve to the current
+// host are silently dropped. Returns nil if the resulting pool is empty.
+func newMultiSupplier(proxyURLs, proxyWeights string) *multiSupplier {
+	if proxyURLs == "" {
+		return nil
+	}
+	rawURLs := splitTrim(proxyURLs, ',')
+	weights := splitTrim(proxyWeights, ',')
+
+	entries := make([]multiEntry, 0, len(rawURLs))
+	for i, raw := range rawURLs {
+		if raw == "" || isSelfProxy(raw) {
+			continue
+		}
+		w := 1
+		if i < len(weights) {
+			if v, err := strconv.Atoi(weights[i]); err == nil && v > 0 {
+				w = v
+			}
+		}
+		entries = append(entries, multiEntry{rawURL: raw, weight: w})
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	total := 0
+	for _, e := range entries {
+		total += e.weight
+	}
+	return &multiSupplier{entries: entries, total: total}
+}
+
+func (m *multiSupplier) Name() string { return "multi" }
+
+// ProxyURL returns a weighted-random proxy URL from the pool.
+// Called per-request by HTTPClient's Proxy function.
+func (m *multiSupplier) ProxyURL() string {
+	if len(m.entries) == 1 {
+		return m.entries[0].rawURL
+	}
+	//nolint:gosec // non-crypto random is fine for proxy selection
+	r := rand.Intn(m.total)
+	for _, e := range m.entries {
+		r -= e.weight
+		if r < 0 {
+			return e.rawURL
+		}
+	}
+	return m.entries[len(m.entries)-1].rawURL
+}
+
+func splitTrim(s string, sep rune) []string {
+	parts := strings.Split(s, string(sep))
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, strings.TrimSpace(p))
+	}
+	return out
+}
 
 // --- helpers ----------------------------------------------------------------
 
