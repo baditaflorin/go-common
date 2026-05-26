@@ -4,6 +4,19 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.38.0 — 2026-05-26
+
+### Added
+
+- **`middleware.Logging` — `LOG_SKIP_PATHS` support** — comma-separated list
+  of path prefixes whose `request_completed` log entry is demoted from INFO
+  to DEBUG, eliminating health-check noise without losing the events.
+  - Set e.g. `LOG_SKIP_PATHS=/health,/version,/metrics` in `.env`
+  - Prefix matching: `/health` matches `/health`, `/health/live`, etc.
+  - Unset or empty → all requests logged at INFO (fully backward-compatible)
+  - Parsed once on first request via `sync.Once`; no hot-path allocation
+  - 3 new unit tests: skip path → DEBUG, non-skip path → INFO, unset → INFO
+
 ## v0.37.0 — 2026-05-26
 
 ### Added

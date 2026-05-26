@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -36,9 +38,50 @@ func WithLogger(ctx context.Context, logger *slog.Logger) context.Context {
 // Constructed once at package init to avoid repeated allocations.
 var defaultLogger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
+// skipPaths holds the parsed LOG_SKIP_PATHS prefix list.
+// Initialised lazily (once) so tests can set the env var before first use.
+var (
+	skipPathsOnce sync.Once
+	skipPaths     []string
+)
+
+// loadSkipPaths parses LOG_SKIP_PATHS on first call and caches the result.
+// Each entry is a non-empty path prefix; whitespace around entries is trimmed.
+func loadSkipPaths() []string {
+	skipPathsOnce.Do(func() {
+		raw := os.Getenv("LOG_SKIP_PATHS")
+		if raw == "" {
+			return
+		}
+		for _, p := range strings.Split(raw, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				skipPaths = append(skipPaths, p)
+			}
+		}
+	})
+	return skipPaths
+}
+
+// isSkipped reports whether path starts with any of the configured skip prefixes.
+func isSkipped(path string) bool {
+	for _, prefix := range loadSkipPaths() {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // Logging logs request details using slog and injects a per-request
 // child logger (enriched with request_id, method, path) into the context
 // so downstream handlers can call middleware.LoggerFromContext(r.Context()).
+//
+// When LOG_SKIP_PATHS is set (comma-separated path prefixes, e.g.
+// "/health,/metrics"), the request_completed entry for matching paths is
+// emitted at DEBUG level instead of INFO. This suppresses health-check
+// noise without losing the events entirely. When LOG_SKIP_PATHS is unset
+// or empty, all requests are logged at INFO (fully backward-compatible).
 func Logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -62,11 +105,17 @@ func Logging(next http.Handler) http.Handler {
 		next.ServeHTTP(ww, r)
 
 		duration := time.Since(start)
-		reqLogger.Info("request_completed",
+		attrs := []any{
 			slog.Int("status", ww.status),
 			slog.String("duration", duration.String()),
 			slog.Int64("bytes", ww.bytes),
-		)
+		}
+
+		if isSkipped(r.URL.Path) {
+			reqLogger.Debug("request_completed", attrs...)
+		} else {
+			reqLogger.Info("request_completed", attrs...)
+		}
 	})
 }
 
