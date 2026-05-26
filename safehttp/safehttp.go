@@ -338,6 +338,70 @@ func WithDenyAllEgress() Option {
 	}
 }
 
+// proxySkipCache remembers which hostnames resolve to private addresses so
+// the DNS lookup only happens once per unique host across all clients.
+var (
+	proxySkipCacheMu sync.RWMutex
+	proxySkipCache   = map[string]bool{}
+)
+
+// proxySkippingPrivate wraps http.ProxyFromEnvironment and returns nil (direct)
+// when the target host resolves entirely to private / loopback addresses.
+// This is needed because Go's standard NO_PROXY CIDR matching only fires for
+// IP literals in the URL — Docker compose service names (e.g. go_foo-app-1)
+// do not match RFC 1918 CIDR entries even though they resolve to Docker-
+// internal addresses. Without this, proxy-egress services route intra-Docker
+// traffic through the external Webshare proxy, which cannot resolve those
+// names → target_connect_resolve_failed.
+func proxySkippingPrivate(req *http.Request) (*url.URL, error) {
+	host := req.URL.Hostname()
+
+	// IP literal fast-path.
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			return nil, nil
+		}
+		return http.ProxyFromEnvironment(req)
+	}
+
+	// Well-known Docker-internal names that may not resolve on Linux.
+	if strings.EqualFold(host, "host.docker.internal") || strings.EqualFold(host, "localhost") {
+		return nil, nil
+	}
+
+	// Cache lookup.
+	proxySkipCacheMu.RLock()
+	skip, cached := proxySkipCache[host]
+	proxySkipCacheMu.RUnlock()
+	if cached {
+		if skip {
+			return nil, nil
+		}
+		return http.ProxyFromEnvironment(req)
+	}
+
+	// Resolve and check whether all addresses are private.
+	addrs, err := net.DefaultResolver.LookupHost(req.Context(), host)
+	if err == nil && len(addrs) > 0 {
+		skip = true
+		for _, addr := range addrs {
+			ip := net.ParseIP(addr)
+			if ip == nil || (!ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast()) {
+				skip = false
+				break
+			}
+		}
+		proxySkipCacheMu.Lock()
+		proxySkipCache[host] = skip
+		proxySkipCacheMu.Unlock()
+	}
+
+	if skip {
+		return nil, nil
+	}
+	return http.ProxyFromEnvironment(req)
+}
+
 // NewClient returns an *http.Client with a guarded transport. The transport
 // blocks private/internal IPs on every dial, including after redirects, making
 // it safe against DNS-rebind and open-redirect SSRF chains.
@@ -362,7 +426,9 @@ func NewClient(opts ...Option) *http.Client {
 	if o.requireProxy && os.Getenv("HTTPS_PROXY") == "" && os.Getenv("https_proxy") == "" && os.Getenv("HTTP_PROXY") == "" && os.Getenv("http_proxy") == "" {
 		panic("safehttp: RequireProxy set but no HTTP(S)_PROXY env var found — refusing to start (service.yaml has proxy_egress: true but /opt/_shared/proxy.env was not mounted)")
 	}
-	proxyFn := http.ProxyFromEnvironment
+	proxyFn := func(req *http.Request) (*url.URL, error) {
+		return proxySkippingPrivate(req)
+	}
 	if o.withoutProxy {
 		proxyFn = nil
 	}
