@@ -4,6 +4,22 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.36.1 — 2026-05-26
+
+### Fixed
+
+- **`apikey.Client` admin calls (`Issue`, `Revoke`, `List`, `Purge`)
+  now correctly unwrap the `response.Success` envelope before decoding
+  the payload.** All four endpoints in `go-apikey-service` return
+  `{"status":"success","data":{...}}` — but `adminCall` was calling
+  `json.Decode(body, out)` directly, so the fields nested under `"data"`
+  were silently ignored and every struct was returned at its zero value.
+  The most visible symptom: `POST /api/admin/keys/issue` returned HTTP 200
+  with `{"key":"","user":"","scope":"","note":"","created_at":"","expires_at":""}`
+  even though the key was correctly written to the database.
+  The fix decodes into a `{"data": json.RawMessage}` envelope first, then
+  unmarshals the inner payload — fixing all four admin operations at once.
+
 ## v0.36.0 — 2026-05-21
 
 ### Fixed

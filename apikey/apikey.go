@@ -280,7 +280,22 @@ func (c *Client) adminCall(ctx context.Context, method, path string, body []byte
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	// The keystore wraps every successful response in the fleet-canonical
+	// response.Success envelope: {"status":"success","data":{...}}.
+	// Decode the envelope first, then unmarshal the inner "data" payload
+	// into the caller-supplied struct. Without this unwrap, json.Decode
+	// sees {"status","data"} at the top level and silently produces
+	// zero-value output — the root cause of the issue-returns-empty-key bug.
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return fmt.Errorf("apikey %s %s: decode envelope: %w", method, path, err)
+	}
+	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+		return nil
+	}
+	return json.Unmarshal(envelope.Data, out)
 }
 
 // adminOpFromPath maps the admin URL path to a stable, low-cardinality
