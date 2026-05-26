@@ -159,6 +159,12 @@ func NewFromConfig(cfg Config) Supplier {
 // For multi-proxy suppliers the Proxy function is evaluated per-request so
 // each outbound call independently draws from the weighted pool.
 //
+// Keep-alives are disabled on the returned transport so that each outbound
+// request opens a fresh TCP connection to the proxy. This is required for
+// rotating-IP endpoints (e.g. PlainProxies "-ttl-0", BrightData per-request
+// sessions) to actually rotate — pooled connections pin the upstream proxy
+// to a single exit IP for the lifetime of the connection.
+//
 //	client := proxysupplier.HTTPClient(s, 8*time.Second)
 //	if client == nil {
 //	    client = safehttp.NewClient(...)
@@ -178,8 +184,10 @@ func HTTPClient(s Supplier, timeout time.Duration) *http.Client {
 				}
 				return url.Parse(raw)
 			},
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 10,
+			// Fresh TCP per request — required for rotating-IP endpoints to
+			// actually rotate. The proxy gateway routes each new CONNECT
+			// tunnel through a different exit IP.
+			DisableKeepAlives: true,
 		},
 		Timeout: timeout,
 	}
