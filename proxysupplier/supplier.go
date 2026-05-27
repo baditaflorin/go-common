@@ -60,6 +60,13 @@ type Supplier interface {
 	ProxyURL() string
 }
 
+// bypasser is an optional capability — Suppliers may implement it to expose
+// NO_PROXY-style match rules. HTTPClient consults Bypass(host) before
+// returning a proxy URL; if Bypass returns true the request goes direct.
+type bypasser interface {
+	Bypass(host string) bool
+}
+
 // Config holds the raw proxy configuration values. Populate it from env vars,
 // a struct config, or a YAML file — whatever the calling service uses.
 type Config struct {
@@ -82,6 +89,22 @@ type Config struct {
 	// with the same length as ProxyURLs. Defaults to equal weight when empty.
 	ProxyURLs    string
 	ProxyWeights string
+
+	// NoProxy: comma-separated list of hosts/domains/CIDRs that bypass the
+	// proxy. Matches Go's standard NO_PROXY semantics plus our extensions:
+	//
+	//   - "localhost" / "127.0.0.1" / "::1"     — exact host match
+	//   - ".0crawl.com" / "0crawl.com"          — domain suffix match (with or without leading dot)
+	//   - "10.0.0.0/8" / "172.16.0.0/12"        — CIDR match against resolved IP and literal IP
+	//   - "host.docker.internal"                — exact host match
+	//   - "*"                                   — match all (disables the proxy entirely)
+	//
+	// Calls to matching hosts go DIRECT (no proxy). Without this, the
+	// proxy provider tries to resolve internal docker hostnames externally
+	// and fails with target_connect_resolve_failed.
+	//
+	// Fleet default: ".0crawl.com,.0exec.com,localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,host.docker.internal"
+	NoProxy string
 }
 
 // EnvConfig builds a Config by reading the canonical fleet env vars.
@@ -100,7 +123,17 @@ func EnvConfig() Config {
 		ExternalProxyURL: os.Getenv("EXTERNAL_PROXY_URL"),
 		ProxyURLs:        os.Getenv("PROXY_URLS"),
 		ProxyWeights:     os.Getenv("PROXY_WEIGHTS"),
+		NoProxy:          firstNonEmpty(os.Getenv("NO_PROXY"), os.Getenv("no_proxy")),
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // New reads PROXY_SUPPLIER (and related vars) from the environment and returns
@@ -112,6 +145,8 @@ func New() Supplier {
 // NewFromConfig selects the supplier described by cfg.
 // The self-proxy guard is always applied.
 func NewFromConfig(cfg Config) Supplier {
+	rules := parseNoProxy(cfg.NoProxy)
+
 	var s Supplier
 	switch cfg.Supplier {
 	case "plain_proxies":
@@ -119,7 +154,7 @@ func NewFromConfig(cfg Config) Supplier {
 		if rawURL == "" {
 			return noneSupplier{}
 		}
-		s = &urlSupplier{name: "plain_proxies", rawURL: rawURL}
+		s = &urlSupplier{name: "plain_proxies", rawURL: rawURL, rules: rules}
 
 	case "env":
 		rawURL := cfg.ExternalProxyURL
@@ -133,13 +168,14 @@ func NewFromConfig(cfg Config) Supplier {
 		if rawURL == "" {
 			return noneSupplier{}
 		}
-		s = &urlSupplier{name: "env", rawURL: rawURL}
+		s = &urlSupplier{name: "env", rawURL: rawURL, rules: rules}
 
 	case "multi":
 		ms := newMultiSupplier(cfg.ProxyURLs, cfg.ProxyWeights)
 		if ms == nil {
 			return noneSupplier{}
 		}
+		ms.rules = rules
 		return ms // self-proxy guard already applied inside newMultiSupplier
 
 	default:
@@ -173,11 +209,19 @@ func HTTPClient(s Supplier, timeout time.Duration) *http.Client {
 	if s.ProxyURL() == "" {
 		return nil
 	}
+	// Capture an optional bypasser once — cheaper than asserting every request.
+	bp, _ := s.(bypasser)
 	return &http.Client{
 		Transport: &http.Transport{
 			// Proxy is called per-request; single-URL suppliers always return
 			// the same URL, multi-proxy suppliers pick a weighted-random one.
+			// NO_PROXY-style bypass: if the supplier's bypass rules match
+			// the request host, return nil (direct connection) — critical
+			// for intra-fleet calls that the proxy provider cannot resolve.
 			Proxy: func(req *http.Request) (*url.URL, error) {
+				if bp != nil && bp.Bypass(req.URL.Hostname()) {
+					return nil, nil
+				}
 				raw := s.ProxyURL()
 				if raw == "" {
 					return nil, nil
@@ -203,10 +247,17 @@ func (noneSupplier) ProxyURL() string { return "" }
 type urlSupplier struct {
 	name   string
 	rawURL string
+	rules  *noProxyRules
 }
 
-func (s *urlSupplier) Name() string     { return s.name }
-func (s *urlSupplier) ProxyURL() string { return s.rawURL }
+func (s *urlSupplier) Name() string             { return s.name }
+func (s *urlSupplier) ProxyURL() string         { return s.rawURL }
+func (s *urlSupplier) Bypass(host string) bool {
+	if s.rules == nil {
+		return false
+	}
+	return s.rules.Match(host)
+}
 
 // --- multiSupplier ----------------------------------------------------------
 
@@ -219,8 +270,16 @@ type multiEntry struct {
 // multiSupplier picks a proxy URL for each request using weighted random
 // selection. It satisfies [Supplier].
 type multiSupplier struct {
-	entries  []multiEntry
-	total    int
+	entries []multiEntry
+	total   int
+	rules   *noProxyRules
+}
+
+func (m *multiSupplier) Bypass(host string) bool {
+	if m.rules == nil {
+		return false
+	}
+	return m.rules.Match(host)
 }
 
 // newMultiSupplier parses proxyURLs (comma-separated) and weights
