@@ -1,5 +1,7 @@
 package response
 
+import "fmt"
+
 // Response is the canonical fleet API response envelope.
 // All fleet HTTP handlers should return their data through this shape.
 type Response struct {
@@ -32,6 +34,20 @@ type Error struct {
 	ErrorCode string `json:"error_code,omitempty"`
 	// Message is a human-readable description safe to surface in responses.
 	Message string `json:"message"`
+}
+
+// Error implements the error interface so a decoded error envelope
+// (see DecodeData) can be returned and compared as a normal error.
+// The message is server-provided and safe to surface; it never
+// carries secret payload data.
+func (e *Error) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	if e.ErrorCode != "" {
+		return fmt.Sprintf("%s (http %d): %s", e.ErrorCode, e.Code, e.Message)
+	}
+	return fmt.Sprintf("http %d: %s", e.Code, e.Message)
 }
 
 // Success wraps data in a successful Response envelope.
