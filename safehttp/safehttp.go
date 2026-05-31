@@ -216,6 +216,11 @@ type options struct {
 	userAgent    string
 	portCheck    bool
 
+	// forceHTTP2 sets Transport.ForceAttemptHTTP2 so the client offers
+	// "h2" in the TLS ClientHello ALPN. Off by default — see
+	// WithForceHTTP2 for why a custom dialer otherwise disables it.
+	forceHTTP2 bool
+
 	// Fleet integration hooks — see extras.go for the constructors
 	// (WithTraceCollector, WithBackoffCoordinator, WithDegradedSink).
 	// All three are opt-in; zero values preserve v0.15.0 behaviour.
@@ -259,6 +264,28 @@ func WithUserAgent(ua string) Option { return func(o *options) { o.userAgent = u
 
 // WithPortCheck restricts outbound connections to ports 80 and 443 only.
 func WithPortCheck() Option { return func(o *options) { o.portCheck = true } }
+
+// WithForceHTTP2 sets Transport.ForceAttemptHTTP2 so the client offers
+// "h2" in the TLS ClientHello ALPN and transparently upgrades to HTTP/2
+// against capable origins. Read the negotiated protocol back with
+// NegotiatedProtocol(resp).
+//
+// Why it is not the default: NewClient installs a custom DialContext
+// (the SSRF guard). Per net/http semantics, providing a custom dialer
+// or TLS config "conservatively disables HTTP/2" unless ForceAttemptHTTP2
+// is set. So by default the transport offers no "h2" in ALPN and
+// resp.TLS.NegotiatedProtocol comes back empty even for HTTP/2-capable
+// servers — most visibly on HEAD requests, where there is no body whose
+// transfer would otherwise reveal the protocol. Services that need the
+// negotiated ALPN (e.g. telling a modern HTTP/2 origin apart from a
+// legacy HTTP/1.1-only one) previously worked around this with a
+// dedicated TCP/443 TLS handshake; WithForceHTTP2 + NegotiatedProtocol
+// is the fleet-canonical replacement.
+//
+// HTTP/2 still rides the same SSRF-guarded dialer and the TLS-1.2
+// fallback transport, so the SSRF and handshake-recovery guarantees are
+// unchanged.
+func WithForceHTTP2() Option { return func(o *options) { o.forceHTTP2 = true } }
 
 // WithoutProxy explicitly disables proxy use even if HTTP_PROXY /
 // HTTPS_PROXY are set in the environment. Use for services that
@@ -432,33 +459,7 @@ func NewClient(opts ...Option) *http.Client {
 	if o.withoutProxy {
 		proxyFn = nil
 	}
-	t := &http.Transport{
-		// Honor the standard HTTP_PROXY / HTTPS_PROXY / NO_PROXY env vars.
-		// This is what every Go program on the planet expects out of an
-		// http.Transport; the previous absence meant `safehttp` clients
-		// silently bypassed every operator-configured egress proxy. In
-		// practice the fleet uses this to route active scans through
-		// Webshare residential proxies — direct egress from the dockerhost
-		// IP gets German-DC abuse complaints when scanners hit bug-bounty
-		// targets.
-		//
-		// SSRF interaction: when a proxy is in use, the dialer is called
-		// with the proxy's IP, not the target's. The target hostname is
-		// never resolved by this side. The SSRF guard still runs against
-		// the proxy IP (sanity-checks it's a real public host); the
-		// target-side guarantees move to the proxy operator. This is the
-		// correct trade — explicit env-var opt-in, no surprise behavior.
-		//
-		// Override via WithoutProxy (force direct) or RequireProxy
-		// (fail-fast if env not set). See those options above.
-		Proxy:                 proxyFn,
-		DialContext:           makeDialer(o.portCheck),
-		TLSHandshakeTimeout:   4 * time.Second,
-		ResponseHeaderTimeout: 5 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		MaxIdleConns:          20,
-		IdleConnTimeout:       30 * time.Second,
-	}
+	t := newBaseTransport(o, proxyFn)
 	// Mirror transport with TLS pinned to ≤ 1.2 — used only as a retry
 	// fallback when the default (TLS 1.3) handshake throws an "internal
 	// error". Some servers (e.g. older nginx + OpenSSL 3.x combos)
@@ -547,6 +548,63 @@ func NewClient(opts ...Option) *http.Client {
 		registerBreakerStore(client, store)
 	}
 	return client
+}
+
+// newBaseTransport builds the primary guarded *http.Transport that
+// NewClient wraps. Extracted so the ALPN/HTTP2 behaviour can be
+// exercised directly in tests (the wrapped chain hides the underlying
+// transport behind unexported types).
+func newBaseTransport(o *options, proxyFn func(*http.Request) (*url.URL, error)) *http.Transport {
+	return &http.Transport{
+		// Honor the standard HTTP_PROXY / HTTPS_PROXY / NO_PROXY env vars.
+		// This is what every Go program on the planet expects out of an
+		// http.Transport; the previous absence meant `safehttp` clients
+		// silently bypassed every operator-configured egress proxy. In
+		// practice the fleet uses this to route active scans through
+		// Webshare residential proxies — direct egress from the dockerhost
+		// IP gets German-DC abuse complaints when scanners hit bug-bounty
+		// targets.
+		//
+		// SSRF interaction: when a proxy is in use, the dialer is called
+		// with the proxy's IP, not the target's. The target hostname is
+		// never resolved by this side. The SSRF guard still runs against
+		// the proxy IP (sanity-checks it's a real public host); the
+		// target-side guarantees move to the proxy operator. This is the
+		// correct trade — explicit env-var opt-in, no surprise behavior.
+		//
+		// Override via WithoutProxy (force direct) or RequireProxy
+		// (fail-fast if env not set). See those options above.
+		Proxy:       proxyFn,
+		DialContext: makeDialer(o.portCheck),
+		// ForceAttemptHTTP2 must be set explicitly: because DialContext
+		// above is a custom dialer, net/http otherwise disables HTTP/2,
+		// suppressing "h2" in the ALPN offer. Off by default; opt in via
+		// WithForceHTTP2. See that option for the full rationale.
+		ForceAttemptHTTP2:     o.forceHTTP2,
+		TLSHandshakeTimeout:   4 * time.Second,
+		ResponseHeaderTimeout: 5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConns:          20,
+		IdleConnTimeout:       30 * time.Second,
+	}
+}
+
+// NegotiatedProtocol returns the TLS ALPN protocol the server selected
+// for resp (e.g. "h2" or "http/1.1"), or "" when resp carried no TLS
+// state (plain HTTP, or a nil/errored response). It is nil-safe.
+//
+// To get a reliable "h2" here the client MUST be built with
+// WithForceHTTP2 — the default safehttp transport installs a custom
+// dialer, which makes net/http conservatively disable HTTP/2 and omit
+// "h2" from the ClientHello ALPN, so this field comes back empty even
+// against HTTP/2-capable origins. WithForceHTTP2 + NegotiatedProtocol is
+// the fleet-canonical replacement for a dedicated TCP/443 ALPN-probe
+// handshake.
+func NegotiatedProtocol(resp *http.Response) string {
+	if resp == nil || resp.TLS == nil {
+		return ""
+	}
+	return resp.TLS.NegotiatedProtocol
 }
 
 func makeDialer(portCheck bool) func(ctx context.Context, network, addr string) (net.Conn, error) {

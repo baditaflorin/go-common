@@ -4,6 +4,30 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.42.0 — 2026-05-31
+
+### Added
+
+- **`safehttp.WithForceHTTP2()` — reliable negotiated ALPN** — sets
+  `Transport.ForceAttemptHTTP2` so the client offers `h2` in the TLS
+  ClientHello ALPN and upgrades to HTTP/2 against capable origins.
+  - Needed because `NewClient` installs a custom `DialContext` (the SSRF
+    guard); per net/http semantics a custom dialer "conservatively
+    disables HTTP/2", so by default no `h2` is offered and
+    `resp.TLS.NegotiatedProtocol` comes back empty even for HTTP/2-capable
+    servers — most visibly on HEAD requests.
+  - Opt-in; the default chain is byte-for-byte unchanged. HTTP/2 still
+    rides the SSRF-guarded dialer and the TLS-1.2 fallback transport.
+- **`safehttp.NegotiatedProtocol(resp)` — nil-safe ALPN accessor** —
+  returns `resp.TLS.NegotiatedProtocol` (e.g. `"h2"` / `"http/1.1"`) or
+  `""` for plain-HTTP / nil / errored responses.
+  - `WithForceHTTP2` + `NegotiatedProtocol` is the fleet-canonical
+    replacement for the per-repo dedicated TCP/443 ALPN-probe handshake
+    (e.g. `go_domain_http3_quic_detector`'s `probeALPN`).
+  - 6 new unit tests, including an `httptest` server with `EnableHTTP2`
+    asserting `h2` is negotiated on HEAD with the option and empty
+    without it.
+
 ## v0.38.0 — 2026-05-26
 
 ### Added

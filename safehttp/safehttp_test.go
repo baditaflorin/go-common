@@ -350,6 +350,23 @@ func TestFleetRequireProxyEnv_AcceptsTruthyVariants(t *testing.T) {
 	}
 }
 
+// --- HTTP/2 ALPN (WithForceHTTP2 / NegotiatedProtocol) ------------------
+
+func TestNegotiatedProtocol_NilSafe(t *testing.T) {
+	if got := safehttp.NegotiatedProtocol(nil); got != "" {
+		t.Errorf("nil resp: NegotiatedProtocol = %q, want \"\"", got)
+	}
+	if got := safehttp.NegotiatedProtocol(&http.Response{}); got != "" {
+		t.Errorf("no TLS state: NegotiatedProtocol = %q, want \"\"", got)
+	}
+}
+
+func TestWithForceHTTP2_ClientConstructs(t *testing.T) {
+	if c := safehttp.NewClient(safehttp.WithForceHTTP2()); c == nil {
+		t.Fatal("NewClient(WithForceHTTP2()) returned nil")
+	}
+}
+
 func TestFleetRequireProxyEnv_FalsyValuesNoOp(t *testing.T) {
 	for _, v := range []string{"", "0", "false", "no", "off", "anything-else"} {
 		t.Run("v="+v, func(t *testing.T) {
