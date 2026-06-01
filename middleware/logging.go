@@ -138,3 +138,20 @@ func (w *wrappedWriter) Write(b []byte) (int, error) {
 	w.bytes += int64(n)
 	return n, err
 }
+
+// Flush forwards to the underlying ResponseWriter when it supports streaming,
+// so handlers can chunk/stream responses (SSE, tail -f, long-poll, live
+// fan-out) even though the metrics/logging middleware wraps the writer.
+// Without this, `w.(http.Flusher)` fails on the wrapper and a streaming
+// handler either buffers indefinitely or bails with "streaming unsupported".
+func (w *wrappedWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap exposes the wrapped ResponseWriter so http.ResponseController
+// (Go 1.20+) and any outer wrapper can reach the underlying Flusher/Hijacker.
+func (w *wrappedWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
