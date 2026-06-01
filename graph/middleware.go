@@ -72,6 +72,17 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 	return s.ResponseWriter.Write(b)
 }
 
+// Flush + Unwrap let streaming handlers (SSE, tail -f, long-poll) work through
+// this wrapper. Without them w.(http.Flusher) fails and streaming bails with
+// "streaming unsupported".
+func (s *statusWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
 func isProbe(path string) bool {
 	switch path {
 	case "/health", "/version", "/metrics", "/_gw_health", "/capabilities":

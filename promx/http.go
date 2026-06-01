@@ -161,3 +161,15 @@ func (w *countingWriter) Write(b []byte) (int, error) {
 	w.bytes += int64(n)
 	return n, err
 }
+
+// Flush + Unwrap let streaming handlers (SSE, tail -f, long-poll) work through
+// this wrapper — it's the innermost writer the handler actually holds, so
+// without Flush here w.(http.Flusher) fails and streaming bails with
+// "streaming unsupported".
+func (w *countingWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *countingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
