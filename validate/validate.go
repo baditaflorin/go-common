@@ -33,36 +33,14 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	fleetErrors "github.com/baditaflorin/go-common/errors"
 	"io"
 	"net/http"
 	"net/url"
 	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
-
-	fleetErrors "github.com/baditaflorin/go-common/errors"
 )
-
-// Bind decodes the JSON body of r into dst (which must be a non-nil
-// pointer to a struct), then validates all `validate` struct tags.
-// Returns a *fleetErrors.Error with Status=400 on any decode or
-// validation failure. Returns nil on success.
-func Bind(r *http.Request, dst any) *fleetErrors.Error {
-	if err := decodeJSON(r, dst); err != nil {
-		return fleetErrors.New(http.StatusBadRequest, "bad_request.json", err.Error())
-	}
-	return Struct(dst)
-}
-
-// BindBytes decodes b (raw JSON) into dst, then validates.
-func BindBytes(b []byte, dst any) *fleetErrors.Error {
-	if err := json.Unmarshal(b, dst); err != nil {
-		return fleetErrors.New(http.StatusBadRequest, "bad_request.json",
-			"invalid JSON: "+err.Error())
-	}
-	return Struct(dst)
-}
 
 // Struct validates the `validate` struct tags on dst without decoding.
 // Returns a *fleetErrors.Error aggregating all field failures.
@@ -111,13 +89,6 @@ type regCache struct {
 	items map[string]*regexp.Regexp
 }
 
-// We use a plain map protected by a channel semaphore to avoid
-// importing sync explicitly (it's in stdlib but let's be explicit).
-type safeRegexpCache struct {
-	items map[string]*regexp.Regexp
-	sem   chan struct{}
-}
-
 func newRegexpCache() *safeRegexpCache {
 	c := &safeRegexpCache{
 		items: make(map[string]*regexp.Regexp),
@@ -125,20 +96,6 @@ func newRegexpCache() *safeRegexpCache {
 	}
 	c.sem <- struct{}{}
 	return c
-}
-
-func (c *safeRegexpCache) compile(pattern string) (*regexp.Regexp, error) {
-	<-c.sem
-	defer func() { c.sem <- struct{}{} }()
-	if re, ok := c.items[pattern]; ok {
-		return re, nil
-	}
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, err
-	}
-	c.items[pattern] = re
-	return re, nil
 }
 
 func validateValue(v reflect.Value, prefix string) []string {
@@ -188,82 +145,6 @@ func fieldName(prefix string, f reflect.StructField) string {
 	return name
 }
 
-func applyRules(v reflect.Value, name, tag string) []string {
-	rules := strings.Split(tag, ",")
-	var errs []string
-	for _, rule := range rules {
-		rule = strings.TrimSpace(rule)
-		if rule == "" {
-			continue
-		}
-		if err := applyRule(v, name, rule); err != "" {
-			errs = append(errs, err)
-		}
-	}
-	return errs
-}
-
-func applyRule(v reflect.Value, name, rule string) string {
-	switch {
-	case rule == "required":
-		if isZero(v) {
-			return fmt.Sprintf("%s: required", name)
-		}
-
-	case strings.HasPrefix(rule, "min="):
-		n, err := strconv.ParseFloat(rule[4:], 64)
-		if err != nil {
-			return fmt.Sprintf("%s: invalid min tag", name)
-		}
-		if msg := checkMin(v, name, n); msg != "" {
-			return msg
-		}
-
-	case strings.HasPrefix(rule, "max="):
-		n, err := strconv.ParseFloat(rule[4:], 64)
-		if err != nil {
-			return fmt.Sprintf("%s: invalid max tag", name)
-		}
-		if msg := checkMax(v, name, n); msg != "" {
-			return msg
-		}
-
-	case rule == "email":
-		s := stringify(v)
-		if s != "" && !isEmail(s) {
-			return fmt.Sprintf("%s: must be a valid email address", name)
-		}
-
-	case rule == "url":
-		s := stringify(v)
-		if s != "" && !isURL(s) {
-			return fmt.Sprintf("%s: must be a valid URL (http:// or https://)", name)
-		}
-
-	case strings.HasPrefix(rule, "oneof="):
-		choices := strings.Split(rule[6:], "|")
-		s := stringify(v)
-		if !contains(choices, s) {
-			return fmt.Sprintf("%s: must be one of [%s]", name, strings.Join(choices, ", "))
-		}
-
-	case strings.HasPrefix(rule, "pattern="):
-		pattern := rule[8:]
-		s := stringify(v)
-		if s == "" {
-			break
-		}
-		re, err := reCache.compile(pattern)
-		if err != nil {
-			return fmt.Sprintf("%s: invalid pattern %q in tag", name, pattern)
-		}
-		if !re.MatchString(s) {
-			return fmt.Sprintf("%s: does not match pattern %q", name, pattern)
-		}
-	}
-	return ""
-}
-
 func isZero(v reflect.Value) bool {
 	switch v.Kind() {
 	case reflect.String:
@@ -282,58 +163,6 @@ func isZero(v reflect.Value) bool {
 		return !v.Bool()
 	}
 	return false
-}
-
-func checkMin(v reflect.Value, name string, n float64) string {
-	switch v.Kind() {
-	case reflect.String:
-		if float64(len(v.String())) < n {
-			return fmt.Sprintf("%s: must be at least %g characters", name, n)
-		}
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if float64(v.Int()) < n {
-			return fmt.Sprintf("%s: must be at least %g", name, n)
-		}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if float64(v.Uint()) < n {
-			return fmt.Sprintf("%s: must be at least %g", name, n)
-		}
-	case reflect.Float32, reflect.Float64:
-		if v.Float() < n {
-			return fmt.Sprintf("%s: must be at least %g", name, n)
-		}
-	case reflect.Slice, reflect.Map:
-		if float64(v.Len()) < n {
-			return fmt.Sprintf("%s: must have at least %g items", name, n)
-		}
-	}
-	return ""
-}
-
-func checkMax(v reflect.Value, name string, n float64) string {
-	switch v.Kind() {
-	case reflect.String:
-		if float64(len(v.String())) > n {
-			return fmt.Sprintf("%s: must be at most %g characters", name, n)
-		}
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if float64(v.Int()) > n {
-			return fmt.Sprintf("%s: must be at most %g", name, n)
-		}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if float64(v.Uint()) > n {
-			return fmt.Sprintf("%s: must be at most %g", name, n)
-		}
-	case reflect.Float32, reflect.Float64:
-		if v.Float() > n {
-			return fmt.Sprintf("%s: must be at most %g", name, n)
-		}
-	case reflect.Slice, reflect.Map:
-		if float64(v.Len()) > n {
-			return fmt.Sprintf("%s: must have at most %g items", name, n)
-		}
-	}
-	return ""
 }
 
 func stringify(v reflect.Value) string {
