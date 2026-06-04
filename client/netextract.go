@@ -44,67 +44,8 @@ package client
 
 import (
 	"net/url"
-	"sort"
-	"strconv"
 	"strings"
 )
-
-// XHREndpoint is one runtime-observed API call.
-type XHREndpoint struct {
-	URL          string `json:"url"`
-	Method       string `json:"method"`
-	Status       int    `json:"status"`
-	ContentType  string `json:"content_type,omitempty"`
-	Initiator    string `json:"initiator,omitempty"`
-	ResponseSize int64  `json:"response_size"`
-}
-
-// XHREndpoints returns one entry per (method, normalised-URL) seen as
-// XHR/fetch/WebSocket traffic in the rendered network log. URL
-// normalisation collapses numeric and UUID path segments to {id}/{uuid}
-// so /users/42, /users/43, /users/44 dedupe to a single
-// /users/{id} template — that's the surface a tampering tool wants.
-//
-// Returns empty slice for nil/empty input.
-func XHREndpoints(r *FetchResult) []XHREndpoint {
-	if r == nil || len(r.Network) == 0 {
-		return nil
-	}
-	seen := make(map[string]XHREndpoint, len(r.Network))
-	for _, e := range r.Network {
-		switch strings.ToLower(e.ResourceType) {
-		case "xhr", "fetch", "websocket":
-		default:
-			continue
-		}
-		tmpl := templatisePath(e.URL)
-		key := strings.ToUpper(e.Method) + " " + tmpl
-		// Keep the first observation for each (method, template). Later
-		// duplicates are usually the same call with different IDs.
-		if _, dup := seen[key]; dup {
-			continue
-		}
-		seen[key] = XHREndpoint{
-			URL:          tmpl,
-			Method:       strings.ToUpper(e.Method),
-			Status:       e.Status,
-			ContentType:  headerLookup(e.ResponseHeaders, "Content-Type"),
-			Initiator:    e.Initiator,
-			ResponseSize: e.ResponseSize,
-		}
-	}
-	out := make([]XHREndpoint, 0, len(seen))
-	for _, v := range seen {
-		out = append(out, v)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].URL != out[j].URL {
-			return out[i].URL < out[j].URL
-		}
-		return out[i].Method < out[j].Method
-	})
-	return out
-}
 
 // GraphQLEndpoints returns endpoints likely speaking GraphQL: an
 // XHR/fetch POST whose URL contains "graphql" OR whose Content-Type
@@ -196,14 +137,6 @@ func IframeURLs(r *FetchResult) []string {
 	return out
 }
 
-// RedirectParam is one observed query parameter on a real network
-// request whose name pattern matches a known open-redirect sink.
-type RedirectParam struct {
-	OnURL string `json:"on_url"` // request URL where the param appeared
-	Key   string `json:"key"`    // the parameter name (e.g. "next")
-	Value string `json:"value"`  // the observed value (may itself be a URL)
-}
-
 // redirectParamKeys is the curated list of query keys that empirically
 // turn out to be redirect sinks. Kept conservative to keep the false
 // positive rate low — open-redirect fuzzing is expensive.
@@ -213,42 +146,6 @@ var redirectParamKeys = []string{
 	"continue", "continue_to", "url", "destination", "dest",
 	"target", "callback", "cb", "back", "backurl", "ref", "go", "goto",
 	"r", "u", "uri", "site",
-}
-
-// RedirectParams scans every recorded network URL (not just the
-// rendered page) and returns each query parameter whose key matches a
-// known redirect sink. Use this as the seed list for fuzzing instead
-// of guessing parameter names from corpora.
-func RedirectParams(r *FetchResult) []RedirectParam {
-	if r == nil {
-		return nil
-	}
-	keys := make(map[string]struct{}, len(redirectParamKeys))
-	for _, k := range redirectParamKeys {
-		keys[k] = struct{}{}
-	}
-	out := []RedirectParam{}
-	seen := map[string]struct{}{}
-	for _, e := range r.Network {
-		u, err := url.Parse(e.URL)
-		if err != nil || u.RawQuery == "" {
-			continue
-		}
-		for k, vs := range u.Query() {
-			if _, hit := keys[strings.ToLower(k)]; !hit {
-				continue
-			}
-			for _, v := range vs {
-				dedupe := e.URL + "?" + k + "=" + v
-				if _, dup := seen[dedupe]; dup {
-					continue
-				}
-				seen[dedupe] = struct{}{}
-				out = append(out, RedirectParam{OnURL: e.URL, Key: k, Value: v})
-			}
-		}
-	}
-	return out
 }
 
 // SetCookiesAll returns every Set-Cookie header observed across every
@@ -307,115 +204,6 @@ func ConsoleErrors(r *FetchResult) []string {
 
 // ---- generic filters ------------------------------------------------
 
-// ByResourceType keeps entries whose resource_type matches any of the
-// given values (case-insensitive). Common values: "document",
-// "script", "stylesheet", "image", "xhr", "fetch", "websocket",
-// "font", "media", "manifest".
-func ByResourceType(entries []NetworkEntry, types ...string) []NetworkEntry {
-	want := make(map[string]struct{}, len(types))
-	for _, t := range types {
-		want[strings.ToLower(t)] = struct{}{}
-	}
-	out := []NetworkEntry{}
-	for _, e := range entries {
-		if _, hit := want[strings.ToLower(e.ResourceType)]; hit {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// ByHostSuffix keeps entries whose URL host ends with any of the
-// given suffixes (case-insensitive). Use to split "first-party vs
-// third-party" without writing your own URL parsing.
-func ByHostSuffix(entries []NetworkEntry, suffixes ...string) []NetworkEntry {
-	suff := make([]string, len(suffixes))
-	for i, s := range suffixes {
-		suff[i] = strings.ToLower(s)
-	}
-	out := []NetworkEntry{}
-	for _, e := range entries {
-		u, err := url.Parse(e.URL)
-		if err != nil {
-			continue
-		}
-		host := strings.ToLower(u.Host)
-		for _, s := range suff {
-			if strings.HasSuffix(host, s) {
-				out = append(out, e)
-				break
-			}
-		}
-	}
-	return out
-}
-
-// ByMethod keeps entries with one of the listed HTTP methods.
-func ByMethod(entries []NetworkEntry, methods ...string) []NetworkEntry {
-	want := make(map[string]struct{}, len(methods))
-	for _, m := range methods {
-		want[strings.ToUpper(m)] = struct{}{}
-	}
-	out := []NetworkEntry{}
-	for _, e := range entries {
-		if _, hit := want[strings.ToUpper(e.Method)]; hit {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// ByStatusClass keeps entries whose status code matches one of the
-// listed class digits (1, 2, 3, 4, 5). Cheap shortcut for "show me
-// every redirect" (ByStatusClass(_, 3)) or "every error"
-// (ByStatusClass(_, 4, 5)).
-func ByStatusClass(entries []NetworkEntry, classes ...int) []NetworkEntry {
-	want := make(map[int]struct{}, len(classes))
-	for _, c := range classes {
-		want[c] = struct{}{}
-	}
-	out := []NetworkEntry{}
-	for _, e := range entries {
-		if _, hit := want[e.Status/100]; hit {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// BySizeGreaterThan keeps entries whose response_size exceeds n bytes.
-// Useful when iterating JSAssets to skip tiny stubs/empty chunks.
-func BySizeGreaterThan(entries []NetworkEntry, n int64) []NetworkEntry {
-	out := []NetworkEntry{}
-	for _, e := range entries {
-		if e.ResponseSize > n {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// ByContentType keeps entries whose response Content-Type header
-// begins with any of the listed prefixes (case-insensitive). Pass
-// e.g. "application/javascript", "text/javascript".
-func ByContentType(entries []NetworkEntry, prefixes ...string) []NetworkEntry {
-	pref := make([]string, len(prefixes))
-	for i, p := range prefixes {
-		pref[i] = strings.ToLower(p)
-	}
-	out := []NetworkEntry{}
-	for _, e := range entries {
-		ct := strings.ToLower(headerLookup(e.ResponseHeaders, "Content-Type"))
-		for _, p := range pref {
-			if strings.HasPrefix(ct, p) {
-				out = append(out, e)
-				break
-			}
-		}
-	}
-	return out
-}
-
 // ---- internals ------------------------------------------------------
 
 // templatisePath collapses /users/42 → /users/{id}, UUIDs → {uuid},
@@ -449,80 +237,6 @@ func templatisePath(rawURL string) string {
 		return strings.Join(parts, "/")
 	}
 	return scheme + "://" + host + strings.Join(parts, "/")
-}
-
-func looksLikeInt(s string) bool {
-	if s == "" {
-		return false
-	}
-	_, err := strconv.Atoi(s)
-	return err == nil
-}
-
-func looksLikeUUID(s string) bool {
-	// 8-4-4-4-12 hex with dashes. Cheap shape check.
-	if len(s) != 36 {
-		return false
-	}
-	if s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
-		return false
-	}
-	for i, c := range s {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			continue
-		}
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return true
-}
-
-// looksLikeOpaqueToken flags long hex/base64-looking segments. Tuned
-// for SHA-1 / SHA-256 hex digests and JWT-style tokens that appear in
-// URL paths (e.g. /share/<long-hash>). Threshold is intentionally
-// high so we don't trample on slugs.
-func looksLikeOpaqueToken(s string) bool {
-	if len(s) < 24 {
-		return false
-	}
-	digits, letters, other := 0, 0, 0
-	for _, c := range s {
-		switch {
-		case c >= '0' && c <= '9':
-			digits++
-		case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
-			letters++
-		case c == '-' || c == '_' || c == '.':
-			// JWT delimiter + base64url filler
-		default:
-			other++
-		}
-	}
-	if other > 0 {
-		return false
-	}
-	// Require both digits and letters present, like a real hash/token.
-	return digits > 0 && letters > 0 && digits+letters >= 24
-}
-
-func looksLikeJS(rawURL string, headers map[string]string) bool {
-	ct := strings.ToLower(headerLookup(headers, "Content-Type"))
-	if strings.HasPrefix(ct, "application/javascript") ||
-		strings.HasPrefix(ct, "text/javascript") ||
-		strings.HasPrefix(ct, "application/x-javascript") ||
-		strings.HasPrefix(ct, "module") {
-		return true
-	}
-	// Fall back to path extension when proxy strips Content-Type.
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	p := strings.ToLower(u.Path)
-	return strings.HasSuffix(p, ".js") ||
-		strings.HasSuffix(p, ".mjs") ||
-		strings.HasSuffix(p, ".cjs")
 }
 
 // headerLookup does a case-insensitive lookup against the flat header
