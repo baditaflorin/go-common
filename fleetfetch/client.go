@@ -2,6 +2,7 @@ package fleetfetch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -107,7 +108,36 @@ const (
 	// (Webshare egress + UA rotation). No JS execution. Cheaper than
 	// js but still better than direct for origins that block fleet IPs.
 	RenderHTML = "html"
+	// RenderJSNetwork asks the cache to route through go-js-proxy-network
+	// (chromedp). Returns the post-JS DOM as the body PLUS the full
+	// outbound network request log on the X-FetchCache-Network response
+	// header. Use FetchNetwork to get the DOM + parsed []NetworkEntry in
+	// one call. Cache key is distinct from js/default. Requires
+	// go_infrastructure_fetch_cache v0.3+; older caches ignore the param
+	// and serve the default shape (no network log).
+	RenderJSNetwork = "js-network"
 )
+
+// NetworkEntry is one row of the outbound network log captured for a
+// JS-rendered page by go-js-proxy-network and surfaced through the fetch
+// cache on the X-FetchCache-Network header. The field set + JSON tags match
+// go-common/client.NetworkEntry's fingerprint subset: request-fingerprint
+// detectors (analytics / martech / error-monitoring) identify a tool by the
+// URLs a page calls (GA /g/collect, Segment api.segment.io, Sentry
+// *.ingest.sentry.io) even when the loader is bundled/minified — walk these
+// entries' URLs to detect them.
+type NetworkEntry struct {
+	URL          string `json:"url"`
+	Method       string `json:"method"`
+	Status       int    `json:"status"`
+	ResourceType string `json:"resource_type"`
+	Initiator    string `json:"initiator"`
+}
+
+// NetworkHeader is the response header the fetch cache emits (js-network
+// mode) carrying the JSON-encoded network log. Exported so consumers that
+// hold a raw *Response can re-parse it without re-deriving the name.
+const NetworkHeader = "X-FetchCache-Network"
 
 // Client wraps the HTTP plumbing for talking to the fleet fetch cache,
 // with transparent fallback to a SSRF-safe direct fetch when the cache
@@ -308,6 +338,54 @@ func (c *Client) GetWithHeaders(ctx context.Context, targetURL string, headers h
 // that needs a single cheap default-mode lookup).
 func (c *Client) GetRendered(ctx context.Context, targetURL string, mode string) (*Response, error) {
 	return c.fetch(ctx, targetURL, 0, nil, mode)
+}
+
+// FetchNetwork fetches targetURL with render=js-network and returns the
+// rendered DOM (Response.Body) together with the page's outbound network
+// request log parsed from the X-FetchCache-Network header. One render per
+// (url, js-network) is shared fleet-wide via the cache, so the FIRST caller
+// of a given domain pays the cold-render cost (up to ~60s) and every
+// subsequent caller gets a cache hit (~ms) with the same log replayed.
+//
+// This is the consumer-facing API for request-fingerprint detection: a
+// detector calls FetchNetwork(domain) and walks the returned []NetworkEntry
+// URLs for tool signatures (GA /g/collect, api.segment.io, *.ingest.sentry.io).
+//
+// The returned slice is nil (not an error) when the cache served a
+// non-network shape — e.g. an older cache that doesn't honor js-network, or
+// a fallback to a DOM-only renderer when go-js-proxy-network was unhealthy.
+// Callers should treat a nil/empty log as "no network signal available",
+// not as a hard failure (the DOM in Response.Body is still usable). Inspect
+// Response.Render / Response.Via to tell whether the network renderer
+// actually served the request.
+//
+// On cache-unreachable fallback (Response.ViaFallback == true) there is no
+// network log — the direct SSRF fetch can't capture one — so the slice is
+// nil. The error is non-nil only on a genuine fetch failure.
+func (c *Client) FetchNetwork(ctx context.Context, targetURL string) (*Response, []NetworkEntry, error) {
+	resp, err := c.fetch(ctx, targetURL, 0, nil, RenderJSNetwork)
+	if err != nil {
+		return resp, nil, err
+	}
+	return resp, parseNetworkLog(resp.Header.Get(NetworkHeader)), nil
+}
+
+// parseNetworkLog decodes the X-FetchCache-Network header value (a JSON
+// array) into []NetworkEntry. Returns nil for an empty/absent header or
+// invalid JSON — the network log is advisory telemetry, so a malformed
+// header must never fail the caller's fetch (they still have the DOM).
+func parseNetworkLog(raw string) []NetworkEntry {
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+	var entries []NetworkEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return nil
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	return entries
 }
 
 // fetch is the shared implementation behind Get/GetWithMaxAge/GetWithHeaders.
