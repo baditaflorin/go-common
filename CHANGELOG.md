@@ -4,6 +4,22 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.60.0 — 2026-06-04
+
+### Added
+
+- **`testhelpers/fakeexec`** — in-memory fake for the canonical command-runner
+  shell-out seam (`run(dir, name string, args ...string) (string, error)`) that
+  fleet apps use to invoke git / go / docker. Lets any app hermetically
+  self-test command *orchestration* — which commands run, in what order, and how
+  the code reacts to their exit status — with no real toolchain and no network.
+  Records calls, scripts per-command output/errors (`OnReturn` / `FailOn`),
+  runs side-effect hooks (`OnDo`, e.g. a faked `go mod vendor` that writes
+  `vendor/modules.txt`), and ships `AssertCalled` / `AssertNotCalled` /
+  `AssertOrder` / `Count`. Stdlib-only — adds nothing to any consumer's module
+  graph. First adopter: `go_fleet_runner`'s `update-dep` vendoring tests. +13
+  self-tests.
+
 ## v0.58.0 — 2026-06-04
 
 ### Added
