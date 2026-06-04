@@ -115,6 +115,31 @@ type extrasTransport struct {
 
 	// trace-emit failure log rate-limiter (unix seconds)
 	lastTraceErrLog atomic.Int64
+
+	// fetch-cache debug log rate-limiter (unix seconds). Only used when
+	// SAFEHTTP_FETCHCACHE_DEBUG is set — see fetchCacheDebug.
+	lastFetchCacheDbgLog atomic.Int64
+}
+
+// fetchCacheDebug, when true (env SAFEHTTP_FETCHCACHE_DEBUG set at startup),
+// makes the transport log its per-GET fetch-cache routing decision —
+// whether the delegate engaged, routed through the cache, or fell through
+// to direct egress. A diagnostic aid for confirming a service actually
+// routes through the fleet fetch cache; off by default, rate-limited.
+var fetchCacheDebug = os.Getenv("SAFEHTTP_FETCHCACHE_DEBUG") != ""
+
+// logFetchCacheDebug emits a fetch-cache routing decision line, rate-limited
+// to ~once / 2s so a busy client can't flood the log.
+func (t *extrasTransport) logFetchCacheDebug(format string, args ...any) {
+	now := time.Now().Unix()
+	prev := t.lastFetchCacheDbgLog.Load()
+	if now-prev < 2 {
+		return
+	}
+	if !t.lastFetchCacheDbgLog.CompareAndSwap(prev, now) {
+		return
+	}
+	log.Printf("safehttp fetchcache: "+format, args...)
 }
 
 type hostFailure struct {
@@ -153,8 +178,17 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if delegate == nil && t.useDefaultFetchCache {
 		delegate = DefaultFetchDelegate()
 	}
-	if delegate != nil && req.Method == http.MethodGet && req.Body == nil && req.Header.Get("Range") == "" {
-		if res, err := delegate.FetchGet(req.Context(), req.URL.String(), req.Header); err == nil && res != nil {
+	eligibleGet := req.Method == http.MethodGet && req.Body == nil && req.Header.Get("Range") == ""
+	if fetchCacheDebug && eligibleGet {
+		t.logFetchCacheDebug("decision host=%s perClientDelegate=%v useDefaultFetchCache=%v defaultDelegateInstalled=%v willRoute=%v",
+			host, t.fetchDelegate != nil, t.useDefaultFetchCache, DefaultFetchDelegate() != nil, delegate != nil)
+	}
+	if delegate != nil && eligibleGet {
+		res, err := delegate.FetchGet(req.Context(), req.URL.String(), req.Header)
+		if err == nil && res != nil {
+			if fetchCacheDebug {
+				t.logFetchCacheDebug("routed via cache host=%s status=%d bytes=%d", host, res.Status, len(res.Body))
+			}
 			return &http.Response{
 				StatusCode:    res.Status,
 				Status:        http.StatusText(res.Status),
@@ -168,6 +202,9 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}, nil
 		}
 		// delegate error / nil → fall through to direct egress.
+		if fetchCacheDebug {
+			t.logFetchCacheDebug("delegate fell through to direct host=%s err=%v", host, err)
+		}
 	}
 
 	// Pre-call: if we've recently observed a 5xx/429 for this host,
