@@ -571,6 +571,14 @@ func (s *Server) Start() error {
 //	auto-rollback on services that hadn't opted in).
 func (s *Server) wrapDefaults(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Fetch-cache loop guard: a request carrying the one-hop marker is
+		// already being served on behalf of the fleet fetch-cache, so disable
+		// fetch-cache delegation for any safehttp GET issued while handling it.
+		// The fetch then goes direct to origin instead of recursing back into
+		// the cache, bounding cache->cache recursion to a single hop.
+		if r.Header.Get(fetchCacheHopHeader) != "" {
+			r = r.WithContext(safehttp.WithoutFetchCacheContext(r.Context()))
+		}
 		switch r.URL.Path {
 		case "/metrics":
 			if s.promMetricsHandler == nil {
