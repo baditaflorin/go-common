@@ -245,6 +245,11 @@ func WithFallbackOnTimeout() Option {
 // renderer; a direct fetch returns raw origin bytes. Cacheable, shareable
 // work (e.g. a JS render worth warming once per domain) should keep using
 // a normal cache client.
+//
+// Observability: these fetches emit fleet_fetch_total with result="direct"
+// (returned a response) or "direct_error" (the direct fetch failed) — never
+// "hit"/"miss"/"fallback"/"error", so by-design cache-bypass traffic is
+// always distinguishable from real cache activity on a dashboard.
 func WithoutCache() Option {
 	return func(c *Client) { c.noCache = true }
 }
@@ -426,6 +431,18 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	defer func() {
 		ev := Event{Host: hostOf(targetURL), Duration: time.Since(start)}
 		switch {
+		// WithoutCache clients never touch the cache — tag their direct
+		// fetches distinctly so they don't read as cache hits/errors on a
+		// cache dashboard. "direct" = the direct fetch returned a response;
+		// "direct_error" = the direct fetch itself failed (DNS / transport /
+		// timeout to origin, common when probing speculative URLs).
+		case c.noCache && retErr != nil:
+			ev.Result = "direct_error"
+		case c.noCache:
+			ev.Result = "direct"
+			if fetchRes != nil {
+				ev.Status = fetchRes.Status
+			}
 		case errors.Is(retErr, ErrCacheTimeout):
 			ev.Result = "timeout"
 		case retErr != nil:
@@ -448,9 +465,11 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	merged := mergeHeaders(c.defaultHeaders, perReqHeaders)
 
 	// WithoutCache: never touch the cache — fetch direct via the
-	// proxy-aware fallback client. Emits result="fallback" with
-	// ViaFallback=true (it IS a direct fetch), keeping these throwaway
-	// probes out of the cache and its singleflight entirely.
+	// proxy-aware fallback client. Emits result="direct" / "direct_error"
+	// (NOT "fallback"/"error") so a cache dashboard never misreads these
+	// by-design direct probes as cache traffic. ViaFallback stays true on
+	// the Response (the body came via the direct path). Keeps these
+	// throwaway probes out of the cache and its singleflight entirely.
 	if c.noCache {
 		return c.directFetch(ctx, targetURL, merged, nil)
 	}

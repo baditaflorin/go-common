@@ -38,6 +38,13 @@ type Observer interface {
 //	              "fallback" so a slow cache doesn't pollute the
 //	              direct-egress / proxy-bypass metric
 //	"error"     — both cache and fallback failed, or caller context done
+//	"direct"    — WithoutCache client: cache deliberately skipped, fetched
+//	              direct via the proxy-aware path (returned a response).
+//	              Kept distinct from "hit"/"miss" so by-design cache-bypass
+//	              traffic never reads as cache activity on a dashboard.
+//	"direct_error" — WithoutCache client: the direct fetch itself failed
+//	              (DNS / transport / timeout to origin). Distinct from
+//	              "error" — the cache was never involved.
 type Event struct {
 	Host       string // hostname of the targetURL (not the cache)
 	Result     string

@@ -4,6 +4,19 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.58.0 — 2026-06-04
+
+### Added
+
+- **`fleetfetch` distinct metric results for `WithoutCache`** — direct
+  (cache-bypass) fetches now emit `fleet_fetch_total{result="direct"}` on
+  success and `result="direct_error"` on failure, instead of reusing
+  `"fallback"`/`"error"`. By-design cache-bypass traffic (e.g. a docs
+  detector's speculative `developer.<domain>.com` probes) is now clearly
+  separable from real cache activity on dashboards — a cache error panel no
+  longer misreads direct-fetch failures as cache errors. New `Event.Result`
+  values documented in `observer.go`. +1 test.
+
 ## v0.57.0 — 2026-06-04
 
 ### Added

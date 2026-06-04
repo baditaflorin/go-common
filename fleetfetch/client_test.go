@@ -404,3 +404,49 @@ func TestWithoutCache_BypassesCacheEntirely(t *testing.T) {
 		t.Error("expected ViaFallback=true on the direct path")
 	}
 }
+
+// captureObserver records every fetch Event for assertions.
+type captureObserver struct{ events []Event }
+
+func (c *captureObserver) ObserveFleetFetch(e Event) { c.events = append(c.events, e) }
+
+// TestWithoutCache_EmitsDirectResultLabels locks the observability contract:
+// WithoutCache fetches must emit result="direct" (success) / "direct_error"
+// (direct fetch failed) — NEVER "fallback"/"error"/"hit" — so by-design
+// cache-bypass traffic is distinguishable from real cache activity.
+func TestWithoutCache_EmitsDirectResultLabels(t *testing.T) {
+	obs := &captureObserver{}
+	SetDefaultObserver(obs)
+	defer SetDefaultObserver(nil)
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(204)
+	}))
+	deadURL := origin.URL
+
+	c := NewClient(
+		WithCacheURL("http://cache.invalid"), // must never be contacted
+		WithoutCache(),
+		WithFallbackClient(&http.Client{Timeout: 3 * time.Second}),
+	)
+
+	// 1) successful direct fetch → result="direct"
+	if _, err := c.Get(context.Background(), origin.URL); err != nil {
+		t.Fatalf("direct success Get: %v", err)
+	}
+	// 2) close origin, refetch → connection refused → result="direct_error"
+	origin.Close()
+	if _, err := c.Get(context.Background(), deadURL); err == nil {
+		t.Fatal("expected direct fetch to fail against a closed origin")
+	}
+
+	if len(obs.events) != 2 {
+		t.Fatalf("want 2 emitted events, got %d (%+v)", len(obs.events), obs.events)
+	}
+	if obs.events[0].Result != "direct" {
+		t.Errorf("success event: got result=%q, want %q", obs.events[0].Result, "direct")
+	}
+	if obs.events[1].Result != "direct_error" {
+		t.Errorf("failure event: got result=%q, want %q", obs.events[1].Result, "direct_error")
+	}
+}
