@@ -318,3 +318,47 @@ func TestGetWithMaxAge_EmitsMaxAgeParam(t *testing.T) {
 		t.Errorf("missing max_age=30 in query: %q", gotURL)
 	}
 }
+
+// TestNewHTTPClient_SlowCacheFallsBackNot502 is a regression for the bug
+// where NewHTTPClient set http.Client.Timeout == the per-fetch timeout, so
+// the outer deadline cancelled the request context at the exact moment the
+// cache attempt timed out — leaving no budget for the WithFallbackOnTimeout
+// direct fetch. The slow cache must degrade to a 200 from the fallback, not
+// a hard error.
+func TestNewHTTPClient_SlowCacheFallsBackNot502(t *testing.T) {
+	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(600 * time.Millisecond) // past the 200ms per-fetch timeout
+		w.Header().Set("X-FetchCache-Hit", "false")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "slow cache body")
+	}))
+	defer cacheSrv.Close()
+
+	originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "direct fallback body")
+	}))
+	defer originSrv.Close()
+
+	hc := NewHTTPClient(
+		WithCacheURL(cacheSrv.URL),
+		WithFallbackClient(&http.Client{Timeout: 5 * time.Second}),
+		WithFallbackOnTimeout(),
+		WithTimeout(200*time.Millisecond),
+	)
+	resp, err := hc.Get(originSrv.URL)
+	if err != nil {
+		t.Fatalf("slow cache must fall back, got error (the 502 bug): %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status: got %d want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "direct fallback body" {
+		t.Fatalf("body: got %q want %q", body, "direct fallback body")
+	}
+	if resp.Header.Get("X-FetchCache-Via-Fallback") != "true" {
+		t.Errorf("expected X-FetchCache-Via-Fallback=true")
+	}
+}

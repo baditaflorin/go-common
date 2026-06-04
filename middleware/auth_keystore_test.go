@@ -222,3 +222,41 @@ func TestKeystore_OutOfBandScopeCheck_MissingTokenRejects(t *testing.T) {
 		t.Fatalf("no-token: want 401 got %d", code)
 	}
 }
+
+func TestKeystore_TrustPrivateMesh(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		t.Fatal("verifier must not be called on the private-mesh trust path")
+		return nil, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v, TrustPrivateMesh: true})
+
+	// Private / loopback / ULA peer, no token, no gateway header -> trusted.
+	for _, addr := range []string{"127.0.0.1:5555", "172.18.0.4:33333", "10.1.2.3:80", "[fd00::1]:8080"} {
+		r := newReq("/scan?target=https://x")
+		r.RemoteAddr = addr
+		if code, _ := run(t, mw, r); code != http.StatusOK {
+			t.Fatalf("private-mesh peer %s: want 200 got %d", addr, code)
+		}
+	}
+
+	// Public peer with no token must NOT be trusted — the mesh fast path
+	// must never leak to the internet.
+	r := newReq("/scan?target=https://x")
+	r.RemoteAddr = "8.8.8.8:44444"
+	if code, _ := run(t, mw, r); code == http.StatusOK {
+		t.Fatalf("public peer must not be trusted by TrustPrivateMesh, got 200")
+	}
+}
+
+func TestKeystore_TrustPrivateMeshOffByDefault(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		t.Fatal("verifier must not be reached: missing token denies before lookup")
+		return nil, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v}) // TrustPrivateMesh defaults false
+	r := newReq("/scan?target=https://x")
+	r.RemoteAddr = "127.0.0.1:5555"
+	if code, _ := run(t, mw, r); code == http.StatusOK {
+		t.Fatalf("default (mesh trust off) must not trust a private peer, got 200")
+	}
+}

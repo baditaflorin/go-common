@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -60,6 +61,21 @@ type KeystoreOpts struct {
 	// the keystore returned 200). Skip both keystore and local check.
 	// Default header.AuthUser.
 	TrustGatewayHeader string
+
+	// TrustPrivateMesh, when true, treats a request whose actual TCP peer
+	// (r.RemoteAddr — NOT a spoofable header) is a private/loopback IP AND
+	// that carries no gateway trust header as already-authenticated. This is
+	// the "container-to-container on the docker mesh" trust the fleet fetch
+	// cache relies on, made reusable: an expensive internal-only service
+	// (e.g. the chromedp js-proxy) can be reached no-auth by sibling
+	// containers while its PUBLIC gateway URL stays fully keystore-gated.
+	//
+	// Safe because: public clients can only reach the container via nginx,
+	// which connects from the gateway and sets the trust header (so they take
+	// the gateway path, not this one); a public client cannot present a
+	// private source IP on the container's network. Default false — no effect
+	// on any service that doesn't opt in.
+	TrustPrivateMesh bool
 
 	// VerifyTimeout caps the upstream keystore call. Default 3s.
 	VerifyTimeout time.Duration
@@ -202,6 +218,19 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				return
 			}
 
+			// 2b. Private-mesh trust (opt-in). The request carries no gateway
+			//     header (handled above) and its actual TCP peer is a
+			//     private/loopback IP — i.e. a sibling container on the docker
+			//     mesh, not a public client (which could only arrive via the
+			//     gateway path above). Trust it without a token, mirroring the
+			//     fetch cache's container-to-container model. Not spoofable:
+			//     keyed on r.RemoteAddr, never on a header.
+			if opts.TrustPrivateMesh && isPrivateRemoteAddr(r.RemoteAddr) {
+				observe(AuthSourcePrivateMesh, AuthResultAllow, 0)
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			// 3. Extract the raw token from the same three sources legacy
 			//    TokenAuth checks: Bearer header, /t/<token>/ path, ?api_key=.
 			token := extractToken(r)
@@ -282,4 +311,22 @@ func deny(w http.ResponseWriter, why string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": "Unauthorized", "reason": why})
+}
+
+// isPrivateRemoteAddr reports whether addr (an http.Request.RemoteAddr in
+// "host:port" form) is a loopback, private (RFC1918 / ULA), or link-local
+// IP — i.e. a peer on the docker/private mesh rather than a public client.
+// Used only by the opt-in TrustPrivateMesh path. A malformed or public
+// address returns false (fail closed). Keyed on the real TCP peer, never a
+// header, so it cannot be spoofed by a request claiming a private origin.
+func isPrivateRemoteAddr(addr string) bool {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }

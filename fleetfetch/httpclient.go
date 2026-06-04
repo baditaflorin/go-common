@@ -45,7 +45,17 @@ func NewHTTPClient(opts ...Option) *http.Client {
 	c := NewClient(opts...)
 	return &http.Client{
 		Transport: &fetchCacheTransport{client: c},
-		Timeout:   c.timeout,
+		// The outer client timeout MUST exceed one fetch's worst case
+		// (a full cache attempt at c.timeout, then — on a slow cache with
+		// WithFallbackOnTimeout — a direct fallback fetch also bounded by
+		// c.timeout). If it equals c.timeout, the outer deadline cancels
+		// the request context at the very moment the cache attempt times
+		// out, so directFetch gets an already-dead ctx and the fallback
+		// can never run — turning a slow cache into a hard error (the
+		// fleet-wide 502s seen on RenderJS migrations, 2026-06-04). The
+		// caller's own request context still bounds the real total; this
+		// is only the safety backstop, so make it comfortably larger.
+		Timeout: 2*c.timeout + 5*time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

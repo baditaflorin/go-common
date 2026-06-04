@@ -34,6 +34,9 @@ const (
 	AuthSourceLocal    AuthSource = "local"    // local-token fast path
 	AuthSourceKeystore AuthSource = "keystore" // upstream keystore call (possibly cached)
 	AuthSourceMissing  AuthSource = "missing"  // no token presented
+	// AuthSourcePrivateMesh: trusted because the actual TCP peer is a
+	// private/mesh IP with no gateway header (opt-in TrustPrivateMesh).
+	AuthSourcePrivateMesh AuthSource = "private-mesh"
 )
 
 // AuthResult buckets the outcome.
