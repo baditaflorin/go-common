@@ -163,6 +163,14 @@ type Client struct {
 	// best-effort direct fetch on timeout.
 	fallbackOnTimeout bool
 
+	// noCache, when set via WithoutCache, makes every Get bypass the
+	// fetch cache entirely and go straight to the SSRF-safe, proxy-aware
+	// direct fetch (the same path directFetch uses). For callers that
+	// probe speculative / one-shot URLs not worth caching — they
+	// shouldn't pay the cache round-trip OR pollute the shared cache
+	// (and its singleflight) with throwaway lookups.
+	noCache bool
+
 	// Counters for observability. Exposed via Stats().
 	hits      atomic.Int64
 	misses    atomic.Int64
@@ -218,6 +226,27 @@ func WithTimeout(d time.Duration) Option {
 // best-effort body matters more than avoiding redundant egress.
 func WithFallbackOnTimeout() Option {
 	return func(c *Client) { c.fallbackOnTimeout = true }
+}
+
+// WithoutCache makes the client skip the fetch cache entirely: every Get
+// goes straight to the SSRF-safe, proxy-aware direct fetch (via the
+// fallback client, which honors HTTP(S)_PROXY for proxy_egress services).
+//
+// Use for services that probe speculative, mostly-nonexistent, or
+// one-shot URLs — e.g. a docs-platform detector guessing developer.<dom>.com
+// for every input. Routing those through the cache pays a Docker-internal
+// round-trip AND pollutes the shared cache + its singleflight with
+// throwaway lookups that no other service will ever reuse. WithoutCache
+// turns the call into a single direct fetch instead.
+//
+// The Response shape is unchanged (Body/Status/FinalURL/Header), with
+// ViaFallback=true to mark that it took the direct path. WithRender has
+// no effect under WithoutCache — rendering requires the cache's headless
+// renderer; a direct fetch returns raw origin bytes. Cacheable, shareable
+// work (e.g. a JS render worth warming once per domain) should keep using
+// a normal cache client.
+func WithoutCache() Option {
+	return func(c *Client) { c.noCache = true }
 }
 
 // WithFallbackClient replaces the default safehttp-based fallback
@@ -417,6 +446,14 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 		emit(ev)
 	}()
 	merged := mergeHeaders(c.defaultHeaders, perReqHeaders)
+
+	// WithoutCache: never touch the cache — fetch direct via the
+	// proxy-aware fallback client. Emits result="fallback" with
+	// ViaFallback=true (it IS a direct fetch), keeping these throwaway
+	// probes out of the cache and its singleflight entirely.
+	if c.noCache {
+		return c.directFetch(ctx, targetURL, merged, nil)
+	}
 
 	q := url.Values{}
 	q.Set("url", targetURL)

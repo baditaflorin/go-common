@@ -362,3 +362,45 @@ func TestNewHTTPClient_SlowCacheFallsBackNot502(t *testing.T) {
 		t.Errorf("expected X-FetchCache-Via-Fallback=true")
 	}
 }
+
+// TestWithoutCache_BypassesCacheEntirely locks the WithoutCache contract:
+// the client must NEVER call the cache URL and must direct-fetch the origin
+// instead — for services probing speculative URLs not worth caching.
+func TestWithoutCache_BypassesCacheEntirely(t *testing.T) {
+	var cacheHits int
+	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cacheHits++
+		w.WriteHeader(500)
+	}))
+	defer cacheSrv.Close()
+
+	originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "direct origin body")
+	}))
+	defer originSrv.Close()
+
+	c := NewClient(
+		WithCacheURL(cacheSrv.URL),
+		WithoutCache(),
+		// Plain fallback client so the direct fetch can reach the
+		// 127.0.0.1 httptest origin (safehttp would SSRF-block it).
+		WithFallbackClient(&http.Client{Timeout: 5 * time.Second}),
+	)
+	r, err := c.Get(context.Background(), originSrv.URL)
+	if err != nil {
+		t.Fatalf("WithoutCache Get: %v", err)
+	}
+	if cacheHits != 0 {
+		t.Fatalf("cache must NOT be contacted under WithoutCache; got %d hits", cacheHits)
+	}
+	if r.Status != 200 {
+		t.Fatalf("status: got %d want 200", r.Status)
+	}
+	if string(r.Body) != "direct origin body" {
+		t.Fatalf("body: got %q want %q", r.Body, "direct origin body")
+	}
+	if !r.ViaFallback {
+		t.Error("expected ViaFallback=true on the direct path")
+	}
+}

@@ -4,6 +4,23 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.57.0 — 2026-06-04
+
+### Added
+
+- **`fleetfetch.WithoutCache()`** — a per-client option that skips the fetch
+  cache entirely: every `Get` goes straight to the SSRF-safe, proxy-aware
+  direct fetch (the `directFetch` path, which honors `HTTP(S)_PROXY` for
+  `proxy_egress` services). For services that probe speculative,
+  mostly-nonexistent, or one-shot URLs (e.g. a docs-platform detector
+  guessing `developer.<domain>.com` for every input) — routing those through
+  the cache pays a Docker-internal round-trip AND pollutes the shared cache +
+  its singleflight with throwaway lookups no other service will reuse. The
+  `Response` shape is unchanged (`ViaFallback=true` marks the direct path);
+  `WithRender` has no effect under `WithoutCache` (a direct fetch returns raw
+  origin bytes). This is the fleetfetch-side complement to safehttp's
+  `WithoutFetchCache()` for services that use `fleetfetch.NewClient` directly.
+
 ## v0.55.0 — 2026-06-04
 
 ### Added
