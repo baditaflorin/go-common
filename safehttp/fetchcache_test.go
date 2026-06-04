@@ -241,6 +241,66 @@ func TestWithoutFetchCache_IgnoresDefault(t *testing.T) {
 	}
 }
 
+// WithoutFetchCacheContext opts a single request out of the default
+// delegate even on a normal cache-routing client (the selftest path).
+func TestWithoutFetchCacheContext_BypassesDefault(t *testing.T) {
+	allowLoopback(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(205)
+		_, _ = io.WriteString(w, "ctx-direct-origin")
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &stubDelegate{status: 200, body: "from-delegate"}
+	SetDefaultFetchDelegate(d)
+	t.Cleanup(func() { SetDefaultFetchDelegate(nil) })
+
+	c := NewClient()
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req = req.WithContext(WithoutFetchCacheContext(req.Context()))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp.StatusCode != 205 || readBody(t, resp) != "ctx-direct-origin" {
+		t.Fatalf("ctx opt-out should hit origin directly; status=%d", resp.StatusCode)
+	}
+	if len(d.seenURLs) != 0 {
+		t.Fatalf("WithoutFetchCacheContext must not consult the default delegate, saw %v", d.seenURLs)
+	}
+
+	// Sanity: a request WITHOUT the flag on the same client still routes.
+	req2, _ := http.NewRequest(http.MethodGet, "http://does-not-resolve.invalid/", nil)
+	resp2, err := c.Do(req2)
+	if err != nil {
+		t.Fatalf("Do (no flag): %v", err)
+	}
+	if readBody(t, resp2) != "from-delegate" || len(d.seenURLs) != 1 {
+		t.Fatalf("request without the ctx flag should still route through the delegate")
+	}
+}
+
+// An explicit per-client WithFetchDelegate is honored even when the
+// request carries WithoutFetchCacheContext — the caller wired it on purpose.
+func TestWithoutFetchCacheContext_ExplicitPerClientStillWins(t *testing.T) {
+	t.Cleanup(func() { SetDefaultFetchDelegate(nil) })
+
+	d := &stubDelegate{status: 200, body: "per-client"}
+	c := NewClient(WithFetchDelegate(d))
+	req, _ := http.NewRequest(http.MethodGet, "http://does-not-resolve.invalid/", nil)
+	req = req.WithContext(WithoutFetchCacheContext(req.Context()))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if readBody(t, resp) != "per-client" || len(d.seenURLs) != 1 {
+		t.Fatalf("explicit per-client delegate must win over the ctx opt-out")
+	}
+}
+
 // A per-client WithFetchDelegate applies even when no default is set,
 // and even for a WithoutProxy client (explicit opt-in wins).
 func TestWithFetchDelegate_PerClient(t *testing.T) {

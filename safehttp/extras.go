@@ -178,6 +178,13 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if delegate == nil && t.useDefaultFetchCache {
 		delegate = DefaultFetchDelegate()
 	}
+	// Per-request opt-out: WithoutFetchCacheContext(ctx) bypasses the
+	// process-wide default delegate (e.g. selftest probes validating the
+	// real origin path). An explicit per-client WithFetchDelegate was wired
+	// on purpose, so it still wins over the context flag.
+	if t.fetchDelegate == nil && fetchCacheDisabledByContext(req.Context()) {
+		delegate = nil
+	}
 	eligibleGet := req.Method == http.MethodGet && req.Body == nil && req.Header.Get("Range") == ""
 	if fetchCacheDebug && eligibleGet {
 		t.logFetchCacheDebug("decision host=%s perClientDelegate=%v useDefaultFetchCache=%v defaultDelegateInstalled=%v willRoute=%v",

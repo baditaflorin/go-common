@@ -4,6 +4,31 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.55.0 — 2026-06-04
+
+### Added
+
+- **`safehttp.WithoutFetchCacheContext(ctx)`** — a per-request opt-out of
+  fetch-cache delegate routing. Eligible GETs made with the returned context
+  go direct to origin instead of through the process-wide
+  `DefaultFetchDelegate`, even on a normal cache-routing client and even on
+  clients built before `server.New` installed the delegate. Complements the
+  per-client `WithoutFetchCache()` option. An explicit per-client
+  `WithFetchDelegate` still wins (the caller wired it on purpose).
+
+### Changed
+
+- **`selftest.Suite` now runs every check with `WithoutFetchCacheContext`** —
+  `/selftest` validates the service's REAL outbound path (DNS + TLS + origin),
+  not whatever the fleet cache happens to have warm. Previously, live-probe
+  selftest checks routed through the *cold* fleet cache and could exceed
+  `fleet-runner deploy`'s 8 s smoke `/selftest` timeout, false-failing
+  otherwise-healthy deploys and rolling them back (observed across the
+  fetch-cache rollout, e.g. `domain-deployment-fingerprint`'s
+  `live_probe_cross_platform`). Checks now bypass the cache automatically — no
+  per-service code change needed. Checks that wired an explicit per-client
+  `WithFetchDelegate` are unaffected.
+
 ## v0.47.2 — 2026-06-04
 
 ### Added
