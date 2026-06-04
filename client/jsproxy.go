@@ -88,8 +88,12 @@ type Performance struct {
 	Timing map[string]int64 `json:"timing"`
 }
 
-// ProxyResult is what JSProxy returns. Field tags match the go-js-proxy-network
-// JSON response so the same struct round-trips through both ends.
+// ProxyResult is what JSProxy returns. The field tags describe the
+// go-js-proxy-network payload object. The live service wraps that
+// payload in go-common's response.Success envelope
+// ({"status":"success","data":{…}}), so jsProxyNetwork unwraps .data
+// before populating this struct — the tags below match the INNER
+// (.data) object, not the top-level envelope.
 type ProxyResult struct {
 	FinalURL    string              `json:"final_url"`
 	DOMHTML     string              `json:"dom_html"`
@@ -183,8 +187,42 @@ func jsProxyNetwork(ctx context.Context, base, apiKey, target string) (*ProxyRes
 		return nil, fmt.Errorf("jsproxy: upstream returned %d: %s", resp.StatusCode, string(snippet))
 	}
 
+	// The live go-js-proxy-network service wraps its payload in
+	// go-common's response.Success envelope:
+	//
+	//	{"status":"success","data":{"final_url":…,"dom_html":…,"network":[…]}}
+	//
+	// Pre-envelope deployments returned the ProxyResult fields at the
+	// top level with no wrapper. Support both: peek at the top-level
+	// shape and unwrap .data when the envelope is present, otherwise
+	// decode the body straight into a ProxyResult. (The struct is
+	// inlined rather than importing response so this client stays
+	// dependency-free and trivially vendorable.)
+	var env struct {
+		Status string          `json:"status"`
+		Data   json.RawMessage `json:"data"`
+		Error  *struct {
+			Code      int    `json:"code"`
+			ErrorCode string `json:"error_code"`
+			Message   string `json:"message"`
+		} `json:"error"`
+	}
 	var out ProxyResult
-	if err := json.Unmarshal(body, &out); err != nil {
+	if err := json.Unmarshal(body, &env); err == nil && (env.Status != "" || len(env.Data) > 0) {
+		// Enveloped response — the shape the live service emits. A bare
+		// ProxyResult has neither a "status" nor a "data" top-level key,
+		// so this branch only fires for the real envelope.
+		if env.Error != nil {
+			return nil, fmt.Errorf("jsproxy: upstream error envelope: %s (code %d, %s)",
+				env.Error.Message, env.Error.Code, env.Error.ErrorCode)
+		}
+		if len(env.Data) > 0 {
+			if err := json.Unmarshal(env.Data, &out); err != nil {
+				return nil, fmt.Errorf("jsproxy: decode envelope data: %w", err)
+			}
+		}
+	} else if err := json.Unmarshal(body, &out); err != nil {
+		// Bare (non-enveloped) body — decode the ProxyResult directly.
 		return nil, fmt.Errorf("jsproxy: decode JSON: %w", err)
 	}
 	if out.FinalURL == "" {

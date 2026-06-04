@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/baditaflorin/go-common/response"
 )
 
 func TestJSProxy_RequiresTarget(t *testing.T) {
@@ -80,6 +82,112 @@ func TestJSProxy_Modern_ParsesResponse(t *testing.T) {
 	}
 	if got.Performance.Timing["loadEventEnd"] != 1123 {
 		t.Fatalf("performance.timing.loadEventEnd not parsed: %#v", got.Performance.Timing)
+	}
+}
+
+// TestJSProxy_Network_EnvelopeAndBare is the regression guard for the
+// 2026-06-04 fix: the live go-js-proxy-network service wraps its payload
+// in go-common's response.Success envelope ({"status":"success",
+// "data":{…}}), so decoding the body straight into a ProxyResult yielded
+// an empty DOMHTML / nil Network. jsProxyNetwork now unwraps .data. The
+// "bare" case keeps coverage for an un-enveloped deployment so neither
+// shape regresses.
+func TestJSProxy_Network_EnvelopeAndBare(t *testing.T) {
+	want := ProxyResult{
+		FinalURL: "https://example.com/",
+		DOMHTML:  "<html><body>rendered</body></html>",
+		Network: []NetworkEntry{{
+			URL:          "https://example.com/api/data",
+			Method:       "GET",
+			Status:       200,
+			ResponseSize: 1234,
+			ResourceType: "xhr",
+		}},
+		ConsoleLogs: []string{"ready"},
+		Performance: Performance{
+			Lifecycle: map[string]int64{"load": 200},
+			Timing:    map[string]int64{"navigationStart": 1000},
+		},
+	}
+
+	cases := []struct {
+		name string
+		// body returns the exact bytes the server writes for `want`.
+		body func() []byte
+	}{
+		{
+			// The shape the LIVE service emits: response.Success wraps
+			// ProxyResult under .data with a top-level "status":"success".
+			name: "enveloped",
+			body: func() []byte {
+				b, _ := json.Marshal(response.Success(want))
+				return b
+			},
+		},
+		{
+			// Pre-envelope / bare body: ProxyResult fields at top level.
+			name: "bare",
+			body: func() []byte {
+				b, _ := json.Marshal(want)
+				return b
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(tc.body())
+			}))
+			defer srv.Close()
+
+			t.Setenv("JS_PROXY_NETWORK_URL", srv.URL)
+			t.Setenv("JS_PROXY_NETWORK_API_KEY", "secret")
+			t.Setenv("JS_PROXY_API_KEY", "") // force the network-specific key
+			t.Setenv("JS_PROXY_URL", "")
+
+			got, err := JSProxy(context.Background(), "https://example.com")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.DOMHTML != want.DOMHTML {
+				t.Fatalf("DOMHTML not populated: got %q want %q", got.DOMHTML, want.DOMHTML)
+			}
+			if len(got.Network) != 1 || got.Network[0].Status != 200 || got.Network[0].URL != want.Network[0].URL {
+				t.Fatalf("Network log not populated: %#v", got.Network)
+			}
+			if got.FinalURL != want.FinalURL {
+				t.Fatalf("FinalURL mismatch: got %q want %q", got.FinalURL, want.FinalURL)
+			}
+			if len(got.ConsoleLogs) != 1 || got.ConsoleLogs[0] != "ready" {
+				t.Fatalf("ConsoleLogs not populated: %#v", got.ConsoleLogs)
+			}
+			if got.Performance.Lifecycle["load"] != 200 {
+				t.Fatalf("Performance not populated: %#v", got.Performance)
+			}
+		})
+	}
+}
+
+// TestJSProxy_Network_ErrorEnvelope verifies that a 200 response carrying
+// an error envelope ({"status":"error","error":{…}}) surfaces as an error
+// rather than a silently-empty ProxyResult.
+func TestJSProxy_Network_ErrorEnvelope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response.NewError(422, "render.timeout", "page did not settle"))
+	}))
+	defer srv.Close()
+
+	t.Setenv("JS_PROXY_NETWORK_URL", srv.URL)
+	t.Setenv("JS_PROXY_NETWORK_API_KEY", "secret")
+	t.Setenv("JS_PROXY_API_KEY", "")
+	t.Setenv("JS_PROXY_URL", "")
+
+	_, err := JSProxy(context.Background(), "https://example.com")
+	if err == nil || !strings.Contains(err.Error(), "render.timeout") {
+		t.Fatalf("expected error envelope to surface, got %v", err)
 	}
 }
 
