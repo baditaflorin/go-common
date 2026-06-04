@@ -145,3 +145,35 @@ func TestNewHTTPClient_HeadersForwarded(t *testing.T) {
 		t.Errorf("Accept not forwarded; saw %q", sawAccept)
 	}
 }
+
+// TestNewHTTPClient_UserAgentNotForwarded locks the cache-key-sharing fix:
+// a per-service User-Agent must NOT be forwarded (it would fragment the cache
+// key so every service renders its own copy), while a discriminating header
+// like Accept-Language still is.
+func TestNewHTTPClient_UserAgentNotForwarded(t *testing.T) {
+	var sawUA, sawLang string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawUA = r.Header.Get("X-Ff-Forward-User-Agent")
+		sawLang = r.Header.Get("X-Ff-Forward-Accept-Language")
+		w.Header().Set("X-FetchCache-Hit", "false")
+		w.Header().Set("X-FetchCache-Final-Url", r.URL.Query().Get("url"))
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(WithCacheURL(srv.URL))
+	req, _ := http.NewRequest(http.MethodGet, "https://example.com", nil)
+	req.Header.Set("User-Agent", "go_domain_martech_stack/0.3.3")
+	req.Header.Set("Accept-Language", "de-DE")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if sawUA != "" {
+		t.Errorf("User-Agent must NOT be forwarded (fragments cache key); cache saw %q", sawUA)
+	}
+	if sawLang != "de-DE" {
+		t.Errorf("discriminating Accept-Language must still forward; saw %q", sawLang)
+	}
+}

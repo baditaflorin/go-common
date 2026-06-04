@@ -82,6 +82,18 @@ func (t *fetchCacheTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	// Forward any caller-set headers as forwarded headers so the cache
 	// hashes them into the key and re-attaches them upstream. Drop the
 	// hop-by-hop fields http.DefaultTransport would have stripped.
+	//
+	// CRITICAL for cache sharing: also drop User-Agent (and Accept-Encoding).
+	// Each fleet producer sets a distinct UA via ua.Build(serviceID, version);
+	// when that UA is hashed into the cache key, every service gets its OWN
+	// cache entry for the same URL+render mode — so a 20-35s chromedp render
+	// is paid ~25× per domain instead of once and shared (the whole point of
+	// the cache). The UA doesn't change the fetched bytes (the cache uses its
+	// own UA to the origin), and Accept-Encoding is transport-level gzip the
+	// cache handles itself — neither should fragment the key. Accept IS kept:
+	// it can legitimately discriminate the response (e.g. application/rdap+json
+	// vs text/html). Found 2026-06-04: RenderJS entries never warmed across
+	// services because of per-service UAs.
 	forward := http.Header{}
 	for name, vals := range req.Header {
 		switch http.CanonicalHeaderKey(name) {
@@ -89,6 +101,10 @@ func (t *fetchCacheTransport) RoundTrip(req *http.Request) (*http.Response, erro
 			"Trailer", "Transfer-Encoding", "Upgrade":
 			continue
 		case "Host", "Content-Length":
+			continue
+		case "User-Agent", "Accept-Encoding":
+			// Non-discriminating per-caller defaults — excluding them
+			// keeps the cache key shared fleet-wide.
 			continue
 		}
 		for _, v := range vals {
