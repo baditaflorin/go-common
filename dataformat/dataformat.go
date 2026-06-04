@@ -2,22 +2,15 @@ package dataformat
 
 import (
 	"bytes"
-	"encoding/csv"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
-	"io"
+	"github.com/BurntSushi/toml"
+	yaml "go.yaml.in/yaml/v2"
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/BurntSushi/toml"
-	yaml "go.yaml.in/yaml/v2"
 )
-
-// Format identifies a structured data serialization.
-type Format int
 
 const (
 	// JSON is RFC 8259 JSON.
@@ -31,24 +24,6 @@ const (
 	// TOML is TOML v1.0.0 (via github.com/BurntSushi/toml).
 	TOML
 )
-
-// String returns the canonical lower-case name of the format.
-func (f Format) String() string {
-	switch f {
-	case JSON:
-		return "json"
-	case CSV:
-		return "csv"
-	case XML:
-		return "xml"
-	case YAML:
-		return "yaml"
-	case TOML:
-		return "toml"
-	default:
-		return fmt.Sprintf("Format(%d)", int(f))
-	}
-}
 
 // Sentinel errors. Use errors.Is to test for them.
 var (
@@ -64,28 +39,6 @@ var (
 	// ErrEmptyInput is returned when decoding empty input.
 	ErrEmptyInput = errors.New("dataformat: empty input")
 )
-
-// DecodeError wraps an underlying decode/parse failure with the format.
-type DecodeError struct {
-	Format Format
-	Err    error
-}
-
-func (e *DecodeError) Error() string {
-	return fmt.Sprintf("dataformat: decode %s: %v", e.Format, e.Err)
-}
-func (e *DecodeError) Unwrap() error { return e.Err }
-
-// EncodeError wraps an underlying encode failure with the format.
-type EncodeError struct {
-	Format Format
-	Err    error
-}
-
-func (e *EncodeError) Error() string {
-	return fmt.Sprintf("dataformat: encode %s: %v", e.Format, e.Err)
-}
-func (e *EncodeError) Unwrap() error { return e.Err }
 
 // ParseFormat maps a (case-insensitive) name to a Format. It accepts the
 // canonical names plus a few common aliases ("yml", "text/csv", ...).
@@ -156,54 +109,6 @@ func DetectFormat(b []byte) (Format, error) {
 	}
 
 	return 0, fmt.Errorf("%w", ErrDetectFailed)
-}
-
-func looksLikeTOML(b []byte) bool {
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		// [table] / [[array-of-tables]]
-		if strings.HasPrefix(line, "[") {
-			return true
-		}
-		// key = value (TOML mandates the spaces-optional '=' assignment)
-		if eq := strings.IndexByte(line, '='); eq > 0 {
-			// Distinguish from YAML "key: value" by requiring no ':' before '='.
-			if !strings.ContainsRune(line[:eq], ':') {
-				return true
-			}
-		}
-		return false
-	}
-	return false
-}
-
-func looksLikeCSV(b []byte) bool {
-	first := b
-	if nl := bytes.IndexByte(b, '\n'); nl >= 0 {
-		first = b[:nl]
-	}
-	if !bytes.ContainsRune(first, ',') {
-		return false
-	}
-	r := csv.NewReader(bytes.NewReader(b))
-	r.FieldsPerRecord = 0 // enforce consistent column count after first row
-	cols := 0
-	for {
-		rec, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return false
-		}
-		if cols == 0 {
-			cols = len(rec)
-		}
-	}
-	return cols >= 2
 }
 
 // Decode parses b in format f into a generic Go value composed of
@@ -316,125 +221,7 @@ func Convert(from, to Format, b []byte) ([]byte, error) {
 
 // --- CSV ---------------------------------------------------------------
 
-// decodeCSV reads CSV with the first row as a header and returns
-// []any of map[string]any rows. Every cell is a string.
-func decodeCSV(b []byte) (any, error) {
-	r := csv.NewReader(bytes.NewReader(b))
-	records, err := r.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-	if len(records) == 0 {
-		return []any{}, nil
-	}
-	header := records[0]
-	rows := make([]any, 0, len(records)-1)
-	for _, rec := range records[1:] {
-		row := make(map[string]any, len(header))
-		for i, h := range header {
-			if i < len(rec) {
-				row[h] = rec[i]
-			} else {
-				row[h] = ""
-			}
-		}
-		rows = append(rows, row)
-	}
-	return rows, nil
-}
-
-// encodeCSV requires a tabular value: an []any of objects (keys become the
-// header, unioned and sorted) or an []any of []any (raw rows). Anything else
-// returns ErrNotTabular.
-func encodeCSV(v any) ([]byte, error) {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil, fmt.Errorf("%w: CSV requires an array at the top level", ErrNotTabular)
-	}
-	var buf bytes.Buffer
-	w := csv.NewWriter(&buf)
-
-	if len(arr) == 0 {
-		w.Flush()
-		return buf.Bytes(), w.Error()
-	}
-
-	// Raw rows: array of arrays.
-	if _, isArr := arr[0].([]any); isArr {
-		for _, row := range arr {
-			cells, ok := row.([]any)
-			if !ok {
-				return nil, fmt.Errorf("%w: mixed row types in array-of-arrays", ErrNotTabular)
-			}
-			rec := make([]string, len(cells))
-			for i, c := range cells {
-				rec[i] = scalarToString(c)
-			}
-			if err := w.Write(rec); err != nil {
-				return nil, err
-			}
-		}
-		w.Flush()
-		return buf.Bytes(), w.Error()
-	}
-
-	// Array of objects: union the keys for a stable header.
-	keySet := map[string]struct{}{}
-	objs := make([]map[string]any, 0, len(arr))
-	for _, item := range arr {
-		m, ok := asStringMap(item)
-		if !ok {
-			return nil, fmt.Errorf("%w: array elements must be objects", ErrNotTabular)
-		}
-		for k := range m {
-			keySet[k] = struct{}{}
-		}
-		objs = append(objs, m)
-	}
-	header := make([]string, 0, len(keySet))
-	for k := range keySet {
-		header = append(header, k)
-	}
-	sort.Strings(header)
-
-	if err := w.Write(header); err != nil {
-		return nil, err
-	}
-	for _, m := range objs {
-		rec := make([]string, len(header))
-		for i, h := range header {
-			if val, present := m[h]; present {
-				rec[i] = scalarToString(val)
-			}
-		}
-		if err := w.Write(rec); err != nil {
-			return nil, err
-		}
-	}
-	w.Flush()
-	return buf.Bytes(), w.Error()
-}
-
 // --- XML ---------------------------------------------------------------
-
-// xmlNode mirrors an arbitrary XML element for generic decoding.
-type xmlNode struct {
-	XMLName  xml.Name
-	Attrs    []xml.Attr `xml:",any,attr"`
-	Children []xmlNode  `xml:",any"`
-	Content  string     `xml:",chardata"`
-}
-
-// decodeXML parses a single-rooted XML document into a map[string]any keyed
-// by the root element name. Attributes are folded in under "-name" keys and
-// text content under "#text"; repeated children collapse into an []any.
-func decodeXML(b []byte) (any, error) {
-	var root xmlNode
-	if err := xml.Unmarshal(b, &root); err != nil {
-		return nil, err
-	}
-	return map[string]any{root.XMLName.Local: nodeToValue(root)}, nil
-}
 
 func nodeToValue(n xmlNode) any {
 	obj := map[string]any{}
@@ -470,82 +257,6 @@ func nodeToValue(n xmlNode) any {
 	return obj
 }
 
-// encodeXML renders a map[string]any with exactly one root key. Other shapes
-// (multiple roots, top-level array or scalar) return ErrUnsupportedShape
-// because XML has no canonical rendering for them.
-func encodeXML(v any) ([]byte, error) {
-	m, ok := asStringMap(v)
-	if !ok {
-		return nil, fmt.Errorf("%w: XML requires a single-rooted object", ErrUnsupportedShape)
-	}
-	if len(m) != 1 {
-		return nil, fmt.Errorf("%w: XML requires exactly one root element, got %d", ErrUnsupportedShape, len(m))
-	}
-	var root string
-	var body any
-	for k, val := range m {
-		root, body = k, val
-	}
-	var buf bytes.Buffer
-	if err := writeXMLElement(&buf, root, body); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func writeXMLElement(buf *bytes.Buffer, name string, v any) error {
-	switch val := v.(type) {
-	case map[string]any:
-		attrs, children, text := splitXMLFields(val)
-		buf.WriteByte('<')
-		xmlEscapeName(buf, name)
-		for _, a := range attrs {
-			buf.WriteByte(' ')
-			xmlEscapeName(buf, a.k)
-			buf.WriteString(`="`)
-			xmlEscapeText(buf, scalarToString(a.v))
-			buf.WriteByte('"')
-		}
-		buf.WriteByte('>')
-		if text != "" {
-			xmlEscapeText(buf, text)
-		}
-		for _, c := range children {
-			if err := writeXMLChild(buf, c.k, c.v); err != nil {
-				return err
-			}
-		}
-		buf.WriteString("</")
-		xmlEscapeName(buf, name)
-		buf.WriteByte('>')
-		return nil
-	case []any:
-		// Arrays under a named element become repeated elements.
-		return fmt.Errorf("%w: cannot render array as the value of <%s>", ErrUnsupportedShape, name)
-	default:
-		buf.WriteByte('<')
-		xmlEscapeName(buf, name)
-		buf.WriteByte('>')
-		xmlEscapeText(buf, scalarToString(v))
-		buf.WriteString("</")
-		xmlEscapeName(buf, name)
-		buf.WriteByte('>')
-		return nil
-	}
-}
-
-func writeXMLChild(buf *bytes.Buffer, name string, v any) error {
-	if arr, ok := v.([]any); ok {
-		for _, item := range arr {
-			if err := writeXMLElement(buf, name, item); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	return writeXMLElement(buf, name, v)
-}
-
 type kv struct {
 	k string
 	v any
@@ -568,16 +279,6 @@ func splitXMLFields(m map[string]any) (attrs []kv, children []kv, text string) {
 		}
 	}
 	return attrs, children, text
-}
-
-func xmlEscapeText(buf *bytes.Buffer, s string) {
-	_ = xml.EscapeText(buf, []byte(s))
-}
-
-func xmlEscapeName(buf *bytes.Buffer, s string) {
-	// Element/attribute names are not text-escaped by encoding/xml; we keep
-	// them verbatim (decode produced them from valid XML names).
-	buf.WriteString(s)
 }
 
 // --- helpers -----------------------------------------------------------
