@@ -236,6 +236,17 @@ type options struct {
 	// Egress observer — see WithObserver. nil = no observation.
 	observer EgressObserver
 
+	// fetchDelegate, when set, routes eligible outbound GETs through an
+	// alternate fetcher (e.g. the fleet fetch cache). See
+	// WithFetchDelegate. A per-client delegate wins over the process-wide
+	// DefaultFetchDelegate and applies even to withoutProxy clients.
+	fetchDelegate FetchDelegate
+
+	// noFetchCache forces the direct egress path even when a process-wide
+	// DefaultFetchDelegate is installed. See WithoutFetchCache. An
+	// explicit fetchDelegate still wins over this flag.
+	noFetchCache bool
+
 	// egressAllowlist, when non-nil, restricts outbound requests to
 	// the listed hostnames (lowercased). nil means "no enforcement"
 	// — backwards-compatible default. An empty non-nil map means
@@ -488,14 +499,27 @@ func NewClient(opts ...Option) *http.Client {
 	// Pre-v0.26 the wrap was conditional on at least one knob being
 	// configured; the unconditional wrap is a no-op when nothing is
 	// set (the hot path is one extra function call).
+	// Resolve the fetch delegate. A per-client WithFetchDelegate always
+	// wins. Otherwise fall back to the process-wide default — but ONLY
+	// when the client didn't opt out (WithoutFetchCache) AND isn't a
+	// direct-egress client (WithoutProxy). SSRF probers / smuggling
+	// detectors / port scanners pass WithoutProxy precisely because they
+	// must observe real origin behavior; routing them through the cache
+	// would defeat the purpose and hide the origin's true response.
+	delegate := o.fetchDelegate
+	if delegate == nil && !o.noFetchCache && !o.withoutProxy {
+		delegate = DefaultFetchDelegate()
+	}
+
 	extras := &extrasTransport{
-		inner:        rt,
-		traceURL:     o.traceURL,
-		backoffURL:   o.backoffURL,
-		degradedSink: o.degradedSink,
-		observer:     o.observer,
-		proxyFn:      proxyFn,
-		caller:       callerFromUA(o.userAgent),
+		inner:         rt,
+		traceURL:      o.traceURL,
+		backoffURL:    o.backoffURL,
+		degradedSink:  o.degradedSink,
+		observer:      o.observer,
+		proxyFn:       proxyFn,
+		caller:        callerFromUA(o.userAgent),
+		fetchDelegate: delegate,
 	}
 	rt = extras
 
