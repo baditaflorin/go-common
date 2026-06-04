@@ -506,20 +506,22 @@ func NewClient(opts ...Option) *http.Client {
 	// detectors / port scanners pass WithoutProxy precisely because they
 	// must observe real origin behavior; routing them through the cache
 	// would defeat the purpose and hide the origin's true response.
-	delegate := o.fetchDelegate
-	if delegate == nil && !o.noFetchCache && !o.withoutProxy {
-		delegate = DefaultFetchDelegate()
-	}
+	// The process-wide default delegate is consulted AT CALL TIME (see
+	// extrasTransport.RoundTrip) so it reaches clients built before
+	// server.New installs it. Here we only capture the per-client explicit
+	// delegate and whether this client is eligible to consult the default.
+	useDefaultFetchCache := !o.noFetchCache && !o.withoutProxy
 
 	extras := &extrasTransport{
-		inner:         rt,
-		traceURL:      o.traceURL,
-		backoffURL:    o.backoffURL,
-		degradedSink:  o.degradedSink,
-		observer:      o.observer,
-		proxyFn:       proxyFn,
-		caller:        callerFromUA(o.userAgent),
-		fetchDelegate: delegate,
+		inner:                rt,
+		traceURL:             o.traceURL,
+		backoffURL:           o.backoffURL,
+		degradedSink:         o.degradedSink,
+		observer:             o.observer,
+		proxyFn:              proxyFn,
+		caller:               callerFromUA(o.userAgent),
+		fetchDelegate:        o.fetchDelegate,
+		useDefaultFetchCache: useDefaultFetchCache,
 	}
 	rt = extras
 

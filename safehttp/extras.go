@@ -84,15 +84,22 @@ type extrasTransport struct {
 	// metrics without coupling safehttp to client_golang.
 	observer EgressObserver
 
-	// fetchDelegate (optional) routes eligible outbound GETs (no body,
-	// no Range header) through an alternate fetcher — the fleet fetch
-	// cache — so many services fetching the same URL collapse to one
-	// origin fetch. On a delegate error/nil result we fall through to
-	// the normal direct path: a cache outage must never break a request.
+	// fetchDelegate (optional, per-client) routes eligible outbound GETs
+	// (no body, no Range header) through an alternate fetcher — the fleet
+	// fetch cache — so many services fetching the same URL collapse to one
+	// origin fetch. On a delegate error/nil result we fall through to the
+	// normal direct path: a cache outage must never break a request.
 	// Delegated GETs do NOT emit the safehttp egress observer (the fetch
 	// happened in the cache, which emits its own fleet_fetch_cache_*
-	// metrics).
+	// metrics). An explicit per-client WithFetchDelegate wins over the
+	// process-wide default and applies even to withoutProxy clients.
 	fetchDelegate FetchDelegate
+	// useDefaultFetchCache, when true (set unless WithoutProxy /
+	// WithoutFetchCache), consults the process-wide DefaultFetchDelegate
+	// AT CALL TIME — mirroring the DefaultObserver resolution below — so a
+	// delegate installed AFTER NewClient (the common server.New flow, vs.
+	// package-level var clients built at import) still routes through it.
+	useDefaultFetchCache bool
 	// proxyFn is the same function passed to http.Transport.Proxy so
 	// the observer can label each request with via_proxy / proxy_host.
 	// nil means WithoutProxy was set (always direct).
@@ -138,8 +145,16 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// (the cache does server-side singleflight + caching). On any
 	// delegate error or nil result we FALL THROUGH to the normal
 	// direct path below — a cache outage must never break a request.
-	if t.fetchDelegate != nil && req.Method == http.MethodGet && req.Body == nil && req.Header.Get("Range") == "" {
-		if res, err := t.fetchDelegate.FetchGet(req.Context(), req.URL.String(), req.Header); err == nil && res != nil {
+	// Per-client delegate takes precedence; otherwise fall back to the
+	// process-wide DefaultFetchDelegate resolved AT CALL TIME (unless the
+	// client opted out via WithoutProxy / WithoutFetchCache), so package-
+	// level var clients built before server.New still route through it.
+	delegate := t.fetchDelegate
+	if delegate == nil && t.useDefaultFetchCache {
+		delegate = DefaultFetchDelegate()
+	}
+	if delegate != nil && req.Method == http.MethodGet && req.Body == nil && req.Header.Get("Range") == "" {
+		if res, err := delegate.FetchGet(req.Context(), req.URL.String(), req.Header); err == nil && res != nil {
 			return &http.Response{
 				StatusCode:    res.Status,
 				Status:        http.StatusText(res.Status),

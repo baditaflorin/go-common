@@ -99,6 +99,34 @@ func TestDefaultFetchDelegate_RoutesGet(t *testing.T) {
 	}
 }
 
+// Regression: a client built BEFORE SetDefaultFetchDelegate is installed
+// must still route through the delegate — the default is resolved at CALL
+// TIME, mirroring DefaultObserver. This is the common real-world case: a
+// service builds its safehttp client in a package-level var (at import),
+// then server.New installs the delegate later. Building the client first
+// previously baked in a nil delegate and silently bypassed the cache.
+func TestDefaultFetchDelegate_ResolvedAtCallTime(t *testing.T) {
+	// Build the client FIRST, with no default delegate installed yet.
+	c := NewClient()
+
+	// Now install the delegate (as server.New would, after construction).
+	d := &stubDelegate{status: 200, body: "from-delegate"}
+	SetDefaultFetchDelegate(d)
+	t.Cleanup(func() { SetDefaultFetchDelegate(nil) })
+
+	req, err := http.NewRequest(http.MethodGet, "http://does-not-resolve.invalid/late?x=1", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp.StatusCode != 200 || readBody(t, resp) != "from-delegate" {
+		t.Fatalf("pre-built client did not route through the late-installed delegate (status=%d)", resp.StatusCode)
+	}
+}
+
 // (b) Delegate returning an error falls through to the real path.
 func TestDefaultFetchDelegate_ErrorFallsThrough(t *testing.T) {
 	allowLoopback(t)
