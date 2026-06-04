@@ -4,6 +4,22 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.47.2 — 2026-06-04
+
+### Added
+
+- **`safehttp` fetch-cache routing debug log** (`SAFEHTTP_FETCHCACHE_DEBUG=1`) —
+  logs the per-GET routing decision (`perClientDelegate` / `useDefaultFetchCache`
+  / `defaultDelegateInstalled` / `willRoute`) and outcome (`routed via cache
+  host=… status=…` vs `delegate fell through to direct host=… err=…`),
+  rate-limited ~once/2s, off by default. A diagnostic for confirming a service
+  routes its egress through the fleet fetch cache. Used to prove in-situ routing
+  on a live canary: page-fetch sources route through the cache (with real
+  hits/misses), while pathological upstreams (e.g. crt.sh) fall through
+  gracefully to direct egress. The per-consumer `fleet_fetch_*{service,host}`
+  metrics are already wired process-wide via `promx.AutoWire`, so a service's
+  cache usage is visible without per-client wiring.
+
 ## v0.47.1 — 2026-06-04
 
 ### Fixed
