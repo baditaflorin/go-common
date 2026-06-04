@@ -2,7 +2,6 @@ package safehttp
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -13,44 +12,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/baditaflorin/go-common/graph"
 )
-
-// tls12FallbackTransport tries the primary (TLS 1.3-default) transport
-// first; if the response is a "tls: internal error" style failure, it
-// retries with a TLS 1.2-capped transport. This recovers from a real-
-// world bug class where servers ALPN-negotiate HTTP/2 on TLS 1.3 but
-// then send TLS alert 80 ("internal error") mid-handshake. Idempotent
-// — only retries on GET-shaped failures where the request body has
-// not been read.
-type tls12FallbackTransport struct {
-	primary  *http.Transport
-	fallback *http.Transport
-}
-
-func (t *tls12FallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := t.primary.RoundTrip(req)
-	if err == nil {
-		return resp, nil
-	}
-	if !isTLSInternalAlert(err) {
-		return resp, err
-	}
-	// Only safe to retry if the body is replayable. For GET/HEAD this
-	// is always true. For POST/PUT we'd need GetBody — bail in that case.
-	if req.Body != nil && req.GetBody == nil {
-		return resp, err
-	}
-	if req.GetBody != nil {
-		nb, gerr := req.GetBody()
-		if gerr != nil {
-			return resp, err
-		}
-		req.Body = nb
-	}
-	return t.fallback.RoundTrip(req)
-}
 
 // isTLSInternalAlert matches the TLS alert 80 ("internal error") that
 // some servers send when TLS 1.3 + HTTP/2 ALPN goes sideways. It is
@@ -264,40 +226,6 @@ type options struct {
 // Option configures NewClient.
 type Option func(*options)
 
-// WithTimeout sets the total request timeout (default 8s).
-func WithTimeout(d time.Duration) Option { return func(o *options) { o.timeout = d } }
-
-// WithMaxRedirects sets the redirect limit (default 5).
-func WithMaxRedirects(n int) Option { return func(o *options) { o.maxRedirects = n } }
-
-// WithUserAgent sets the User-Agent on all requests including redirects.
-func WithUserAgent(ua string) Option { return func(o *options) { o.userAgent = ua } }
-
-// WithPortCheck restricts outbound connections to ports 80 and 443 only.
-func WithPortCheck() Option { return func(o *options) { o.portCheck = true } }
-
-// WithForceHTTP2 sets Transport.ForceAttemptHTTP2 so the client offers
-// "h2" in the TLS ClientHello ALPN and transparently upgrades to HTTP/2
-// against capable origins. Read the negotiated protocol back with
-// NegotiatedProtocol(resp).
-//
-// Why it is not the default: NewClient installs a custom DialContext
-// (the SSRF guard). Per net/http semantics, providing a custom dialer
-// or TLS config "conservatively disables HTTP/2" unless ForceAttemptHTTP2
-// is set. So by default the transport offers no "h2" in ALPN and
-// resp.TLS.NegotiatedProtocol comes back empty even for HTTP/2-capable
-// servers — most visibly on HEAD requests, where there is no body whose
-// transfer would otherwise reveal the protocol. Services that need the
-// negotiated ALPN (e.g. telling a modern HTTP/2 origin apart from a
-// legacy HTTP/1.1-only one) previously worked around this with a
-// dedicated TCP/443 TLS handshake; WithForceHTTP2 + NegotiatedProtocol
-// is the fleet-canonical replacement.
-//
-// HTTP/2 still rides the same SSRF-guarded dialer and the TLS-1.2
-// fallback transport, so the SSRF and handshake-recovery guarantees are
-// unchanged.
-func WithForceHTTP2() Option { return func(o *options) { o.forceHTTP2 = true } }
-
 // WithoutProxy explicitly disables proxy use even if HTTP_PROXY /
 // HTTPS_PROXY are set in the environment. Use for services that
 // legitimately need a direct egress path (SSRF probers, smuggling
@@ -332,48 +260,6 @@ func RequireProxy() Option { return func(o *options) { o.requireProxy = true } }
 func fleetRequireProxyEnv() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("FLEET_REQUIRE_PROXY")))
 	return v == "1" || v == "true" || v == "yes"
-}
-
-// WithEgressAllowlist restricts outbound requests to the given hostnames.
-// Any GET/POST/etc. whose URL.Hostname() is not in the list returns
-// ErrEgressNotAllowed without making a network call.
-//
-// Pass hostnames as exact matches: "api.hetzner.cloud",
-// "api.github.com". Wildcards are NOT supported — keep the rule literal
-// to force operators to register each fan-out destination explicitly
-// (typically sourced from service.yaml auth.calls_external).
-//
-// Matching is case-insensitive (DNS hostnames are case-insensitive per
-// RFC 1035) and ignores the URL port — only the bare host is compared.
-//
-// Not calling WithEgressAllowlist (the default) means "no allowlist
-// enforcement" — existing safehttp behavior is unchanged. To explicitly
-// forbid all outbound calls, use WithDenyAllEgress.
-//
-// The check runs AFTER the existing SSRF guard (private-IP blocking)
-// but BEFORE any network I/O is performed, so a blocked call resolves
-// no DNS and opens no socket.
-func WithEgressAllowlist(hosts ...string) Option {
-	return func(o *options) {
-		o.egressAllowlist = make(map[string]struct{}, len(hosts))
-		for _, h := range hosts {
-			h = strings.ToLower(strings.TrimSpace(h))
-			if h == "" {
-				continue
-			}
-			o.egressAllowlist[h] = struct{}{}
-		}
-	}
-}
-
-// WithDenyAllEgress is sugar for WithEgressAllowlist with no entries —
-// every outbound call returns ErrEgressNotAllowed. Intended for
-// services that MUST NOT make external calls (e.g. selftest-only
-// fixtures, sandbox harnesses).
-func WithDenyAllEgress() Option {
-	return func(o *options) {
-		o.egressAllowlist = map[string]struct{}{}
-	}
 }
 
 // proxySkipCache remembers which hostnames resolve to private addresses so
@@ -438,142 +324,6 @@ func proxySkippingPrivate(req *http.Request) (*url.URL, error) {
 		return nil, nil
 	}
 	return http.ProxyFromEnvironment(req)
-}
-
-// NewClient returns an *http.Client with a guarded transport. The transport
-// blocks private/internal IPs on every dial, including after redirects, making
-// it safe against DNS-rebind and open-redirect SSRF chains.
-func NewClient(opts ...Option) *http.Client {
-	o := &options{timeout: 8 * time.Second, maxRedirects: 5}
-	for _, opt := range opts {
-		opt(o)
-	}
-	if o.withoutProxy && o.requireProxy {
-		panic("safehttp: WithoutProxy and RequireProxy are mutually exclusive")
-	}
-	// Fleet-wide enforcement: FLEET_REQUIRE_PROXY=1 promotes any
-	// caller to RequireProxy posture unless they explicitly opted
-	// out with WithoutProxy. fleet-runner deploy renders this env
-	// var into every service whose service.yaml has proxy_egress:
-	// true, so a caller that forgot to pass RequireProxy() still
-	// fails-fast on a missing HTTPS_PROXY instead of silently
-	// leaking the dockerhost IP.
-	if !o.withoutProxy && !o.requireProxy && fleetRequireProxyEnv() {
-		o.requireProxy = true
-	}
-	if o.requireProxy && os.Getenv("HTTPS_PROXY") == "" && os.Getenv("https_proxy") == "" && os.Getenv("HTTP_PROXY") == "" && os.Getenv("http_proxy") == "" {
-		panic("safehttp: RequireProxy set but no HTTP(S)_PROXY env var found — refusing to start (service.yaml has proxy_egress: true but /opt/_shared/proxy.env was not mounted)")
-	}
-	proxyFn := func(req *http.Request) (*url.URL, error) {
-		return proxySkippingPrivate(req)
-	}
-	if o.withoutProxy {
-		proxyFn = nil
-	}
-	t := newBaseTransport(o, proxyFn)
-	// Mirror transport with TLS pinned to ≤ 1.2 — used only as a retry
-	// fallback when the default (TLS 1.3) handshake throws an "internal
-	// error". Some servers (e.g. older nginx + OpenSSL 3.x combos)
-	// negotiate TLS 1.3 ALPN and then send alert 80 mid-handshake; on
-	// macOS LibreSSL the same handshake succeeds, so what looks like
-	// "site is down" from Linux is actually a server-side TLS quirk.
-	// Falling back to 1.2 recovers the response in those cases.
-	t12 := t.Clone()
-	t12.TLSClientConfig = &tls.Config{MaxVersion: tls.VersionTLS12}
-
-	// Wrap with the fleet-graph observer + TLS-fallback. No-op if
-	// GRAPH_ENABLED=false or no collector URL configured. Every outbound
-	// call from any fleet service flows through this transport, so this
-	// single line gives us fleet-wide outbound observation.
-	var rt http.RoundTripper = graph.RoundTripper(&tls12FallbackTransport{primary: t, fallback: t12})
-
-	// If any of the auto-trace / auto-backoff / degraded-sink opt-ins
-	// were set, wrap the transport once more so those hooks run on
-	// every outbound call. Backwards-compat: with none of the three
-	// configured, the chain matches v0.15.0 byte-for-byte.
-	// Always wrap with extrasTransport so that a process-wide
-	// DefaultObserver installed AFTER NewClient (the canonical
-	// server.New → safehttp.SetDefaultObserver flow vs. package-level
-	// var clients) is still picked up — extrasTransport.RoundTrip
-	// resolves DefaultObserver at CALL time when observer is nil.
-	// Pre-v0.26 the wrap was conditional on at least one knob being
-	// configured; the unconditional wrap is a no-op when nothing is
-	// set (the hot path is one extra function call).
-	// Resolve the fetch delegate. A per-client WithFetchDelegate always
-	// wins. Otherwise fall back to the process-wide default — but ONLY
-	// when the client didn't opt out (WithoutFetchCache) AND isn't a
-	// direct-egress client (WithoutProxy). SSRF probers / smuggling
-	// detectors / port scanners pass WithoutProxy precisely because they
-	// must observe real origin behavior; routing them through the cache
-	// would defeat the purpose and hide the origin's true response.
-	// The process-wide default delegate is consulted AT CALL TIME (see
-	// extrasTransport.RoundTrip) so it reaches clients built before
-	// server.New installs it. Here we only capture the per-client explicit
-	// delegate and whether this client is eligible to consult the default.
-	useDefaultFetchCache := !o.noFetchCache && !o.withoutProxy
-
-	extras := &extrasTransport{
-		inner:                rt,
-		traceURL:             o.traceURL,
-		backoffURL:           o.backoffURL,
-		degradedSink:         o.degradedSink,
-		observer:             o.observer,
-		proxyFn:              proxyFn,
-		caller:               callerFromUA(o.userAgent),
-		fetchDelegate:        o.fetchDelegate,
-		useDefaultFetchCache: useDefaultFetchCache,
-	}
-	rt = extras
-
-	// User-Agent injection — wraps the transport so EVERY outbound
-	// request carries the configured UA. Pre-v0.35.0 the WithUserAgent
-	// option only set the UA on redirect-follow requests via the
-	// Client.CheckRedirect hook, so the INITIAL request still went
-	// out with Go's default "Go-http-client/1.1". Upstreams that gate
-	// on UA (Wikidata WDQS T400119, GitHub, many CDNs) silently 403'd
-	// every fleet caller. The injection is no-op when WithUserAgent
-	// is not set, preserving v0.15.0 behavior for opted-out callers.
-	//
-	// Per-request override path: if the caller explicitly sets a
-	// User-Agent header on the *Request before sending, that value
-	// wins — we only inject when the header is unset. This matters
-	// for scrapers / fingerprinters that need per-call UA control.
-	if o.userAgent != "" {
-		rt = &uaTransport{inner: rt, ua: o.userAgent}
-	}
-
-	// Egress allowlist — runs as the outermost wrapper so the check
-	// fires before any other transport (including extras' backoff
-	// consult and the underlying dialer's SSRF guard) attempts I/O.
-	// Nil egressAllowlist = no enforcement; matches v0.15.0 chain.
-	if o.egressAllowlist != nil {
-		rt = &egressAllowlistTransport{
-			inner: rt,
-			allow: o.egressAllowlist,
-		}
-	}
-	ua, maxR := o.userAgent, o.maxRedirects
-	client := &http.Client{
-		Transport: rt,
-		Timeout:   o.timeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= maxR {
-				return fmt.Errorf("stopped after %d redirects", maxR)
-			}
-			if err := ValidateURL(req.URL); err != nil {
-				return err
-			}
-			if ua != "" {
-				req.Header.Set("User-Agent", ua)
-			}
-			return nil
-		},
-	}
-	if o.breakerState != nil && extras != nil {
-		store := newBreakerStore(o.breakerState, extras)
-		registerBreakerStore(client, store)
-	}
-	return client
 }
 
 // newBaseTransport builds the primary guarded *http.Transport that
@@ -717,59 +467,4 @@ var TestAllowedHosts = []string{
 	"8.8.8.8",
 	"1.1.1.1",
 	"93.184.216.34",
-}
-
-// uaTransport injects the configured User-Agent on outbound requests
-// that don't already have one set. The earlier shape — relying solely
-// on Client.CheckRedirect to set the header — only covered redirect-
-// follow requests, so the INITIAL request always went out with Go's
-// default "Go-http-client/1.1". That was the silent bug fixed in
-// v0.35.0: any fleet caller passing WithUserAgent was being 403'd by
-// UA-gating upstreams (Wikidata WDQS T400119 was the canary).
-//
-// Per-request override semantics: we only inject when the header is
-// unset (req.Header.Get returns "" for missing). Callers that set a
-// per-request UA via req.Header.Set keep that value — required for
-// scrapers / scanners that fingerprint per-call.
-//
-// Request mutation is via req.Clone — http.RoundTripper contracts
-// forbid modifying the caller's *Request, and a shared *Request can
-// race with the goroutine that constructed it.
-type uaTransport struct {
-	inner http.RoundTripper
-	ua    string
-}
-
-func (t *uaTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if t.ua != "" && req.Header.Get("User-Agent") == "" {
-		req = req.Clone(req.Context())
-		req.Header.Set("User-Agent", t.ua)
-	}
-	return t.inner.RoundTrip(req)
-}
-
-// egressAllowlistTransport rejects outbound requests whose target host
-// is not in the configured allowlist. The rejection happens BEFORE any
-// inner transport (including DNS, dialing, or TLS) is invoked, so a
-// blocked call never hits the wire. See WithEgressAllowlist.
-type egressAllowlistTransport struct {
-	inner http.RoundTripper
-	allow map[string]struct{}
-}
-
-func (t *egressAllowlistTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	rawHost := req.URL.Hostname()
-	// Preserve SSRF-guard ordering: if the target is a literal IP in
-	// a blocked range, return ErrBlocked first so operators see the
-	// stronger signal (SSRF attempt) rather than a generic
-	// "not allowed" message. DNS-resolved hostnames still go through
-	// the dialer's SSRF guard inside inner.RoundTrip.
-	if ip := net.ParseIP(rawHost); ip != nil && IsBlocked(ip) {
-		return nil, ErrBlocked
-	}
-	host := strings.ToLower(rawHost)
-	if _, ok := t.allow[host]; !ok {
-		return nil, fmt.Errorf("safehttp: %w: %s", ErrEgressNotAllowed, rawHost)
-	}
-	return t.inner.RoundTrip(req)
 }
