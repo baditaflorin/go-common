@@ -1,146 +1,191 @@
-# ADR-0001 (go-common) — Per-request resource stats (`reqstats`)
+# ADR-0001 (go-common) — Per-request resource stats (`reqstats`), universal
 
 * **Status**: Proposed
 * **Date**: 2026-06-04
 * **Authors**: claude-opus-4-8 (with florin)
-* **Tags**: go-common, telemetry, reqstats, server-timing, cost-attribution, chromedp, render
-* **Scope**: design + schema + cost model + rollout. Build order: this ADR → go-common `reqstats` → go-js-proxy (reference) → js-proxy-network, html-proxy, fetch-cache.
+* **Tags**: go-common, server, middleware, telemetry, reqstats, server-timing, cost-attribution
+* **Scope**: design + schema + cost model + rollout. Build order: this ADR → go-common `reqstats` (default server middleware) → go-js-proxy (reference enrichment) → fleet-wide via dep bump.
 
 ## Context
 
-The fleet's render path (`consumer → fetch-cache → go-js-proxy | go-js-proxy-network | go-html-proxy`) has no per-request resource visibility. We want, **embedded in each response**:
+Every Go service in the fleet burns CPU to execute, some do network I/O to fetch
+things, all spend wall-time and bytes — yet **none of that is visible per
+request**. We want, embedded in *every* response (regardless of what it returns):
 
-1. **Instant debugging** — "what did *this* request cost, and where did the time go?" without grepping container metrics.
-2. **Cost attribution** — assign different prices to requests by the resources they actually consumed.
+1. **Instant debugging** — "what did *this* request cost and where did the time
+   go?" straight from the response, no metric-grepping.
+2. **Cost attribution** — price requests by the resources they actually consumed.
 
-The naive approach (return the container's CPU%/RSS) is wrong, and getting this right hinges on one fact:
+This must be **universal and zero-config**: baked into `go-common/server` so any
+service using `server.New(...)` emits it for free on the next dep bump — not four
+(or 220) bespoke integrations. The render services then *enrich* it; they are a
+special case, not the design center.
 
-**For render services the cost lives in Chromium, not the Go process.** A render barely touches the Go process — it shuttles CDP messages while the *browser tab* burns CPU and RAM. So:
+The honest measurement picture, now split by service shape:
 
-| Signal | Per-request? | Accurate under concurrency? | Use |
+| Signal | Per-request? | Accurate under concurrency? | Where it applies |
 |---|---|---|---|
-| Container CPU% / RSS (e.g. `go-js-proxy 338%`) | no | n/a (cgroup-wide) | ambient context only |
-| Go-process `getrusage` CPU / heap-alloc delta | sort of | **no** — process-wide, over-attributes under load | rough debug only, never billing |
-| Go-side **phase wall-times** (queue/render/parse/serialize) | **yes** | yes | debug + latency |
-| **CDP `Performance.getMetrics`** per page | **yes** | **yes** | **the cost basis** |
-| Byte sizes (in/out/upstream) | yes | yes | cost + debug |
+| Container CPU% / RSS | no | n/a (cgroup-wide) | ambient context only |
+| **Wall-time** (total + named phases) | **yes** | yes | **every service** |
+| **Bytes** in / out / upstream | **yes** | yes | **every service** |
+| Go-process `getrusage` CPU + heap-alloc delta | sort of | **no** — process-wide, over-attributes | every service, `approx` block, debug-only |
+| CDP `Performance.getMetrics` (per tab) | **yes** | **yes** | chromedp services only — `render` block |
 
-CDP `Performance.getMetrics` returns, *for that tab*: `ScriptDuration` + `TaskDuration` + `LayoutDuration` + `RecalcStyleDuration` (renderer **CPU seconds** for this page), `JSHeapUsedSize`/`JSHeapTotalSize` (**memory**), `Nodes`, `Documents`, `LayoutCount`, `Frames`. We already have the browser open — this is the accurate per-request render cost, free.
+The uncomfortable truth: **for a generic Go service there is no clean
+per-request CPU number.** The runtime doesn't expose per-goroutine CPU, goroutines
+migrate across OS threads, and `getrusage(RUSAGE_SELF)` is process-wide (so it
+over-attributes under load). What we *do* have accurately, everywhere, is
+**wall-time + bytes**; the process deltas are a labeled hint. Render services are
+the lucky exception — Chromium reports per-tab CPU/heap exactly via CDP.
 
-This belongs in **go-common**, not four bespoke implementations (the "change the library, not the consumers" rule). It complements the existing `metrics`/`promx`/`telemetry` packages (which are *aggregate*); `reqstats` is the *per-request, response-embedded* view.
+This belongs in go-common alongside `metrics`/`promx`/`telemetry` (which are
+*aggregate*); `reqstats` is the *per-request, response-embedded* view, and it
+slots into the existing default-middleware chain in `server.New`.
 
 ## Decision (proposed)
 
-Add a go-common **`reqstats`** package that:
+Add a go-common **`reqstats`** package wired as a **default server middleware
+(on by default)**. With zero per-service code, every response gains:
 
-1. Times named phases of a request.
-2. Collects an optional **`render`** block (CDP metrics) and an optional, clearly-labeled **`approx`** block (Go-process deltas).
-3. **Nests** a callee's stats under `upstream`, so one fetch-cache response shows the whole chain.
-4. Emits two response headers:
-   * **`Server-Timing`** (W3C) — human/devtools-readable phase + total durations.
-   * **`X-Request-Stats`** — the full canonical JSON, for the cost engine.
+* **`Server-Timing`** (W3C) header — readable in devtools/curl.
+* **`X-Request-Stats`** — the canonical JSON envelope for the cost engine.
 
-Each of the four services fills what it has; the two chromedp services add `render`; the cache nests `upstream`. Cost attribution is built on the **accurate** signals (CDP renderer time + bytes + phases) — the `approx` block is **never** the cost basis.
+The automatic (universal) payload is **`total_ms` + `bytes` + `approx`** (the
+process deltas). Services opt into richer data via a request-scoped tracker:
+named **`phase`** timings, the **`render`** block (chromedp), and **`upstream`**
+nesting (callers of other fleet services). Opt out per-service with
+`server.WithoutRequestStats()`.
+
+Cost attribution is built on the **accurate** signals — wall-time + bytes
+everywhere, CDP renderer CPU where it exists — never the `approx` block.
+
+## Universal by default — what every service gets, and how to enrich
+
+**Free (no code):** the default middleware times the whole request, counts
+bytes, samples the process deltas, and writes both headers. Turn it off with
+`server.WithoutRequestStats()` (rare).
+
+**Enrich (opt-in), via the tracker on the request context:**
+
+```go
+rt := reqstats.From(r.Context())      // the middleware put it there
+done := rt.Phase("db");  /* query */  done()
+done = rt.Phase("upstream"); resp := call(); done()
+rt.SetUpstream(resp.Header.Get("X-Request-Stats"))   // nest the callee's stats
+rt.SetRender(reqstats.Render{TaskMs: ..., JSHeapUsed: ...})  // chromedp services
+```
+
+**Public exposure:** `Server-Timing` is a standard, safe-to-expose header.
+`X-Request-Stats` reveals internal timings/heap sizes — harmless on the internal
+mesh (where cost attribution happens), but for *public* vhosts the gateway should
+strip it (one nginx `proxy_hide_header X-Request-Stats;` on external server
+blocks). Default: emit always; document the gateway strip. (Alternative knob:
+emit `X-Request-Stats` only when an `X-Debug: 1`/internal header is present —
+deferred unless wanted.)
 
 ## Canonical schema (`X-Request-Stats`, compact JSON)
 
 ```json
 {
-  "svc": "go-js-proxy",
-  "ver": "0.5.1",
-  "ok": true,
+  "svc": "go-js-proxy", "ver": "0.5.1", "ok": true,
   "total_ms": 2480,
-  "phase": { "queue_ms": 8, "boot_ms": 0, "fetch_ms": 2410, "parse_ms": 44, "serialize_ms": 3 },
   "bytes": { "in": 0, "out": 131072, "upstream": 131072 },
-  "render": {
-    "script_ms": 910, "task_ms": 1700, "layout_ms": 120, "recalc_style_ms": 60,
-    "js_heap_used": 48211000, "js_heap_total": 67108864,
-    "nodes": 5400, "documents": 3, "layout_count": 18, "frames": 2
-  },
   "approx": {
     "proc_cpu_ms": 35, "heap_alloc_delta": 2200000,
     "note": "process-wide getrusage/alloc deltas — over-attributed under concurrency; NOT for billing"
   },
+  "phase":  { "queue_ms": 8, "fetch_ms": 2410, "parse_ms": 44, "serialize_ms": 3 },
+  "render": { "script_ms": 910, "task_ms": 1700, "layout_ms": 120, "js_heap_used": 48211000, "nodes": 5400 },
   "upstream": { "...": "nested X-Request-Stats from the service this one called" }
 }
 ```
 
-* `render` — chromedp services only (go-js-proxy, go-js-proxy-network). Absent for go-html-proxy (no browser) and the cache.
-* `approx` — present only when `EnableApprox()` is called; always carries `note`.
-* `upstream` — present when the service called another fleet renderer; recursion is one level per hop (the cache's upstream is the renderer; the renderer has no further fleet hop). To bound header size, deep chains may summarize `upstream` to `{svc, ver, total_ms, render.task_ms, bytes.out}`.
+`total_ms`, `bytes`, `approx` are always present (universal). `phase`, `render`,
+`upstream` are present only when the service enriches. Deep chains summarize
+`upstream` beyond one hop to bound header size.
 
-`Server-Timing` is derived from `phase` + `total` + key render metrics, e.g.:
-`Server-Timing: queue;dur=8, render;dur=2410, cpu;dur=1700;desc="chromium task", extract;dur=44, total;dur=2480`
-
-## go-common `reqstats` API (sketch)
-
-```go
-import "github.com/baditaflorin/go-common/reqstats"
-
-func handler(w http.ResponseWriter, r *http.Request) {
-    rt := reqstats.Start(ServiceID, Version) // starts total timer
-    rt.EnableApprox()                         // opt-in getrusage + ReadMemStats deltas
-    defer rt.Write(w)                         // emits Server-Timing + X-Request-Stats
-
-    done := rt.Phase("queue"); /* acquire slot */ done()
-    done = rt.Phase("fetch");  /* render */      done()
-
-    rt.SetRender(reqstats.Render{ScriptMs: ..., TaskMs: ..., JSHeapUsed: ...}) // chromedp
-    rt.SetUpstream(callee.Header.Get("X-Request-Stats"))                       // nest
-    rt.AddBytesOut(n)
-}
-```
-
-Helpers: `reqstats.Middleware(next)` for zero-touch phase=`total` + headers; `reqstats.Parse(headers)` to read a callee's stats for nesting; `reqstats.RenderFromCDP(metrics []performance.Metric) Render` (a thin mapper kept in a build-tagged or separate sub-helper so go-common core doesn't import chromedp — the chromedp dependency stays in the render services, which pass already-extracted metric values into `reqstats.Render`).
-
-**chromedp dependency boundary:** go-common MUST NOT import chromedp/cdproto. The render services call `Performance.getMetrics` themselves and hand the plain numbers to `reqstats.Render{}`. go-common only defines the struct + emission.
+`Server-Timing` is derived from `total` + `phase` (+ key render metrics), e.g.:
+`Server-Timing: total;dur=2480, fetch;dur=2410, cpu;dur=1700;desc="chromium task"`.
 
 ## Measurement details
 
-* **Phases** — `time.Now()`/`time.Since`. Trivial, exact.
-* **CDP render** — `performance.Enable()` before navigate, `performance.GetMetrics()` after extract (before tab close). Durations are float **seconds** → ×1000 for ms. One extra CDP round-trip per render (negligible).
-* **`approx.proc_cpu_ms`** — `syscall.Getrusage(RUSAGE_SELF)` utime+stime delta across the request. **Process-wide** → contaminated by concurrent requests. Labeled, debug-only.
-* **`approx.heap_alloc_delta`** — `runtime.ReadMemStats().TotalAlloc` delta. Also process-wide cumulative. Labeled, debug-only.
-* **bytes** — counted at read/write.
+* **Wall-time / phases** — `time.Since`. Exact, universal.
+* **`approx.proc_cpu_ms`** — `syscall.Getrusage(RUSAGE_SELF)` utime+stime delta;
+  process-wide → contaminated under concurrency. For *low-QPS* services it's a
+  decent estimate; still `approx`.
+* **`approx.heap_alloc_delta`** — `runtime.ReadMemStats().TotalAlloc` delta;
+  process-wide cumulative. Cheap; `approx`.
+* **`render`** — chromedp services call `performance.Enable()` before navigate,
+  `performance.GetMetrics()` after extract; float seconds → ms. go-common
+  **must not** import chromedp — services pass plain numbers into
+  `reqstats.Render{}`; the package only defines the struct + emission.
+* **`bytes`** — counted at the middleware's wrapped `ResponseWriter` + request body.
 
-## Cost model (built on the accurate signals only)
+## Cost model — two paths, both on accurate signals
 
-```
-request_cost ≈ w_cpu · render.task_ms          // dominant for renders (Chromium CPU)
-             + w_js  · render.script_ms
-             + w_mem · render.js_heap_used
-             + w_net · bytes.out
-             + w_lat · total_ms                 // covers non-render services
-             + upstream.cost                     // nested renderer cost attributed to the caller
-```
+* **Render services (direct):** Chromium's per-tab CPU is exact —
+  `cost ≈ w_cpu·render.task_ms + w_js·render.script_ms + w_mem·render.js_heap_used + w_net·bytes.out + upstream.cost`.
+* **Generic services (proportional):** no clean per-request CPU, so attribute the
+  container's *measured* CPU (from cgroup/`/metrics`) across requests **weighted
+  by each request's accurate `total_ms` share** in the window:
+  `req_cpu ≈ container_cpu_window · (req.total_ms / Σ total_ms)`, then
+  `cost ≈ w_cpu·req_cpu + w_net·bytes.out + upstream.cost`. This uses two accurate
+  inputs (per-request wall-time + container CPU) to derive a defensible per-request
+  CPU without needing per-goroutine CPU. The `approx` block is a sanity-check, not
+  the basis.
 
-`w_*` calibrated to real $/core-second and $/GB. For go-html-proxy / the cache (no `render`), cost ≈ phases + bytes; their dominant cost is the nested `upstream` renderer. The `approx` block is deliberately **absent** from this formula.
+`w_*` calibrated to real $/core-second and $/GB.
 
 ## Rollout
 
 1. **ADR** (this).
-2. **go-common `reqstats`** — package + `Server-Timing`/`X-Request-Stats` emit + `Parse` + tests. No consumer change; tagged minor release.
-3. **go-js-proxy reference** — wire phases (queue/boot/fetch/extract/serialize) + `render` (CDP) + `approx`; verify the headers + schema live against the container. Locks the schema.
-4. **Roll out** — go-js-proxy-network (CDP + network counts), go-html-proxy (phases + bytes, no `render`), fetch-cache (phases + `SetUpstream` nesting). `fleet-runner update-dep` the go-common bump, then per-service integration PRs.
-5. **(Later)** optional fire-and-forget to a stats sink for aggregation + a calibration job that fits `w_*` from observed cost.
+2. **go-common `reqstats`** — package + default middleware in `server.New`
+   (+ `WithoutRequestStats` opt-out) + `Server-Timing`/`X-Request-Stats` emit +
+   `From`/`Parse` + tests. On the next dep bump, **every service** starts emitting
+   the universal payload with no code change.
+3. **go-js-proxy reference** — enrich with `phase` + `render` (CDP) + verify the
+   schema/headers live. Locks the enrichment shape.
+4. **Fleet-wide** — `fleet-runner update-dep github.com/baditaflorin/go-common@vX`
+   lights up the universal payload everywhere; enrich high-value services
+   (js-proxy-network, fetch-cache nesting) incrementally.
+5. **(Later)** optional stats sink for aggregation + a calibration job for `w_*`;
+   gateway `proxy_hide_header X-Request-Stats` on public vhosts.
 
 ## Alternatives considered
 
-* **Four bespoke implementations.** Rejected — drift + duplicated effort; this is the textbook "change go-common" case.
-* **Only `/metrics` (Prometheus).** Aggregate, not per-request; can't debug or price a single request. `reqstats` complements it.
-* **OpenTelemetry spans.** Heavier; the fleet already has a call-tracer + `telemetry` package. `reqstats` is the lightweight response-embedded view; it can export to OTel later.
-* **Container/cgroup per-request accounting.** Impossible — cgroup stats are per-container.
-* **Go-process CPU/RAM as the cost basis.** Rejected for billing — concurrency-contaminated and misses the Chromium cost. Kept only as labeled `approx`.
+* **Per-service bespoke stats.** Rejected — 220 integrations, guaranteed drift.
+  The whole point is one middleware in go-common.
+* **Only `/metrics` (Prometheus).** Aggregate, not per-request; can't debug or
+  price one request. `reqstats` complements it (and the generic cost path *reuses*
+  the container CPU that `/metrics` already exposes).
+* **OpenTelemetry spans everywhere.** Heavier; per-request response-embedding is
+  lighter and devtools-native. `reqstats` can export to OTel later.
+* **Per-goroutine CPU via `RUSAGE_THREAD` + `LockOSThread`.** Pins each request to
+  an OS thread for the handler — defeats the scheduler, real overhead. Rejected;
+  the proportional model gets defensible CPU without it.
+* **Go-process deltas as the cost basis.** Rejected for billing
+  (concurrency-contaminated); kept as labeled `approx`.
 
 ## Risks & open questions
 
-* **Header size** for deep `upstream` nesting → summarize beyond one hop; `X-Request-Stats` stays compact ASCII JSON (base64 only if an escaping issue surfaces).
-* **`approx` misused for billing** → mitigated by the embedded `note` + keeping it out of the documented cost formula + naming.
-* **CDP `getMetrics` failure** must not fail the render → best-effort; omit `render` on error.
-* **Privacy** — stats carry no URL/PII, only sizes/durations; safe to log.
+* **Header size** on deep `upstream` nesting → summarize beyond one hop; keep
+  `X-Request-Stats` compact ASCII JSON.
+* **`approx` misused for billing** → embedded `note` + excluded from the cost
+  formula + naming.
+* **Public info-disclosure** of `X-Request-Stats` → default-on + gateway strip on
+  external vhosts (or the `X-Debug` gate if preferred).
+* **Default-on is a fleet-wide behavior change** (new headers on every response) →
+  harmless (additive headers), opt-out available; roll via the normal dep bump.
+* **Middleware overhead** must be negligible (two `time.Now`, one `getrusage`, one
+  `ReadMemStats`) — `ReadMemStats` has a small STW cost; if it shows up, sample it
+  or use a cheaper alloc counter.
 
 ## Consequences
 
-* go-common gains a fleet-wide `reqstats` package; every adopting service's responses carry `Server-Timing` (devtools-debuggable) + `X-Request-Stats`.
-* A **defensible per-request cost basis** (Chromium CPU + bytes), enabling differential pricing.
-* One-glance per-request debugging across the whole render chain via the nested envelope.
+* go-common gains a fleet-wide `reqstats` middleware; **every** service's responses
+  carry `Server-Timing` (devtools-debuggable) + `X-Request-Stats` after one dep
+  bump, no per-service code.
+* A defensible per-request cost basis for *both* render (CDP) and generic
+  (proportional) services.
+* One-glance per-request debugging across any service, and across the whole chain
+  via nested `upstream`.
