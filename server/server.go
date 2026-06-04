@@ -138,6 +138,29 @@ func WithKeystoreAuth(localTokens ...string) Option {
 	}
 }
 
+// WithKeystoreAuthMesh is WithKeystoreAuth plus middleware.TrustPrivateMesh:
+// a request whose actual TCP peer is a private/loopback/mesh IP and that
+// carries no gateway trust header is treated as already-authenticated. Use
+// for an internal-only, expensive-to-call service (e.g. the chromedp
+// js-proxy) so sibling containers on the docker mesh can reach it no-auth —
+// mirroring the fetch cache — while its PUBLIC gateway URL stays fully
+// keystore-gated (public clients only ever arrive via nginx, which sets the
+// gateway header). localTokens behave exactly as in WithKeystoreAuth.
+func WithKeystoreAuthMesh(localTokens ...string) Option {
+	return func(s *Server) {
+		ks := apikey.NewCache(apikey.New())
+		if s.PromAuthCollectors != nil {
+			ks.Observer = s.PromAuthCollectors
+		}
+		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
+			Verifier:         ks,
+			LocalTokens:      localTokens,
+			Observer:         s.PromAuthCollectors,
+			TrustPrivateMesh: true,
+		}))
+	}
+}
+
 // WithDependencies attaches a dep registry whose probes are run on every
 // /health request. Health JSON gains a "dependencies":[…] array and the
 // top-level "status" flips to "degraded" if any probe fails (HTTP stays
