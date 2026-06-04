@@ -23,6 +23,7 @@ import (
 	"github.com/baditaflorin/go-common/middleware"
 	openapipkg "github.com/baditaflorin/go-common/openapi"
 	"github.com/baditaflorin/go-common/promx"
+	"github.com/baditaflorin/go-common/reqstats"
 	"github.com/baditaflorin/go-common/safehttp"
 )
 
@@ -87,6 +88,11 @@ type Server struct {
 	// idleTimeout overrides the http.Server IdleTimeout when > 0.
 	// Default (0) uses DefaultIdleTimeout. Set via WithServerTimeouts.
 	idleTimeout time.Duration
+
+	// noRequestStats disables the default reqstats middleware (which emits
+	// Server-Timing + X-Request-Stats on every response). Set via
+	// WithoutRequestStats; default is enabled.
+	noRequestStats bool
 }
 
 // DefaultMaxBodyBytes is the default request body size limit applied
@@ -129,6 +135,14 @@ func WithMaxBodyBytes(n int64) Option {
 // Default: DefaultDrainTimeout (30 s).
 func WithDrainTimeout(d time.Duration) Option {
 	return func(s *Server) { s.drainTimeout = d }
+}
+
+// WithoutRequestStats disables the default per-request reqstats middleware
+// (Server-Timing + X-Request-Stats headers). Enabled by default for every
+// service; opt out only if the extra headers or the cheap getrusage sample
+// are genuinely unwanted.
+func WithoutRequestStats() Option {
+	return func(s *Server) { s.noRequestStats = true }
 }
 
 // WithWriteTimeout overrides the http.Server WriteTimeout (the
@@ -411,18 +425,23 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	mountSchema(srv)
 
 	// Add Default Middlewares (executed in slice order — [0] is outermost)
-	// 1. Graph observer (outermost: sees final status + latency including
-	//    other middleware overhead, records inbound Event)
+	// 0. reqstats (outermost: measures total wall-time incl. all middleware,
+	//    emits Server-Timing + X-Request-Stats on every response)
+	// 1. Graph observer (sees final status + latency, records inbound Event)
 	// 2. RequestID
 	// 3. Logging (injects per-request slog logger into context)
 	// 4. BodyLimit (rejects oversized bodies before auth / handler)
 	// 5. Metrics (Record Status) — JSON snapshot surface
 	// 6. PromHTTP (Record Status) — Prometheus surface
-	defaultMWs := []middleware.Middleware{
+	defaultMWs := []middleware.Middleware{}
+	if !srv.noRequestStats {
+		defaultMWs = append(defaultMWs, reqstats.Middleware(srv.Config.AppName, srv.Config.Version))
+	}
+	defaultMWs = append(defaultMWs,
 		graph.Middleware,
 		middleware.RequestID,
 		middleware.Logging,
-	}
+	)
 	if srv.maxBodyBytes > 0 {
 		defaultMWs = append(defaultMWs, bodyLimitMiddleware(srv.maxBodyBytes))
 	}
