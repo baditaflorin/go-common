@@ -8,6 +8,20 @@ propagated to every fleet repo via `fleet-runner inject`.
 If you find a stale copy that differs from this one, the registry copy
 wins — refresh and re-propagate, don't fork it.
 
+> ## ⚠️ RULE ZERO — work against `origin/main`, NOT stale workspace code
+>
+> **Before you read, triage, build, bump, or deploy ANYTHING:**
+> `git fetch origin --tags` first, then operate against `origin/main`
+> (via `git show origin/main:<file>` or a fresh
+> `git worktree add … origin/main`). The shared
+> `/root/workspace/<repo>/` working tree is whatever the last (often
+> parallel) agent left it — routinely **months stale**. Acting on it
+> ships old code, opens PRs against already-fixed bugs, and lets
+> concurrent agents stomp each other. `fleet-runner build-test` runs
+> against the working tree and is NOT freshness-correct — confirm any
+> "failure" against a fresh `origin/main` worktree before triaging.
+> Details below under "pull often, push often." DON'T SKIP THIS.
+
 Per-service specifics (port, mesh, slug, version, category) live in
 the repo's own `service.yaml` + `deploy.yaml` + `README.md`. This file
 is intentionally generic — it explains the *fleet*, not any one
@@ -628,7 +642,8 @@ fleet-runner health [--insecure]             # /health on all live container ser
 fleet-runner smoke  [--insecure]             # GET example_url on all container services
 fleet-runner pages-audit                     # verify pages_url 200s for every kind=static entry
 fleet-runner build-test                      # go test ./... in every kind=container,language=go workspace
-fleet-runner update-dep <mod@ver>            # bump dep across all language=go repos
+fleet-runner update-dep <mod@ver>            # bump dep across all language=go repos (or a subset: --repos a,b / --filter mesh=…,category=…,ids=a;b)
+fleet-runner deploy-all                       # redeploy a filtered set (--repos a,b / --mesh / --framework); honors the exclude list (won't touch infra)
 fleet-runner inject <src> <dest>             # copy a file into every repo (still all kinds, on purpose)
 fleet-runner exec   "<cmd>"                  # shell command in every repo (filterable)
 fleet-runner push   "<msg>"                  # commit+push all dirty repos
@@ -660,10 +675,20 @@ fleet-runner deploy <repo> --bootstrap --force-build --skip-smoke
 compose at HEAD and render one for each in a single pass.
 
 All commands accept `--filter kind=container,language=go` (and so on)
-to narrow the set. All commands accept `--tokens-used N --model NAME`
-for LLM accounting. **`kind: static` entries are skipped by default
-on every container-shaped operation** — don't try to deploy or health-
-check a static Pages site.
+to narrow the set. The filter axes are `mesh`, `kind`, `language`,
+`category`, and `ids` (the surgical "just these repos" axis — list
+members separated by `;` since commas separate `k=v` pairs). For
+`update-dep` and `deploy-all` there's also a dedicated `--repos a,b,c`
+convenience flag (accepts registry ids OR workspace dir names). So a
+two-repo dep bump no longer needs hand-edits:
+`fleet-runner update-dep --push --repos go_foo,go_bar <mod@ver>`.
+`update-dep` keeps Kind=container + Language=go defaults, so a targeted
+bump never reaches a static/non-Go repo, and the exclude list always
+wins over an explicitly-named repo (you cannot `--repos` your way into
+redeploying the keystore). All commands accept `--tokens-used N
+--model NAME` for LLM accounting. **`kind: static` entries are skipped
+by default on every container-shaped operation** — don't try to deploy
+or health-check a static Pages site.
 
 ## Infrastructure topology
 
@@ -879,6 +904,26 @@ copy elsewhere, mirror the same shape.
 
 ### Recipe — Allocating a port for a new service (or resolving a conflict)
 
+> **A host_port collision does NOT fail loudly — it clobbers a live
+> service.** `fleet-runner deploy` resolves the dockerhost compose dir
+> **by host_port**. If you hand-pick a port another service already
+> owns, `deploy <your-service>` finds the *other* service's
+> `/opt/services/<that-repo>/` directory, overwrites its
+> `docker-compose.yml` with your image, and rolls your container in
+> place — **silently evicting the live service that owned the port**.
+> Observed 2026-05-31: `fleet-pipe` registered on a hand-picked `18256`
+> took down `svg-icon-inventory` (which already owned 18256), because
+> the deploy deployed pipe into svg's compose dir. **Always take the
+> port from `allocate-port`; never hand-pick.**
+>
+> Recovery if you collide: (1) `docker compose down` your squatter in
+> the victim's dir to free the port; (2) `fleet-runner deploy
+> <victim_repo> --bootstrap --force-build` — a *plain* deploy is fooled
+> into a no-op when the squatter happens to report the same version, so
+> force it; (3) move your service to a free port in BOTH the registry
+> (`overrides.json` → regen → push) and the repo (Dockerfile, compose,
+> service.yaml, deploy.yaml), then redeploy.
+
 **Canonical (preferred):**
 
 ```bash
@@ -920,8 +965,9 @@ your service's port if the squatter has a legitimate registered claim.
 ### Recipe — Bumping a service version (atomically across all files)
 
 **Canonical:** `fleet-runner bump-version` updates `service.yaml`, any
-`const Version = "..."` in `main.go`/`version.go`, creates the git
-tag, and (with `--push`) pushes commit + tag together:
+`const Version = "..."` in `main.go`/`version.go`, prepends a
+`CHANGELOG.md` entry (see "Per-repo CHANGELOG.md" above), creates the
+git tag, and (with `--push`) pushes commit + tag together:
 
 ```bash
 # Local bump (writes files, prints next steps for review)
@@ -929,6 +975,12 @@ ssh root@0docker.com 'pct exec 108 -- /usr/local/bin/fleet-runner bump-version g
 
 # Atomic bump + commit + tag + push (one-shot)
 ssh root@0docker.com 'pct exec 108 -- /usr/local/bin/fleet-runner bump-version go_<repo> patch --push'
+
+# Write a richer changelog entry instead of the auto-derived commit list:
+ssh root@0docker.com 'pct exec 108 -- /usr/local/bin/fleet-runner bump-version go_<repo> minor --changelog "### Added
+- new /foo endpoint
+### Fixed
+- BREAKING: renamed ?q= to ?url=" --push'
 
 # Variants:  minor  /  major  /  --set 2.0.0
 ```
@@ -1159,7 +1211,11 @@ for the canonical pattern.
 
 1. **"Port 8313 is taken, I'll pick 8500 and edit `service.yaml`."** Use
    `fleet-runner allocate-port` and register the squatter. See "Allocating
-   a port" above.
+   a port" above. **And never hand-pick a port at all** — deploy resolves
+   the dockerhost compose dir by host_port, so a collision silently
+   clobbers + evicts the live service that owns it (the 2026-05-31
+   fleet-pipe/svg-icon-inventory incident). Always take the number from
+   `allocate-port`.
 
 2. **"I bumped the version in `service.yaml` and pushed."** Did you tag
    git AND push the tag AND update the docker image tag? Use
@@ -1200,12 +1256,131 @@ for the canonical pattern.
    binary, the recovery is still: `git -C /root/workspace/<repo>
    tag -d <ver>` then re-run bump-version.
 
+9. **`./binary &` smoke tests on Builder LXC 108.** Don't. The builder
+   is a build host and `fleet-runner` host — it is **not** a service
+   host. When an agent runs `go build && ./binary &` inside
+   `/root/workspace/<repo>/` to "quickly check the handler responds,"
+   the binary backgrounds, the agent's SSH session ends, and the
+   process becomes an orphan (`PPid=1`) listening on whichever port it
+   bound. Twelve such orphans were found on 2026-05-21 — three of them
+   silently squatting *registered* host_ports (e.g. 18107/18224),
+   poised to confuse the next agent who deploys the canonical service
+   to dockerhost and runs `ss -tlnp` to debug. Canonical smoke is the
+   `fleet-runner deploy` smoke gate against the dockerhost-side
+   container, not an in-process binary on the builder. If you genuinely
+   need to exercise the handler before `deploy`, run `go test ./...`
+   (which uses `httptest`) — no port binding, no orphan risk. If you
+   *must* bind a port, use `127.0.0.1:0` (ephemeral) and `kill` it on
+   the same line that started it.
+
+## SQLite safety — mandatory three rules (enforced 2026-05-26)
+
+`modernc.org/sqlite` uses real `fcntl` syscalls for WAL file locking.
+Go creates one OS thread per goroutine blocking on a real syscall — unlike
+HTTP or postgres, which go through Go's epoll/kqueue poller and do NOT
+spawn threads. Under high `/verify` traffic, an uncancellable goroutine per
+request × 5s busy_timeout = 1388 OS threads = 48 GB RAM exhausted on the
+host (go-apikey-service incident 2026-05-26).
+
+**Any service that opens a `modernc.org/sqlite` DB MUST follow all three:**
+
+```go
+// 1. Serialise writes at the Go pool level (channel wait, not fcntl wait).
+//    This prevents thread explosion: Go queues at the pool, not the syscall.
+db.SetMaxOpenConns(1)
+db.SetMaxIdleConns(1)
+
+// 2. Cap busy_timeout — belt-and-suspenders, protects against pool leaks.
+//    Use ≤ 500ms.
+dsn := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(500)&..."
+
+// 3. Context-bound ALL goroutines that write to the DB.
+//    Never: go db.Exec(...)
+//    Always:
+go func(k string, ts int64) {
+    ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+    defer cancel()
+    _, _ = db.ExecContext(ctx, `UPDATE ...`, ts, k)
+}(key, now)
+```
+
+**Audit one-liner** — run this in any Go fleet repo workspace to find
+violations before they cause an incident:
+
+```bash
+# Find SQLite services missing safety rules
+for dir in /opt/services/*/; do
+  go_mod="$dir/go.mod"
+  main="$dir/main.go"
+  [ -f "$go_mod" ] || continue
+  grep -q "modernc.org/sqlite" "$go_mod" || continue
+  echo "=== $dir ==="
+  grep -q "SetMaxOpenConns" "$main" || echo "  MISSING: SetMaxOpenConns"
+  grep -q "busy_timeout" "$main" && \
+    grep -oP 'busy_timeout\(\K[0-9]+' "$main" | \
+    awk '{if($1>500) print "  HIGH busy_timeout: "$1"ms (reduce to ≤500)"}'
+  grep -n "go db\." "$main" 2>/dev/null | grep -v '//' | \
+    sed 's/^/  FIRE-AND-FORGET goroutine: /'
+done
+```
+
+**Current fleet status** (as of 2026-05-26):
+- `go-apikey-service`: fixed (was the incident service)
+- `go-fleet-persona`: clean (had `SetMaxOpenConns(1)` + context calls already)
+- All other services: use postgres/redis (no fcntl risk)
+
 ## Fleet-wide changes — change `go-common`, not consumers
 
 The cardinal rule when you'd otherwise touch every service: **modify
 the library and bump the dep.** A `go-common` patch plus
-`fleet-runner update-dep github.com/baditaflorin/go-common@vX.Y.Z`
-beats 130 PRs.
+`fleet-runner update-dep --push github.com/baditaflorin/go-common@vX.Y.Z`
+beats 130 PRs. To bump only a subset (stragglers, one mesh, one
+category) add `--repos a,b` or `--filter mesh=…,category=…,ids=a;b` —
+`update-dep` is no longer fleet-wide-only.
+
+**`go-common` ≥ v0.55.0 — `/selftest` bypasses the fetch cache.** The
+`selftest.Suite` now runs every check with
+`safehttp.WithoutFetchCacheContext(ctx)`, so `/selftest` validates the
+service's REAL outbound path (DNS + TLS + origin) instead of routing
+live probes through a cold fleet cache. Before this, live-probe
+selftests (e.g. a detector fetching vercel/netlify/fly) routed through
+the cold cache on the freshly-built image and blew past
+`fleet-runner deploy`'s 8 s smoke `/selftest` timeout — false-failing
+otherwise-healthy deploys and rolling them back. If you see a deploy
+roll back on a `/selftest` timeout while `/health` is green, the fix is
+to bump the service to go-common ≥ v0.55.0 and redeploy; do NOT reach
+for `--skip-smoke`. Need a single client to skip the cache outside
+selftest? `safehttp.WithoutFetchCache()` (per-client) or
+`WithoutFetchCacheContext(ctx)` (per-request).
+
+## Per-repo `CHANGELOG.md` — capture what changed at each version
+
+Every container repo keeps a **`CHANGELOG.md`** at its root, newest
+entry on top, in the same shape `go-common` uses:
+
+```markdown
+## <version> — <YYYY-MM-DD>
+
+### Added | Changed | Fixed | Removed
+- one bullet per meaningful change; lead breaking changes with **BREAKING:**
+```
+
+Why: with ~220 services moving independently, "what shipped in this
+version and could it have broken X?" is otherwise un-answerable without
+trawling git. A per-version, human-and-AI-written entry makes
+regressions diff-able at a glance and feeds the fleet-wide
+`fleet-runner changelog` digest with intent (not just PR titles).
+
+**You (the agent) write the entry — you just made the change, so you
+know what happened and why.** `fleet-runner bump-version` scaffolds it
+for you: it prepends a `## <newver> — <date>` block to `CHANGELOG.md`
+(creating the file if absent), auto-populating it with the commit
+subjects since the previous tag. Pass `--changelog "### Added\n- …"`
+to write a richer entry instead of the auto-derived one. The changelog
+edit rides the same atomic bump commit as `service.yaml` + the tag, so
+a version never lands without a changelog line. This is opt-out only by
+omission — don't bump a service's version without leaving a changelog
+entry.
 
 ## Local workflow
 
