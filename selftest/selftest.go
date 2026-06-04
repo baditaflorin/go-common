@@ -36,6 +36,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/baditaflorin/go-common/safehttp"
 )
 
 // DefaultCheckTimeout is the per-check timeout applied when the
@@ -246,6 +248,14 @@ func (s *Suite) run(parent context.Context, cat Category) Response {
 	if parent == nil {
 		parent = context.Background()
 	}
+
+	// Selftest validates the service's REAL outbound path (DNS + TLS +
+	// origin), so disable fetch-cache delegate routing for every check's
+	// safehttp request. Routing live probes through a cold fleet cache made
+	// them slow enough to trip `fleet-runner deploy`'s 8 s smoke /selftest
+	// timeout and false-fail otherwise-healthy deploys. Checks that wired an
+	// explicit per-client WithFetchDelegate still route through it.
+	parent = safehttp.WithoutFetchCacheContext(parent)
 
 	// Snapshot the slice under the read lock.
 	s.mu.RLock()

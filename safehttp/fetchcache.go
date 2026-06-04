@@ -93,3 +93,44 @@ func WithFetchDelegate(d FetchDelegate) Option {
 func WithoutFetchCache() Option {
 	return func(o *options) { o.noFetchCache = true }
 }
+
+// ctxKeyNoFetchCache is the private context key that disables fetch-cache
+// delegate routing for a single request, regardless of how the client was
+// constructed. Per-request opt-out, complementary to the per-client
+// WithoutFetchCache() option.
+type ctxKeyNoFetchCache struct{}
+
+// WithoutFetchCacheContext returns a child context that disables fetch-cache
+// delegate routing for any safehttp request made with it. Eligible GETs go
+// direct to origin instead of through the process-wide DefaultFetchDelegate.
+//
+// This is a per-request override that works even on clients built before
+// server.New installed the default delegate, and even on the package-level
+// default client — without having to thread a WithoutFetchCache() option
+// through every call site.
+//
+// The canonical user is the selftest suite: /selftest must validate the
+// service's REAL outbound path (DNS + TLS + origin), not whatever the fleet
+// cache happens to have warm. Routing selftest's live probes through a cold
+// cache made them slow enough to trip `fleet-runner deploy`'s 8 s smoke
+// /selftest timeout, false-failing otherwise-healthy deploys and rolling
+// them back. Bypassing the cache for selftest keeps the gate fast and honest.
+//
+// An explicit per-client WithFetchDelegate still wins — a caller that wired
+// a delegate on purpose is asking for it.
+func WithoutFetchCacheContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, ctxKeyNoFetchCache{}, true)
+}
+
+// fetchCacheDisabledByContext reports whether ctx carries the
+// WithoutFetchCacheContext opt-out flag.
+func fetchCacheDisabledByContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(ctxKeyNoFetchCache{}).(bool)
+	return v
+}
