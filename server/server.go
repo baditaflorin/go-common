@@ -16,6 +16,7 @@ import (
 	"github.com/baditaflorin/go-common/client"
 	"github.com/baditaflorin/go-common/config"
 	"github.com/baditaflorin/go-common/depcheck"
+	"github.com/baditaflorin/go-common/env"
 	"github.com/baditaflorin/go-common/fleetfetch"
 	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/metrics"
@@ -69,6 +70,12 @@ type Server struct {
 	// to finish after receiving SIGTERM. Set via WithDrainTimeout.
 	drainTimeout time.Duration
 
+	// readTimeout overrides the http.Server ReadTimeout when > 0.
+	// Default (0) uses DefaultReadTimeout. Set via WithReadTimeout or
+	// WithServerTimeouts. Raise for services that accept slow/large
+	// request bodies (streamed uploads).
+	readTimeout time.Duration
+
 	// writeTimeout overrides the http.Server WriteTimeout when > 0.
 	// Default (0) uses DefaultWriteTimeout. Services that legitimately
 	// produce slow responses (e.g. a JS-render escalation through the
@@ -76,6 +83,10 @@ type Server struct {
 	// WithWriteTimeout — otherwise the Go HTTP server closes the
 	// connection mid-response and the gateway surfaces a spurious 502.
 	writeTimeout time.Duration
+
+	// idleTimeout overrides the http.Server IdleTimeout when > 0.
+	// Default (0) uses DefaultIdleTimeout. Set via WithServerTimeouts.
+	idleTimeout time.Duration
 }
 
 // DefaultMaxBodyBytes is the default request body size limit applied
@@ -135,6 +146,44 @@ func WithWriteTimeout(d time.Duration) Option {
 	return func(s *Server) {
 		if d > 0 {
 			s.writeTimeout = d
+		}
+	}
+}
+
+// WithReadTimeout overrides the http.Server ReadTimeout (the deadline
+// for reading the entire request, headers + body). Default:
+// DefaultReadTimeout (10 s). Raise this for services that accept slow
+// or large request bodies (e.g. streamed uploads). d <= 0 is ignored
+// (keeps the default).
+func WithReadTimeout(d time.Duration) Option {
+	return func(s *Server) {
+		if d > 0 {
+			s.readTimeout = d
+		}
+	}
+}
+
+// WithServerTimeouts sets all three http.Server timeouts in one call:
+// ReadTimeout, WriteTimeout, and IdleTimeout. Any argument <= 0 is
+// ignored, leaving that timeout at its default
+// (DefaultReadTimeout / DefaultWriteTimeout / DefaultIdleTimeout) — so
+// callers can raise just one or two by passing 0 for the rest:
+//
+//	// raise only the write deadline, keep read + idle at defaults
+//	server.WithServerTimeouts(0, 70*time.Second, 0)
+//
+// Equivalent to applying WithReadTimeout, WithWriteTimeout, and a
+// matching idle override together.
+func WithServerTimeouts(read, write, idle time.Duration) Option {
+	return func(s *Server) {
+		if read > 0 {
+			s.readTimeout = read
+		}
+		if write > 0 {
+			s.writeTimeout = write
+		}
+		if idle > 0 {
+			s.idleTimeout = idle
 		}
 	}
 }
@@ -395,6 +444,49 @@ func (s *Server) Handler() http.Handler {
 	return s.wrapDefaults(middleware.Chain(s.Mux, s.Middlewares...))
 }
 
+// resolveTimeout picks the effective value for one http.Server timeout.
+// Precedence, highest first:
+//
+//  1. an explicit option override (WithWriteTimeout / WithReadTimeout /
+//     WithServerTimeouts set the field > 0) — a service's deliberate,
+//     code-reviewed intent always wins;
+//  2. the SERVER_*_TIMEOUT_SECONDS env knob (> 0) — lets ops raise a
+//     render-heavy service's deadline via compose without a code change.
+//     This is the path bare server.Run services (which don't pass an
+//     Option) use to lift the 30 s write cap that 502s cold JS renders;
+//  3. the compiled-in Default* — unchanged behaviour for every service
+//     that sets neither.
+//
+// A non-positive env value (unset, empty, "0", negative, or garbage) is
+// ignored and falls through to the default — env.Int already logs and
+// returns the 0 default on a parse error.
+func resolveTimeout(override time.Duration, envSecondsVar string, def time.Duration) time.Duration {
+	if override > 0 {
+		return override
+	}
+	if n := env.Int(envSecondsVar, 0); n > 0 {
+		return time.Duration(n) * time.Second
+	}
+	return def
+}
+
+// buildHTTPServer constructs the *http.Server with the resolved
+// timeouts. Each timeout falls back to its Default* when neither the
+// corresponding override field nor the SERVER_*_TIMEOUT_SECONDS env knob
+// is set, so existing services are unchanged while WithWriteTimeout /
+// WithReadTimeout / WithServerTimeouts (or the env knobs) can raise them.
+// Factored out of Start() so the resolution can be unit-tested without
+// binding a listener.
+func (s *Server) buildHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:         addr,
+		Handler:      h,
+		ReadTimeout:  resolveTimeout(s.readTimeout, "SERVER_READ_TIMEOUT_SECONDS", DefaultReadTimeout),
+		WriteTimeout: resolveTimeout(s.writeTimeout, "SERVER_WRITE_TIMEOUT_SECONDS", DefaultWriteTimeout),
+		IdleTimeout:  resolveTimeout(s.idleTimeout, "SERVER_IDLE_TIMEOUT_SECONDS", DefaultIdleTimeout),
+	}
+}
+
 // Start listens on PORT, serves requests, and performs a graceful
 // shutdown when SIGTERM or SIGINT is received. It blocks until the
 // server has drained all in-flight requests or the drain timeout
@@ -410,17 +502,7 @@ func (s *Server) Start() error {
 
 	finalHandler := s.wrapDefaults(middleware.Chain(s.Mux, s.Middlewares...))
 
-	writeTimeout := DefaultWriteTimeout
-	if s.writeTimeout > 0 {
-		writeTimeout = s.writeTimeout
-	}
-	httpSrv := &http.Server{
-		Addr:         addr,
-		Handler:      finalHandler,
-		ReadTimeout:  DefaultReadTimeout,
-		WriteTimeout: writeTimeout,
-		IdleTimeout:  DefaultIdleTimeout,
-	}
+	httpSrv := s.buildHTTPServer(addr, finalHandler)
 
 	if s.drain != nil {
 		// WithGracefulDrain path: wire the shutdown closure so BeginDrain
