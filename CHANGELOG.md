@@ -4,6 +4,20 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.47.1 — 2026-06-04
+
+### Fixed
+
+- **`safehttp` fetch-cache routing now reaches package-level clients** — the
+  process-wide `DefaultFetchDelegate` is resolved **at call time** in the
+  transport (mirroring `DefaultObserver`), not baked in at `NewClient`. In
+  v0.47.0 a client constructed before `server.New` installed the delegate
+  (the common case: a service builds its `safehttp` client in a package-level
+  `var` at import time) silently bypassed the cache and kept fetching origin
+  directly. Caught by a live canary (`subdomain-finder` still hit crt.sh /
+  hackertarget directly). `WithoutProxy` / `WithoutFetchCache` opt-outs and
+  per-client `WithFetchDelegate` are unchanged. Regression test added.
+
 ## v0.47.0 — 2026-06-04
 
 ### Added
