@@ -16,6 +16,7 @@ import (
 	"github.com/baditaflorin/go-common/client"
 	"github.com/baditaflorin/go-common/config"
 	"github.com/baditaflorin/go-common/depcheck"
+	"github.com/baditaflorin/go-common/fleetfetch"
 	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/metrics"
 	"github.com/baditaflorin/go-common/middleware"
@@ -199,6 +200,19 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// process, same collectors.
 	egressColl, httpColl, authColl := promx.AutoWire(cfg.AppName, cfg.Version)
 	safehttp.SetDefaultObserver(egressColl)
+
+	// Auto-wire the fleet fetch-cache delegate when FLEET_FETCH_CACHE_URL
+	// is set. From here on every safehttp client constructed in this
+	// process transparently routes its eligible outbound GETs through the
+	// fleet fetch cache (server-side singleflight + caching), with zero
+	// per-service code changes. Clients that need real direct egress
+	// (WithoutProxy SSRF probers, or explicit WithoutFetchCache) are not
+	// affected — see safehttp.NewClient delegate resolution. A cache
+	// outage falls through to direct egress, so this is fail-open.
+	if cacheURL := os.Getenv(fleetfetch.EnvCacheURL); cacheURL != "" {
+		ff := fleetfetch.NewClient() // reads FLEET_FETCH_CACHE_URL + API key from env
+		safehttp.SetDefaultFetchDelegate(fetchCacheDelegate{ff})
+	}
 	// AutoWire has already installed process-wide observers for
 	// response.Envelope, degraded.Sink, fleetfetch.Client,
 	// circuitbreaker, workpool, backoffcoord, and the safehttp

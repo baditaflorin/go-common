@@ -83,6 +83,16 @@ type extrasTransport struct {
 	// attempt. Used by promx to record fleet-canonical Prometheus
 	// metrics without coupling safehttp to client_golang.
 	observer EgressObserver
+
+	// fetchDelegate (optional) routes eligible outbound GETs (no body,
+	// no Range header) through an alternate fetcher — the fleet fetch
+	// cache — so many services fetching the same URL collapse to one
+	// origin fetch. On a delegate error/nil result we fall through to
+	// the normal direct path: a cache outage must never break a request.
+	// Delegated GETs do NOT emit the safehttp egress observer (the fetch
+	// happened in the cache, which emits its own fleet_fetch_cache_*
+	// metrics).
+	fetchDelegate FetchDelegate
 	// proxyFn is the same function passed to http.Transport.Proxy so
 	// the observer can label each request with via_proxy / proxy_host.
 	// nil means WithoutProxy was set (always direct).
@@ -120,6 +130,30 @@ const (
 
 func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	host := req.URL.Hostname()
+
+	// Fetch-cache routing: a plain GET (no request body, no Range
+	// header) is eligible to be served by the fetch-cache delegate
+	// instead of hitting origin directly. This is what lets many
+	// services fetching the same URL collapse to one origin fetch
+	// (the cache does server-side singleflight + caching). On any
+	// delegate error or nil result we FALL THROUGH to the normal
+	// direct path below — a cache outage must never break a request.
+	if t.fetchDelegate != nil && req.Method == http.MethodGet && req.Body == nil && req.Header.Get("Range") == "" {
+		if res, err := t.fetchDelegate.FetchGet(req.Context(), req.URL.String(), req.Header); err == nil && res != nil {
+			return &http.Response{
+				StatusCode:    res.Status,
+				Status:        http.StatusText(res.Status),
+				Header:        cloneOrEmptyHeader(res.Header),
+				Body:          io.NopCloser(bytes.NewReader(res.Body)),
+				ContentLength: int64(len(res.Body)),
+				Request:       req,
+				Proto:         "HTTP/1.1",
+				ProtoMajor:    1,
+				ProtoMinor:    1,
+			}, nil
+		}
+		// delegate error / nil → fall through to direct egress.
+	}
 
 	// Pre-call: if we've recently observed a 5xx/429 for this host,
 	// consult the backoff coordinator. Fail-open on any error.
@@ -508,6 +542,16 @@ func (t *extrasTransport) resolveProxy(req *http.Request) (viaProxy bool, proxyH
 		return false, ""
 	}
 	return true, u.Host
+}
+
+// cloneOrEmptyHeader returns a clone of h, or a fresh empty header when
+// h is nil — so the synthesized *http.Response always carries a usable
+// (and caller-mutable, non-aliased) Header map.
+func cloneOrEmptyHeader(h http.Header) http.Header {
+	if h == nil {
+		return http.Header{}
+	}
+	return h.Clone()
 }
 
 // responseBytes returns Content-Length if set and parseable; 0 otherwise.

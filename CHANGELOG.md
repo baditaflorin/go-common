@@ -4,6 +4,32 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.47.0 — 2026-06-04
+
+### Added
+
+- **`safehttp` fetch-cache routing — transparent fleet-wide GET dedup** —
+  a new `FetchDelegate` hook lets eligible outbound GETs route through the
+  fleet fetch-cache (`fleetfetch`) instead of hitting origin directly, so
+  many services fetching the same URL collapse to one origin fetch
+  (server-side singleflight + caching). New API: `safehttp.FetchDelegate`
+  / `FetchResult`, `SetDefaultFetchDelegate` / `DefaultFetchDelegate`,
+  `WithFetchDelegate` (per-client), `WithoutFetchCache` (per-client opt-out).
+  `server.New` auto-installs a `fleetfetch`-backed delegate when
+  `FLEET_FETCH_CACHE_URL` is set — **zero per-service code changes**; flip
+  the env var + bump the dep to enable fleet-wide.
+  - Only plain GETs (no body, no `Range`) are routed; any delegate error or
+    nil result **falls through** to the normal direct path — a cache outage
+    never breaks a request.
+  - `WithoutProxy` (SSRF probers / direct-egress clients) and
+    `WithoutFetchCache` clients are NOT routed through the cache — they keep
+    real origin egress. An explicit `WithFetchDelegate` still applies.
+  - Delegated GETs intentionally skip the `safehttp_egress_*` observer (the
+    fetch happens in the cache, which emits its own `fleet_fetch_cache_*`
+    metrics) — so origin egress visibly shifts from per-service to the cache.
+  - `safehttp` does not import `fleetfetch` (the adapter lives in `server`),
+    preserving the one-directional dependency.
+
 ## v0.42.0 — 2026-05-31
 
 ### Added
