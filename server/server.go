@@ -68,6 +68,14 @@ type Server struct {
 	// drainTimeout is how long Start() waits for in-flight requests
 	// to finish after receiving SIGTERM. Set via WithDrainTimeout.
 	drainTimeout time.Duration
+
+	// writeTimeout overrides the http.Server WriteTimeout when > 0.
+	// Default (0) uses DefaultWriteTimeout. Services that legitimately
+	// produce slow responses (e.g. a JS-render escalation through the
+	// fleet fetch-cache that can take ~30-60s cold) MUST raise this via
+	// WithWriteTimeout — otherwise the Go HTTP server closes the
+	// connection mid-response and the gateway surfaces a spurious 502.
+	writeTimeout time.Duration
 }
 
 // DefaultMaxBodyBytes is the default request body size limit applied
@@ -78,6 +86,15 @@ const DefaultMaxBodyBytes = 4 << 20 // 4 MiB
 // DefaultDrainTimeout is how long Start waits for in-flight requests
 // after receiving SIGTERM before forcing closure.
 const DefaultDrainTimeout = 30 * time.Second
+
+// Default http.Server timeouts applied by Start. WriteTimeout is
+// overridable per-service via WithWriteTimeout for services that
+// legitimately produce slow responses (e.g. a cold JS render).
+const (
+	DefaultReadTimeout  = 10 * time.Second
+	DefaultWriteTimeout = 30 * time.Second
+	DefaultIdleTimeout  = 120 * time.Second
+)
 
 type Option func(*Server)
 
@@ -101,6 +118,25 @@ func WithMaxBodyBytes(n int64) Option {
 // Default: DefaultDrainTimeout (30 s).
 func WithDrainTimeout(d time.Duration) Option {
 	return func(s *Server) { s.drainTimeout = d }
+}
+
+// WithWriteTimeout overrides the http.Server WriteTimeout (the
+// per-connection deadline for writing a response, measured from the end
+// of the request-header read). Default: DefaultWriteTimeout (30 s).
+//
+// Raise this for services that legitimately produce slow responses —
+// e.g. a JS-render escalation through the fleet fetch-cache, where a
+// cold chromedp render of a heavy SPA can take ~30-60 s. Without it the
+// Go HTTP server closes the connection at 30 s mid-response and the
+// gateway returns a spurious 502 even though the handler completed.
+// Pass a value comfortably above the handler's own context budget.
+// d <= 0 is ignored (keeps the default).
+func WithWriteTimeout(d time.Duration) Option {
+	return func(s *Server) {
+		if d > 0 {
+			s.writeTimeout = d
+		}
+	}
 }
 
 // WithKeystoreAuth mounts the canonical fleet auth middleware
@@ -374,12 +410,16 @@ func (s *Server) Start() error {
 
 	finalHandler := s.wrapDefaults(middleware.Chain(s.Mux, s.Middlewares...))
 
+	writeTimeout := DefaultWriteTimeout
+	if s.writeTimeout > 0 {
+		writeTimeout = s.writeTimeout
+	}
 	httpSrv := &http.Server{
 		Addr:         addr,
 		Handler:      finalHandler,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		ReadTimeout:  DefaultReadTimeout,
+		WriteTimeout: writeTimeout,
+		IdleTimeout:  DefaultIdleTimeout,
 	}
 
 	if s.drain != nil {

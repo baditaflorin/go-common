@@ -1,6 +1,34 @@
 package server
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/baditaflorin/go-common/config"
+)
+
+func TestWithWriteTimeout(t *testing.T) {
+	cfg := &config.Config{AppName: "go_wt_test", Version: "0.0.0", Port: "0"}
+
+	// Default: no option → writeTimeout field stays 0, Start uses
+	// DefaultWriteTimeout.
+	if got := New(cfg).writeTimeout; got != 0 {
+		t.Fatalf("default writeTimeout: got %v, want 0 (= DefaultWriteTimeout at Start)", got)
+	}
+
+	// Override applies.
+	if got := New(cfg, WithWriteTimeout(65*time.Second)).writeTimeout; got != 65*time.Second {
+		t.Fatalf("WithWriteTimeout(65s): got %v, want 65s", got)
+	}
+
+	// Non-positive durations are ignored (keep the default).
+	if got := New(cfg, WithWriteTimeout(0)).writeTimeout; got != 0 {
+		t.Fatalf("WithWriteTimeout(0): got %v, want 0 (ignored)", got)
+	}
+	if got := New(cfg, WithWriteTimeout(-5*time.Second)).writeTimeout; got != 0 {
+		t.Fatalf("WithWriteTimeout(-5s): got %v, want 0 (ignored)", got)
+	}
+}
 
 func TestKebabAlias(t *testing.T) {
 	cases := []struct {
