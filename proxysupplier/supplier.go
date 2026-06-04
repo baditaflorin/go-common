@@ -29,9 +29,9 @@
 //     equal weight). Each outbound request independently picks a proxy
 //     proportional to its weight. Self-proxy entries are silently dropped.
 //     Example:
-//       PROXY_SUPPLIER=multi
-//       PROXY_URLS=http://u:p@host1:1338,http://u:p@host2:80
-//       PROXY_WEIGHTS=70,30
+//     PROXY_SUPPLIER=multi
+//     PROXY_URLS=http://u:p@host1:1338,http://u:p@host2:80
+//     PROXY_WEIGHTS=70,30
 //   - "none" / ""     — direct connection (default)
 //
 // A self-proxy guard is always applied: if the resolved URL routes back to
@@ -41,7 +41,6 @@ package proxysupplier
 
 import (
 	"fmt"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -136,58 +135,6 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// New reads PROXY_SUPPLIER (and related vars) from the environment and returns
-// the matching Supplier. It is a convenience wrapper for EnvConfig + NewFromConfig.
-func New() Supplier {
-	return NewFromConfig(EnvConfig())
-}
-
-// NewFromConfig selects the supplier described by cfg.
-// The self-proxy guard is always applied.
-func NewFromConfig(cfg Config) Supplier {
-	rules := parseNoProxy(cfg.NoProxy)
-
-	var s Supplier
-	switch cfg.Supplier {
-	case "plain_proxies":
-		rawURL := buildURL("http", cfg.Host, cfg.Port, cfg.Username, cfg.Password)
-		if rawURL == "" {
-			return noneSupplier{}
-		}
-		s = &urlSupplier{name: "plain_proxies", rawURL: rawURL, rules: rules}
-
-	case "env":
-		rawURL := cfg.ExternalProxyURL
-		if rawURL == "" {
-			proto := cfg.Protocol
-			if proto == "" {
-				proto = "http"
-			}
-			rawURL = buildURL(proto, cfg.Host, cfg.Port, cfg.Username, cfg.Password)
-		}
-		if rawURL == "" {
-			return noneSupplier{}
-		}
-		s = &urlSupplier{name: "env", rawURL: rawURL, rules: rules}
-
-	case "multi":
-		ms := newMultiSupplier(cfg.ProxyURLs, cfg.ProxyWeights)
-		if ms == nil {
-			return noneSupplier{}
-		}
-		ms.rules = rules
-		return ms // self-proxy guard already applied inside newMultiSupplier
-
-	default:
-		return noneSupplier{}
-	}
-
-	if isSelfProxy(s.ProxyURL()) {
-		return noneSupplier{}
-	}
-	return s
-}
-
 // HTTPClient returns an *http.Client configured to route through s.
 // Returns nil when s is "none" — the caller should use its default client
 // (e.g. safehttp) instead.
@@ -239,47 +186,12 @@ func HTTPClient(s Supplier, timeout time.Duration) *http.Client {
 
 // --- implementations --------------------------------------------------------
 
-type noneSupplier struct{}
-
-func (noneSupplier) Name() string     { return "none" }
-func (noneSupplier) ProxyURL() string { return "" }
-
-type urlSupplier struct {
-	name   string
-	rawURL string
-	rules  *noProxyRules
-}
-
-func (s *urlSupplier) Name() string             { return s.name }
-func (s *urlSupplier) ProxyURL() string         { return s.rawURL }
-func (s *urlSupplier) Bypass(host string) bool {
-	if s.rules == nil {
-		return false
-	}
-	return s.rules.Match(host)
-}
-
 // --- multiSupplier ----------------------------------------------------------
 
 // multiEntry is a single proxy in the weighted pool.
 type multiEntry struct {
 	rawURL string
 	weight int
-}
-
-// multiSupplier picks a proxy URL for each request using weighted random
-// selection. It satisfies [Supplier].
-type multiSupplier struct {
-	entries []multiEntry
-	total   int
-	rules   *noProxyRules
-}
-
-func (m *multiSupplier) Bypass(host string) bool {
-	if m.rules == nil {
-		return false
-	}
-	return m.rules.Match(host)
 }
 
 // newMultiSupplier parses proxyURLs (comma-separated) and weights
@@ -313,25 +225,6 @@ func newMultiSupplier(proxyURLs, proxyWeights string) *multiSupplier {
 		total += e.weight
 	}
 	return &multiSupplier{entries: entries, total: total}
-}
-
-func (m *multiSupplier) Name() string { return "multi" }
-
-// ProxyURL returns a weighted-random proxy URL from the pool.
-// Called per-request by HTTPClient's Proxy function.
-func (m *multiSupplier) ProxyURL() string {
-	if len(m.entries) == 1 {
-		return m.entries[0].rawURL
-	}
-	//nolint:gosec // non-crypto random is fine for proxy selection
-	r := rand.Intn(m.total)
-	for _, e := range m.entries {
-		r -= e.weight
-		if r < 0 {
-			return e.rawURL
-		}
-	}
-	return m.entries[len(m.entries)-1].rawURL
 }
 
 func splitTrim(s string, sep rune) []string {
