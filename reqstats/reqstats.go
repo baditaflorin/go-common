@@ -88,8 +88,12 @@ type Tracker struct {
 }
 
 // Start begins a tracker labeled with the service id + version.
+//
+// The phases map is allocated lazily on the first Mark/Phase call — most
+// requests record no phases, so this avoids a per-request map allocation on
+// the universal server path.
 func Start(svc, ver string) *Tracker {
-	return &Tracker{svc: svc, ver: ver, start: time.Now(), phases: map[string]int64{}}
+	return &Tracker{svc: svc, ver: ver, start: time.Now()}
 }
 
 // EnableApprox turns on the cheap process-CPU delta (getrusage). Default-on in
@@ -120,6 +124,9 @@ func (t *Tracker) Phase(name string) func() {
 // Mark records a named duration directly.
 func (t *Tracker) Mark(name string, d time.Duration) {
 	t.mu.Lock()
+	if t.phases == nil {
+		t.phases = make(map[string]int64, 4)
+	}
 	t.phases[name] += d.Milliseconds()
 	t.mu.Unlock()
 }

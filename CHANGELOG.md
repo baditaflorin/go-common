@@ -33,6 +33,15 @@ embedded version string (consumers pin via `go.mod`).
   to the constant `service` label, removing two `WithLabelValues` map
   lookups+locks per request (it was resolved on both the `Inc` and the deferred
   `Dec`). Per-request win on the universal `server` path.
+- **`safehttp` reuses one shared HTTP client for fleet coordinator/tracer
+  POSTs** (backoff consult + trace emission). Both paths previously built a
+  fresh `http.Client`+`http.Transport` with `DisableKeepAlives` on every call,
+  so a service degraded against an upstream opened a brand-new TCP(+TLS)
+  connection to the coordinator per request. Now pooled with keep-alives;
+  per-call deadlines still enforced via the request context.
+- **`reqstats` allocates the per-request `phases` map lazily** (on first
+  `Mark`/`Phase`) instead of in `Start`. Most requests record no phases, so
+  this drops one map allocation per request on the universal server path.
 
 ### Tooling
 

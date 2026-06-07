@@ -14,6 +14,27 @@ import (
 	"time"
 )
 
+// coordinatorClient is the shared HTTP client for the fleet coordinator and
+// tracer POSTs (backoff consult + trace emission). It is built once and
+// reused so those internal calls pool keep-alive connections instead of
+// doing a fresh TCP(+TLS) connect per call — the previous code allocated a
+// new http.Client + http.Transport with DisableKeepAlives on every single
+// invocation, so a service degraded against an upstream opened a brand-new
+// connection to the coordinator on every request. Per-call deadlines are
+// enforced via the request context (see consultBackoff/emitTrace), so this
+// client carries no fixed Timeout. SSRF/proxy guards intentionally do NOT
+// apply: these are explicit calls to known intra-mesh coordinator URLs, the
+// same posture the fleet uses for all sibling-service calls.
+var coordinatorClient = &http.Client{
+	Transport: &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: coordinatorConnectTimeout}).DialContext,
+		ResponseHeaderTimeout: coordinatorReadTimeout,
+		MaxIdleConns:          8,
+		MaxIdleConnsPerHost:   4,
+		IdleConnTimeout:       30 * time.Second,
+	},
+}
+
 // extrasTransport wraps the underlying RoundTripper with the three
 // opt-in fleet hooks: backoff coordination (pre-call), trace
 // emission (post-call, async) and degraded-sink append (post-call,
@@ -322,16 +343,7 @@ func (t *extrasTransport) consultBackoff(parentCtx context.Context, host string,
 	ctx, cancel := context.WithTimeout(parentCtx, overall)
 	defer cancel()
 
-	cli := &http.Client{
-		Timeout: overall,
-		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout: coordinatorConnectTimeout,
-			}).DialContext,
-			ResponseHeaderTimeout: coordinatorReadTimeout,
-			DisableKeepAlives:     true,
-		},
-	}
+	cli := coordinatorClient
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.backoffURL+"/backoff", bytes.NewReader(buf))
 	if err != nil {
 		return -1
@@ -405,16 +417,7 @@ func (t *extrasTransport) emitTrace(s traceFields) {
 	ctx, cancel := context.WithTimeout(context.Background(), coordinatorConnectTimeout+coordinatorReadTimeout)
 	defer cancel()
 
-	cli := &http.Client{
-		Timeout: coordinatorConnectTimeout + coordinatorReadTimeout,
-		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout: coordinatorConnectTimeout,
-			}).DialContext,
-			ResponseHeaderTimeout: coordinatorReadTimeout,
-			DisableKeepAlives:     true,
-		},
-	}
+	cli := coordinatorClient
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.traceURL+"/traces", bytes.NewReader(body))
 	if err != nil {
 		t.maybeLogTraceErr("newrequest: %v", err)
