@@ -4,6 +4,34 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.62.0 — 2026-06-08
+
+### Changed
+
+- **`telemetry` is now a nested module** (`github.com/baditaflorin/go-common/telemetry`
+  with its own `go.mod`). It was the only package pulling the OpenTelemetry SDK +
+  gRPC + protobuf + genproto + grpc-gateway tree, and a fleet-wide audit found
+  **zero** of ~438 consumers import it. Carving it into its own module removes that
+  whole tree from the root module: external dependency **packages 202 → 64**,
+  **`go.sum` 94 → 52 lines**, **build-list modules 77 → 42**. Every consumer drops
+  ~138 transitive packages / ~35 modules from its build graph, `go.sum`, module
+  cache, and supply-chain/CVE surface on its next `go mod tidy` — **no code change
+  and no import-path change** (the import path is unchanged; only a separate
+  `require` is needed by the handful of future callers that want OTel tracing).
+  This is a build-graph/download win, not a binary-size win for current services
+  (none link telemetry today). Note: `telemetry/` is now excluded from the root
+  `go test ./...` / `go build ./...`; release tooling should build it separately.
+
+### Added
+
+- **`safehttp.WithMaxIdleConnsPerHost(n)`** + raised default. `safehttp` clients
+  left `Transport.MaxIdleConnsPerHost` at the Go std default of **2**, which
+  throttled connection reuse for the common fleet shape (a service hammering one
+  upstream API/sibling) — every request past the 2nd in flight churned a fresh
+  TCP+TLS handshake. The default is now **10** (`defaultMaxIdleConnsPerHost`,
+  capped below `MaxIdleConns`=20); hot single-upstream callers can raise it
+  further via the new option. A value `<= 0` restores the default.
+
 ## v0.61.0 — 2026-06-07
 
 ### Added
