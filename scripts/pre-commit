@@ -1,22 +1,28 @@
 #!/usr/bin/env bash
-# Pre-commit: gitleaks scan of staged changes.
+# Pre-commit: (1) gitleaks scan of staged changes, (2) build+vet every module.
 # Install (one-time): ln -sf ../../scripts/pre-commit .git/hooks/pre-commit && chmod +x scripts/pre-commit
 set -euo pipefail
 
-if ! command -v gitleaks >/dev/null 2>&1; then
+repo_root="$(git rev-parse --show-toplevel)"
+
+# --- (1) Secret scan (skipped, not fatal, when gitleaks isn't installed) ---
+if command -v gitleaks >/dev/null 2>&1; then
+  config="$repo_root/.gitleaks.toml"
+  args=(protect --staged --redact --no-banner)
+  [ -f "$config" ] && args+=(--config "$config")
+  if ! gitleaks "${args[@]}"; then
+    echo "" >&2
+    echo "ERROR: gitleaks detected secrets in staged changes (this repo is PUBLIC)." >&2
+    echo "       go-common is consumed via go-get; nothing sensitive should land here." >&2
+    exit 1
+  fi
+else
   echo "warn: gitleaks not installed — skipping secret scan." >&2
   echo "      install: brew install gitleaks   (https://github.com/gitleaks/gitleaks)" >&2
-  exit 0
 fi
 
-repo_root="$(git rev-parse --show-toplevel)"
-config="$repo_root/.gitleaks.toml"
-args=(protect --staged --redact --no-banner)
-[ -f "$config" ] && args+=(--config "$config")
-
-if ! gitleaks "${args[@]}"; then
-  echo "" >&2
-  echo "ERROR: gitleaks detected secrets in staged changes (this repo is PUBLIC)." >&2
-  echo "       go-common is consumed via go-get; nothing sensitive should land here." >&2
-  exit 1
-fi
+# --- (2) Build + vet EVERY module, incl. nested ones (telemetry/) ---
+# The root `go build ./...` does NOT descend into nested modules, so this
+# is the only thing that stops a root change from silently breaking
+# telemetry. See scripts/build-modules.sh for the full rationale.
+"$repo_root/scripts/build-modules.sh"

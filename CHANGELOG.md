@@ -4,6 +4,19 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## Unreleased
+
+### Tooling
+
+- **`scripts/build-modules.sh`** + pre-commit wiring — builds **and** vets
+  every module in the repo, including nested ones. The root `go build ./...`
+  / `fleet-runner build-test` do not descend into the `telemetry/` nested
+  module, so a root-package change that breaks `telemetry.go` would pass the
+  root gate and silently break the nested module until a future consumer
+  pulled it. The pre-commit hook now runs this script after the gitleaks
+  scan, so every module is gated locally. No importable-code change — does
+  not require a version bump. New nested modules are picked up automatically.
+
 ## v0.62.0 — 2026-06-08
 
 ### Changed
