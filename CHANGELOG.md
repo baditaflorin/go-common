@@ -4,6 +4,34 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.61.0 — 2026-06-07
+
+### Added
+
+- **`obs`** — fleet-canonical runtime observability. Two pieces:
+  - **Localhost-only debug server** (`obs.StartDebugServer(addr)` /
+    `obs.Init()` / `obs.MustInit()`) serving `net/http/pprof`
+    (`/debug/pprof/*`) plus a `/metrics` mirror of the shared promx
+    registry, **bound to `127.0.0.1` by design** so pprof's heap/CPU
+    surface is reachable in-container or over an SSH tunnel but never
+    from the public gateway. Returns a clean `StopFunc`; disabled (no-op)
+    when the address is empty/`off`. Env knobs: `DEBUG_ADDR` (default
+    `127.0.0.1:6060`), `OBS_DISABLE=1` / `DEBUG_ADDR=off` to turn it off.
+  - **`obs.RegisterRuntimeMetrics(reg)`** — idempotent,
+    `AlreadyRegistered`-safe registration of the Go runtime + process
+    collectors (`go_goroutines`, `go_memstats_*`, `go_gc_duration_seconds`,
+    `process_resident_memory_bytes`). A no-op for `server`-based services
+    (`promx.Init` already registered them on the shared registry); exists
+    for services that build their own `*prometheus.Registry`.
+- **`server.New` auto-wires the obs debug server** at construction, gated
+  by `DEBUG_ADDR` / `OBS_DISABLE` (default ON, loopback-only). Every fleet
+  service gets pprof for diagnosing RSS creep / goroutine leaks before an
+  OOM with **zero per-service code** — adoption is automatic on the next
+  `go-common` bump. A bind failure is logged, never fatal; the listener is
+  released on `Start()`'s shutdown paths. Opt out with `DEBUG_ADDR=off`.
+  +8 self-tests. No new deps (reuses the existing `prometheus/client_golang`
+  and stdlib `net/http/pprof`).
+
 ## v0.60.0 — 2026-06-04
 
 ### Added

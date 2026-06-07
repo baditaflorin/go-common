@@ -17,4 +17,10 @@
 // logging, body limit, metrics, promx), /health, /version, /capabilities,
 // /schema, /metrics, and /selftest default endpoints automatically.
 // Start() performs a graceful SIGTERM drain.
+//
+// server.New also auto-starts the go-common/obs localhost-only debug
+// server (net/http/pprof + a /metrics mirror) bound to 127.0.0.1:6060,
+// so every service gets pprof for diagnosing RSS creep / goroutine leaks
+// with no extra code. It is loopback-only by design (pprof must never be
+// public) and opt-out via DEBUG_ADDR=off or OBS_DISABLE=1.
 package server
