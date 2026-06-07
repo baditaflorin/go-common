@@ -183,6 +183,15 @@ type options struct {
 	// WithForceHTTP2 for why a custom dialer otherwise disables it.
 	forceHTTP2 bool
 
+	// maxIdleConnsPerHost caps Transport.MaxIdleConnsPerHost. The Go
+	// standard library defaults this to 2 (http.DefaultMaxIdleConnsPerHost),
+	// which throttles connection reuse for services that hammer a single
+	// upstream — every request past the 2nd in flight opens a fresh TCP+TLS
+	// connection instead of reusing a pooled one. Zero value means "use the
+	// safehttp default" (see defaultMaxIdleConnsPerHost); set explicitly via
+	// WithMaxIdleConnsPerHost.
+	maxIdleConnsPerHost int
+
 	// Fleet integration hooks — see extras.go for the constructors
 	// (WithTraceCollector, WithBackoffCoordinator, WithDegradedSink).
 	// All three are opt-in; zero values preserve v0.15.0 behaviour.
@@ -225,6 +234,21 @@ type options struct {
 
 // Option configures NewClient.
 type Option func(*options)
+
+// WithMaxIdleConnsPerHost sets Transport.MaxIdleConnsPerHost — the number
+// of idle keep-alive connections safehttp will pool per upstream host.
+//
+// The Go standard library defaults this to 2, which silently caps
+// connection reuse: a service issuing many concurrent requests to the same
+// host opens (and tears down) a fresh TCP+TLS connection for everything
+// past the 2nd in-flight request. safehttp raises the default to 10
+// (defaultMaxIdleConnsPerHost). Raise it further for hot single-upstream
+// callers (e.g. a tight crawl/poll loop against one API); n is clamped
+// below MaxIdleConns (20) by the transport regardless. A value <= 0
+// restores the safehttp default.
+func WithMaxIdleConnsPerHost(n int) Option {
+	return func(o *options) { o.maxIdleConnsPerHost = n }
+}
 
 // WithoutProxy explicitly disables proxy use even if HTTP_PROXY /
 // HTTPS_PROXY are set in the environment. Use for services that
@@ -361,8 +385,28 @@ func newBaseTransport(o *options, proxyFn func(*http.Request) (*url.URL, error))
 		ResponseHeaderTimeout: 5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		MaxIdleConns:          20,
+		MaxIdleConnsPerHost:   resolveMaxIdleConnsPerHost(o.maxIdleConnsPerHost),
 		IdleConnTimeout:       30 * time.Second,
 	}
+}
+
+// defaultMaxIdleConnsPerHost is safehttp's default cap on idle keep-alive
+// connections per upstream host. The Go std default is 2
+// (http.DefaultMaxIdleConnsPerHost); we raise it to 10 so high-throughput
+// single-upstream callers (the common fleet shape — a service polling one
+// API or one sibling) actually reuse pooled connections instead of churning
+// TCP+TLS handshakes. Capped below MaxIdleConns (20) so the per-host pool
+// can never starve a multi-host client.
+const defaultMaxIdleConnsPerHost = 10
+
+// resolveMaxIdleConnsPerHost maps the zero value (caller didn't set the
+// option) onto defaultMaxIdleConnsPerHost while letting an explicit value
+// through unchanged. A negative value falls back to the default too.
+func resolveMaxIdleConnsPerHost(n int) int {
+	if n <= 0 {
+		return defaultMaxIdleConnsPerHost
+	}
+	return n
 }
 
 // NegotiatedProtocol returns the TLS ALPN protocol the server selected
