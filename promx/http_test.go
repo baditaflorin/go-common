@@ -3,6 +3,7 @@ package promx
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -67,5 +68,49 @@ func TestHTTPMiddlewareCapturesStatus(t *testing.T) {
 
 	if got := testutil.ToFloat64(coll.requestsTotal.WithLabelValues(coll.service, "POST", "/x", "418")); got != 1 {
 		t.Errorf("requests_total{418} = %v, want 1", got)
+	}
+}
+
+// TestHTTPRouteCardinalityCap: with a low route limit, distinct raw paths
+// beyond the cap fold into "_other" so an unbounded route label cannot
+// explode the Prometheus series count. The first N distinct routes keep
+// their own series; everything after collapses.
+func TestHTTPRouteCardinalityCap(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	coll := NewHTTPCollectors(reg, WithRouteLimit(3))
+
+	handler := coll.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	// 10 distinct paths; only 3 should keep their own route label.
+	for i := 0; i < 10; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/u/"+strconv.Itoa(i), nil)
+		handler.ServeHTTP(rec, req)
+	}
+
+	if got := testutil.ToFloat64(coll.requestsTotal.WithLabelValues(coll.service, "GET", "/u/0", "200")); got != 1 {
+		t.Errorf("first admitted route /u/0 = %v, want 1", got)
+	}
+	// 10 requests, 3 admitted distinct routes (/u/0../u/2) → 7 fold to _other.
+	if got := testutil.ToFloat64(coll.requestsTotal.WithLabelValues(coll.service, "GET", "_other", "200")); got != 7 {
+		t.Errorf("_other route count = %v, want 7", got)
+	}
+	// A beyond-cap path must NOT have its own series.
+	if got := testutil.ToFloat64(coll.requestsTotal.WithLabelValues(coll.service, "GET", "/u/9", "200")); got != 0 {
+		t.Errorf("beyond-cap route /u/9 = %v, want 0 (should have folded to _other)", got)
+	}
+}
+
+// TestHTTPRouteLimitDefaultAndOverride: WithRouteLimit(0) restores the
+// default; the cap field is always non-nil.
+func TestHTTPRouteLimitDefaultAndOverride(t *testing.T) {
+	for _, n := range []int{0, -5} {
+		coll := NewHTTPCollectors(prometheus.NewRegistry(), WithRouteLimit(n))
+		if coll.routeCap == nil {
+			t.Fatalf("routeCap nil for WithRouteLimit(%d)", n)
+		}
+		if coll.routeCap.limit != 512 {
+			t.Errorf("WithRouteLimit(%d) limit = %d, want default 512", n, coll.routeCap.limit)
+		}
 	}
 }

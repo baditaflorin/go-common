@@ -35,7 +35,19 @@ type HTTPCollectors struct {
 	responseSize  *prometheus.HistogramVec
 	inFlight      *prometheus.GaugeVec
 
+	// inFlightG is the inFlight gauge curried to the constant `service`
+	// label, cached once so the per-request Inc/Dec skip a WithLabelValues
+	// map lookup+lock each (it fires twice per request otherwise).
+	inFlightG prometheus.Gauge
+
 	routeFn func(*http.Request) string
+
+	// routeCap bounds the cardinality of the "route" label. Routes beyond
+	// the cap fold to "_other" so a service with parameterised paths or a
+	// scanner spraying distinct URLs can't blow up Prometheus series count
+	// (and the scrape server's memory). Mirrors the host cap already used by
+	// the egress/backoff/fleetfetch collectors. See WithRouteLimit.
+	routeCap *hostCardCap
 }
 
 // HTTPOption configures NewHTTPCollectors.
@@ -45,6 +57,7 @@ type httpOpts struct {
 	durationBuckets []float64
 	sizeBuckets     []float64
 	routeFn         func(*http.Request) string
+	routeLimit      int
 }
 
 // WithHTTPDurationBuckets overrides the request-duration histogram
@@ -73,6 +86,18 @@ func WithRouteFunc(fn func(*http.Request) string) HTTPOption {
 	return func(o *httpOpts) { o.routeFn = fn }
 }
 
+// WithRouteLimit caps how many distinct "route" label values the inbound
+// HTTP collectors will emit before folding the rest into "_other". This is
+// the safety net that keeps an unbounded route label (the default raw
+// r.URL.Path, parameterised paths, or scanner traffic) from exploding the
+// Prometheus series count and the scrape server's memory. Default: 512.
+// A value <= 0 restores the default. Raise it for services with a large
+// but bounded templated-route set; it does not need raising when a proper
+// WithRouteFunc keeps cardinality naturally low.
+func WithRouteLimit(n int) HTTPOption {
+	return func(o *httpOpts) { o.routeLimit = n }
+}
+
 // NewHTTPCollectors registers the canonical inbound HTTP collectors on
 // reg and returns the wrapper. reg may be nil — the shared
 // promx.Registry() is used in that case.
@@ -81,9 +106,13 @@ func NewHTTPCollectors(reg prometheus.Registerer, opts ...HTTPOption) *HTTPColle
 		durationBuckets: prometheus.DefBuckets,
 		sizeBuckets:     []float64{256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216},
 		routeFn:         func(r *http.Request) string { return r.URL.Path },
+		routeLimit:      512,
 	}
 	for _, opt := range opts {
 		opt(o)
+	}
+	if o.routeLimit <= 0 {
+		o.routeLimit = 512
 	}
 	if reg == nil {
 		reg = Registry()
@@ -91,8 +120,9 @@ func NewHTTPCollectors(reg prometheus.Registerer, opts ...HTTPOption) *HTTPColle
 	service := ServiceID()
 
 	c := &HTTPCollectors{
-		service: service,
-		routeFn: o.routeFn,
+		service:  service,
+		routeFn:  o.routeFn,
+		routeCap: newHostCardCap(o.routeLimit),
 		requestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "http_requests_total",
 			Help: "Total inbound HTTP requests handled, labelled by method, templated route, and response status.",
@@ -112,6 +142,7 @@ func NewHTTPCollectors(reg prometheus.Registerer, opts ...HTTPOption) *HTTPColle
 			Help: "Number of HTTP requests currently being processed.",
 		}, []string{"service"}),
 	}
+	c.inFlightG = c.inFlight.WithLabelValues(service)
 	reg.MustRegister(c.requestsTotal, c.duration, c.responseSize, c.inFlight)
 	return c
 }
@@ -123,9 +154,9 @@ func NewHTTPCollectors(reg prometheus.Registerer, opts ...HTTPOption) *HTTPColle
 func (c *HTTPCollectors) Middleware() middleware.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			route := c.routeFn(r)
-			c.inFlight.WithLabelValues(c.service).Inc()
-			defer c.inFlight.WithLabelValues(c.service).Dec()
+			route := c.routeCap.label(c.routeFn(r))
+			c.inFlightG.Inc()
+			defer c.inFlightG.Dec()
 
 			rw := &countingWriter{ResponseWriter: w, status: http.StatusOK}
 			start := time.Now()
