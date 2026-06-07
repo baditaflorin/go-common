@@ -52,6 +52,13 @@ embedded version string (consumers pin via `go.mod`).
 - **`reqstats` allocates the per-request `phases` map lazily** (on first
   `Mark`/`Phase`) instead of in `Start`. Most requests record no phases, so
   this drops one map allocation per request on the universal server path.
+- **`safehttp.GuardHost` caches definitive verdicts** (allowed / `ErrBlocked`)
+  for hostnames with a short 30s TTL, bounded to 8192 hosts. The SSRF guard
+  was re-resolving the same host on every `CheckURL` validation call and again
+  in the dialer; the cache removes that duplication. **Not a security
+  regression:** the `Dialer.Control` re-check still validates the actually-
+  connected IP independently, so a stale "allowed" verdict can never let a
+  connection reach a blocked address. Transient DNS failures are never cached.
 
 ### Tooling
 
