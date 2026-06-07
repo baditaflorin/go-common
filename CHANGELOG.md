@@ -6,6 +6,34 @@ embedded version string (consumers pin via `go.mod`).
 
 ## Unreleased
 
+### Changed
+
+- **`promx` inbound HTTP metrics now cap "route" label cardinality** (default
+  512, configurable via `WithRouteLimit`). The default `RouteFunc` returns the
+  raw `r.URL.Path`, which is wired unconditionally into every `server.New`
+  service's default middleware — so parameterised paths (`/users/42`) or
+  scanner traffic produced an **unbounded** number of `http_requests_total`
+  / `http_request_duration_seconds` / `http_response_size_bytes` series,
+  growing the in-process Prometheus client AND the scrape server's memory
+  without limit (a latent fleet-wide OOM vector, default-on). Routes beyond
+  the cap now fold to the literal `_other`, reusing the same `hostCardCap`
+  already protecting the egress/backoff/fleetfetch host labels. Services with
+  fewer than 512 distinct routes see **no change**; the only services affected
+  were already emitting unbounded series. Pass `WithRouteFunc` for proper
+  templated routes and/or `WithRouteLimit(n)` to raise the cap.
+
+### Added
+
+- **`promx.WithRouteLimit(n)`** — overrides the route-label cardinality cap
+  (above). A value `<= 0` restores the default of 512.
+
+### Performance
+
+- **`promx` HTTP middleware caches the `http_requests_in_flight` gauge** curried
+  to the constant `service` label, removing two `WithLabelValues` map
+  lookups+locks per request (it was resolved on both the `Inc` and the deferred
+  `Dec`). Per-request win on the universal `server` path.
+
 ### Tooling
 
 - **`scripts/build-modules.sh`** + pre-commit wiring — builds **and** vets
