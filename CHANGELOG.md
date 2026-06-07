@@ -29,6 +29,16 @@ embedded version string (consumers pin via `go.mod`).
 
 ### Performance
 
+- **`metrics.Stats` is now lock-free on the request path.** `Record` (a default
+  middleware on every `server.New` service) previously took a process-global
+  `sync.Mutex` and did several map writes per request — a fleet-wide contention
+  point that also duplicated the bookkeeping `promx` already does with
+  atomic Prometheus vecs. The running totals moved into an internal atomic
+  accumulator (counters, a fixed status-code array, latency buckets, and a
+  lock-free ring for percentile samples); `New`, `Record`, and `Snapshot` keep
+  their exact signatures and `/stats` keeps its exact JSON. Also bounds
+  `PathStats` to 1000 distinct paths (overflow → `_other`), closing the same
+  raw-`r.URL.Path` cardinality hazard fixed for the promx route label.
 - **`promx` HTTP middleware caches the `http_requests_in_flight` gauge** curried
   to the constant `service` label, removing two `WithLabelValues` map
   lookups+locks per request (it was resolved on both the `Inc` and the deferred
