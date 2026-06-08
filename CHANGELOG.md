@@ -4,6 +4,39 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.64.0 — 2026-06-08
+
+### Added
+
+- **New `meshresult` package — fleet-wide enricher result classification.**
+  Collapses the per-repo `httpStatusFor` boilerplate that ~70 enrichers
+  hand-rolled (classify a fetch/DNS error → ok/no_data/unreachable/error,
+  map to an HTTP code domainscope keys on, emit a machine-readable body
+  field) into one tested place. Imports only `response` + stdlib — no
+  safehttp/fleetfetch cycle.
+
+  - `type Outcome string` with `OutcomeOK` / `OutcomeNoData` /
+    `OutcomeUnreachable` / `OutcomeTimeout` / `OutcomeError`.
+  - `func (Outcome) HTTPCode() int` — the contract domainscope keys on:
+    `ok→200`, `no_data→404`, `unreachable→404`, `timeout→504`,
+    `error→502` (unknown→502, conservative). 404 for both no_data and
+    unreachable is intentional (both become NoData(4) in domainscope
+    today); the body `result` field preserves the finer distinction.
+  - `func ClassifyFetchError(err error) (Outcome, string)` — maps a
+    fetch/DNS/transport error to an Outcome + a stable machine-readable
+    reason token (`dns_nxdomain`, `connect_refused`, `connect_timeout`,
+    `tls_error`, `fetch_timeout`, `upstream_4xx`, `upstream_5xx`,
+    `decode_error`, `bad_request`, …) via stdlib typed checks
+    (`context.DeadlineExceeded`, `*net.DNSError`, `net.Error.Timeout()`)
+    plus documented string markers for the upstream/fleetfetch shapes.
+    SSRF-block / bad-scheme are CALLER errors → `(OutcomeError,
+    "bad_request")`, never laundered into a 404 NoData.
+  - `func WriteOutcome(w, outcome, reason, data)` and `func
+    OutcomeEnvelope(outcome, reason, data) (code, body)` — emit/build the
+    `response` envelope with the right HTTP code AND stable top-level
+    `result` + `reason` fields so domainscope can read the finer
+    classification from the body in a future upgrade.
+
 ## v0.63.0 — 2026-06-08
 
 ### Changed
