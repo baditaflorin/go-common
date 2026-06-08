@@ -50,7 +50,11 @@ func newGuardHostCache(ttl time.Duration, cap int) *guardHostCache {
 	}
 }
 
-// get returns the cached verdict for host and whether it was a live hit.
+// get returns the cached verdict for host and whether it was a live
+// (non-expired) hit. The first return is the *verdict* (nil = allowed,
+// ErrBlocked = blocked), NOT a method error; the bool is the cache-hit
+// flag. An entry is valid up to and including its expiry instant and a
+// miss strictly after it.
 func (c *guardHostCache) get(host string) (error, bool) {
 	c.mu.RLock()
 	v, ok := c.m[host]

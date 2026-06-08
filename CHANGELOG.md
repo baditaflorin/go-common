@@ -59,6 +59,9 @@ embedded version string (consumers pin via `go.mod`).
   regression:** the `Dialer.Control` re-check still validates the actually-
   connected IP independently, so a stale "allowed" verdict can never let a
   connection reach a blocked address. Transient DNS failures are never cached.
+  Hardened with adversarial tests proving a poisoned cache allow-verdict is
+  still blocked by the per-socket `Dialer.Control` re-check (rebind safety),
+  plus TTL-boundary, transient-not-cached, and concurrent -race coverage.
 
 ### Tooling
 
