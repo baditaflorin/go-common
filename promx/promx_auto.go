@@ -32,6 +32,7 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 		autoFleetFetch = nil
 		autoCircuit = nil
 		autoWorkpool = nil
+		autoLoadshed = nil
 		autoBackoffCoord = nil
 		autoBoundReg = reg
 	}
@@ -89,6 +90,10 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 		autoWorkpool = NewWorkpoolCollectors(reg)
 		setWorkpoolDefaultObserver(autoWorkpool)
 	}
+	if autoLoadshed == nil {
+		autoLoadshed = NewLoadshedCollectors(reg)
+		setLoadshedDefaultObserver(autoLoadshed)
+	}
 	if autoBackoffCoord == nil {
 		autoBackoffCoord = NewBackoffCoordCollectors(reg)
 		setBackoffCoordDefaultObserver(autoBackoffCoord)
@@ -144,6 +149,15 @@ func AutoWorkpool() *WorkpoolCollectors {
 	autoMu.Lock()
 	defer autoMu.Unlock()
 	return autoWorkpool
+}
+
+// AutoLoadshed returns the singleton LoadshedCollectors. AutoWire has
+// already installed it as the process-wide loadshed.Observer, so every
+// loadshed.Gate emits metrics without further wiring.
+func AutoLoadshed() *LoadshedCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoLoadshed
 }
 
 // AutoBackoffCoord returns the singleton BackoffCoordCollectors for

@@ -54,6 +54,7 @@ var (
 	autoFleetFetch   *FleetFetchCollectors
 	autoCircuit      *CircuitCollectors
 	autoWorkpool     *WorkpoolCollectors
+	autoLoadshed     *LoadshedCollectors
 	autoBackoffCoord *BackoffCoordCollectors
 	autoBoundReg     *prometheus.Registry // the registry the singletons are bound to
 )
