@@ -494,6 +494,14 @@ func NormalizeURL(raw string) (*url.URL, error) {
 // RFC1918/loopback/CGNAT/ULA addresses. It is the one-call replacement for
 // the parse ��� ValidateURL ��� GuardHost pattern used in every service handler.
 // Returns the validated, ready-to-use *url.URL.
+//
+// Rebind caveat: the host verdict is cached for up to guardCacheTTL (see
+// GuardHost). When you then dial through this package's NewClient, the
+// Dialer.Control re-check re-validates the actually-connected IP, so a stale
+// "allowed" verdict is harmless. But if you validate with CheckURL and then
+// connect with a plain net/http.Client (no safehttp dialer — e.g. the
+// intra-mesh sibling-call pattern), there is NO Control backstop, so do not
+// rely on CheckURL alone as a DNS-rebind defense for that path.
 func CheckURL(ctx context.Context, rawURL string) (*url.URL, error) {
 	u, err := NormalizeURL(rawURL)
 	if err != nil {

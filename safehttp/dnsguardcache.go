@@ -1,6 +1,7 @@
 package safehttp
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -50,8 +51,19 @@ func newGuardHostCache(ttl time.Duration, cap int) *guardHostCache {
 	}
 }
 
+// normHost canonicalises a hostname for cache keying: lowercased and with a
+// single trailing dot stripped, so "Example.COM", "example.com", and
+// "example.com." share one entry. This only affects hit rate — a missed key
+// just re-resolves — but it removes the "could two forms collide?" reasoning
+// burden by making the key deterministic. IP literals are never cached, so
+// no IPv6-bracket handling is needed here.
+func normHost(host string) string {
+	return strings.TrimSuffix(strings.ToLower(host), ".")
+}
+
 // get returns the cached verdict for host and whether it was a live hit.
 func (c *guardHostCache) get(host string) (error, bool) {
+	host = normHost(host)
 	c.mu.RLock()
 	v, ok := c.m[host]
 	c.mu.RUnlock()
@@ -64,6 +76,7 @@ func (c *guardHostCache) get(host string) (error, bool) {
 // put stores a definitive verdict (allowed/blocked) for host. Callers must
 // not cache transient DNS lookup failures.
 func (c *guardHostCache) put(host string, verdict error) {
+	host = normHost(host)
 	c.mu.Lock()
 	if len(c.m) >= c.cap {
 		c.m = make(map[string]guardVerdict)
