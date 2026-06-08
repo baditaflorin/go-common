@@ -125,6 +125,14 @@ func SetAllowedPrivateIPs(ips []net.IP) {
 // blocked range. Accepts a bare IP literal as well as a hostname. DNS is
 // revalidated with a 3-second timeout (DNS-rebind safe when combined with
 // the Dialer.Control re-check in NewClient).
+//
+// Definitive verdicts (allowed / ErrBlocked) for hostnames are cached for a
+// short TTL (guardCacheTTL) so the per-request validation path (CheckURL)
+// and the dialer don't re-resolve the same host on every call. Transient
+// DNS lookup failures are never cached. The cache is NOT a security
+// boundary: the Dialer.Control re-check validates the actually-connected IP
+// independently, so a stale "allowed" verdict can never let a connection
+// reach a blocked address.
 func GuardHost(ctx context.Context, host string) error {
 	if host == "" {
 		return ErrMissingHost
@@ -135,20 +143,27 @@ func GuardHost(ctx context.Context, host string) error {
 		}
 		return nil
 	}
+	if verdict, ok := defaultGuardCache.get(host); ok {
+		return verdict
+	}
 	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	ips, err := net.DefaultResolver.LookupIP(rctx, "ip", host)
 	if err != nil {
+		// Transient failure — do not cache; let the caller retry/resolve again.
 		return fmt.Errorf("dns lookup failed: %w", err)
 	}
 	if len(ips) == 0 {
+		defaultGuardCache.put(host, ErrBlocked)
 		return ErrBlocked
 	}
 	for _, ip := range ips {
 		if IsBlocked(ip) {
+			defaultGuardCache.put(host, ErrBlocked)
 			return ErrBlocked
 		}
 	}
+	defaultGuardCache.put(host, nil)
 	return nil
 }
 
@@ -479,6 +494,14 @@ func NormalizeURL(raw string) (*url.URL, error) {
 // RFC1918/loopback/CGNAT/ULA addresses. It is the one-call replacement for
 // the parse ��� ValidateURL ��� GuardHost pattern used in every service handler.
 // Returns the validated, ready-to-use *url.URL.
+//
+// Rebind caveat: the host verdict is cached for up to guardCacheTTL (see
+// GuardHost). When you then dial through this package's NewClient, the
+// Dialer.Control re-check re-validates the actually-connected IP, so a stale
+// "allowed" verdict is harmless. But if you validate with CheckURL and then
+// connect with a plain net/http.Client (no safehttp dialer — e.g. the
+// intra-mesh sibling-call pattern), there is NO Control backstop, so do not
+// rely on CheckURL alone as a DNS-rebind defense for that path.
 func CheckURL(ctx context.Context, rawURL string) (*url.URL, error) {
 	u, err := NormalizeURL(rawURL)
 	if err != nil {
