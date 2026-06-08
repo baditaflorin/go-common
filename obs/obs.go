@@ -10,9 +10,14 @@
 // listener is dangerous (heap/profile endpoints leak memory contents and
 // let an attacker pin CPU). This package binds pprof to 127.0.0.1 only,
 // so it is reachable from inside the container / over an SSH tunnel but
-// never from the gateway. Adoption is near-zero-code: any service built
-// on go-common/server gets the debug server auto-wired (see
-// server.New), gated by the DEBUG_ADDR / OBS_DISABLE env knobs.
+// never from the gateway.
+//
+// obs is OPT-IN, not auto-loaded. A service that wants pprof + the
+// localhost debug/metrics server imports this package and calls Init()
+// once in main(); services that do not import obs neither compile in
+// net/http/pprof nor start a debug listener. (v0.61.0 briefly
+// auto-started this from server.New; v0.63.0 reverted that — see the
+// Adoption section below.)
 //
 // # Runtime metrics
 //
@@ -28,13 +33,14 @@
 //
 // # Adoption
 //
-// Auto-on for go-common/server services — nothing to add. Standalone
-// binaries (custom router, no server.New) add one line to main():
+// Opt-in, one line in main() — for every service, including those
+// built on go-common/server:
 //
 //	stop, _ := obs.Init()      // honours DEBUG_ADDR; default 127.0.0.1:6060
 //	defer stop()
 //
-// Disable via DEBUG_ADDR=off or OBS_DISABLE=1.
+// Disable via DEBUG_ADDR=off or OBS_DISABLE=1. A service that never
+// imports obs pays nothing — no pprof handlers, no debug listener.
 package obs
 
 import (
@@ -117,8 +123,9 @@ func resolveAddr() string {
 //	defer stop()
 //
 // When disabled it returns a no-op StopFunc and a nil error, so callers
-// never need to special-case the disabled path. go-common/server calls
-// this for you — do not call it as well if you use server.New.
+// never need to special-case the disabled path. Call this once in
+// main(); it is opt-in and is NOT started automatically by
+// go-common/server.
 func Init() (StopFunc, error) {
 	return StartDebugServer(resolveAddr())
 }

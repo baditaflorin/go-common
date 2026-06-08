@@ -9,11 +9,9 @@ import (
 	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/metrics"
 	"github.com/baditaflorin/go-common/middleware"
-	"github.com/baditaflorin/go-common/obs"
 	"github.com/baditaflorin/go-common/promx"
 	"github.com/baditaflorin/go-common/reqstats"
 	"github.com/baditaflorin/go-common/safehttp"
-	"log"
 	"net/http"
 	"os"
 	"time"
@@ -177,24 +175,6 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		httpColl.Middleware(),
 	)
 	srv.Middlewares = append(defaultMWs, srv.Middlewares...)
-
-	// Auto-wire the localhost-only debug server (net/http/pprof +
-	// /metrics mirror), gated by the DEBUG_ADDR / OBS_DISABLE env knobs
-	// (default ON, bound to 127.0.0.1:6060). This gives every fleet
-	// service pprof for diagnosing RSS creep / goroutine leaks before an
-	// OOM, with zero per-service code — adoption is automatic on the
-	// next go-common bump. pprof is loopback-only by design; it must
-	// never be reachable from the public gateway. The runtime + process
-	// collectors backing its /metrics are already registered by
-	// promx.Init (called via AutoWire above), so this adds no new
-	// metrics, only a safe local pprof surface. A bind failure is
-	// logged, not fatal — a debug aid must never stop a service from
-	// booting. The stop func is invoked from Start()'s shutdown paths.
-	if stop, err := obs.Init(); err != nil {
-		log.Printf("server: debug server (pprof) not started: %v", err)
-	} else {
-		srv.debugStop = stop
-	}
 
 	return srv
 }

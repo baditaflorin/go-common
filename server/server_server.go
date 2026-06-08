@@ -86,21 +86,6 @@ type Server struct {
 	// Server-Timing + X-Request-Stats on every response). Set via
 	// WithoutRequestStats; default is enabled.
 	noRequestStats bool
-
-	// debugStop shuts down the localhost-only obs debug server (pprof +
-	// /metrics mirror) auto-started in New. nil when the debug server
-	// was disabled (DEBUG_ADDR=off / OBS_DISABLE=1) or failed to bind.
-	// Invoked from Start()'s shutdown paths so pprof's listener is
-	// released cleanly on SIGTERM.
-	debugStop func()
-}
-
-// stopDebug releases the obs debug server listener if one was started.
-// Safe to call when debugStop is nil.
-func (s *Server) stopDebug() {
-	if s.debugStop != nil {
-		s.debugStop()
-	}
 }
 
 // Handler returns the fully-wrapped HTTP handler — middleware chain
@@ -139,10 +124,6 @@ func (s *Server) buildHTTPServer(addr string, h http.Handler) *http.Server {
 //	    log.Fatal(err)
 //	}
 func (s *Server) Start() error {
-	// Release the localhost debug server (pprof) listener on every exit
-	// path so a restarted process can re-bind DEBUG_ADDR cleanly.
-	defer s.stopDebug()
-
 	addr := ":" + s.Config.Port
 	fmt.Printf("Starting %s v%s on %s\n", s.Config.AppName, s.Config.Version, addr)
 

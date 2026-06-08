@@ -8,6 +8,28 @@ embedded version string (consumers pin via `go.mod`).
 
 ### Changed
 
+- **BREAKING (behavioural): `obs` is now opt-in, no longer auto-started by
+  `server.New`.** v0.61.0 auto-wired the `obs` localhost debug server
+  (`net/http/pprof` + a `/metrics` mirror) into `server.New`, which pulled
+  `net/http/pprof` into the binary and started a debug listener
+  (`127.0.0.1:6060`) in **every** service on the next go-common bump,
+  whether it needed pprof or not. That coupling is removed: `server.New` no
+  longer imports or starts `obs`. A service that wants pprof + the localhost
+  debug/metrics server now opts in explicitly with one line in `main()`:
+
+  ```go
+  stop, _ := obs.Init()   // reads DEBUG_ADDR (default 127.0.0.1:6060); no-op if disabled
+  defer stop()
+  ```
+
+  Services that do **not** import `obs` no longer compile `net/http/pprof`
+  in or open a debug listener. The `obs` package itself is unchanged and
+  fully standalone (loopback-only default, `DEBUG_ADDR=off`/`OBS_DISABLE=1`
+  to disable, bind error non-fatal); `RegisterRuntimeMetrics` is unchanged
+  for services with their own registry. The default `/metrics` runtime
+  metrics for `server`-based services are unaffected — those come from
+  `promx` and stay as-is. Supersedes the auto-wire added in #34 / v0.61.0.
+
 - **`promx` inbound HTTP metrics now cap "route" label cardinality** (default
   512, configurable via `WithRouteLimit`). The default `RouteFunc` returns the
   raw `r.URL.Path`, which is wired unconditionally into every `server.New`
