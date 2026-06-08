@@ -13,7 +13,7 @@ import (
 // from the obs debug server: constructing a server must NOT open the
 // localhost pprof/debug listener on the default obs port (127.0.0.1:6060).
 //
-// obs is opt-in as of v0.62.0 — a service that uses server.New but does
+// obs is opt-in as of v0.63.0 — a service that uses server.New but does
 // not call obs.Init() must neither compile in net/http/pprof nor bind a
 // debug listener. v0.61.0 briefly auto-started it from server.New; this
 // guards against that regression.

@@ -16,7 +16,7 @@
 // localhost debug/metrics server imports this package and calls Init()
 // once in main(); services that do not import obs neither compile in
 // net/http/pprof nor start a debug listener. (v0.61.0 briefly
-// auto-started this from server.New; v0.62.0 reverted that — see the
+// auto-started this from server.New; v0.63.0 reverted that — see the
 // Adoption section below.)
 //
 // # Runtime metrics

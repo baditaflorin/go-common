@@ -13,7 +13,7 @@ import (
 // TestInit_ServesOnExplicitDebugAddr drives Init() (the opt-in one-liner
 // services call in main()) end-to-end via DEBUG_ADDR and asserts the
 // standalone debug server actually serves /debug/pprof/ + /metrics on
-// localhost. obs is opt-in as of v0.62.0; this confirms the opt-in path
+// localhost. obs is opt-in as of v0.63.0; this confirms the opt-in path
 // works without server.New.
 func TestInit_ServesOnExplicitDebugAddr(t *testing.T) {
 	// The /metrics mirror reflects the shared promx registry; ensure the
