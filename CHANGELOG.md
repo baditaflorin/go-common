@@ -4,7 +4,7 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
-## Unreleased
+## v0.63.0 — 2026-06-08
 
 ### Changed
 
