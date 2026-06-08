@@ -5,6 +5,7 @@ import (
 	"github.com/baditaflorin/go-common/circuitbreaker"
 	"github.com/baditaflorin/go-common/degraded"
 	"github.com/baditaflorin/go-common/fleetfetch"
+	"github.com/baditaflorin/go-common/loadshed"
 	"github.com/baditaflorin/go-common/response"
 	"github.com/baditaflorin/go-common/safehttp"
 	"github.com/baditaflorin/go-common/workpool"
@@ -20,4 +21,5 @@ func setSafehttpBackoffDefaultObserver(c *BackoffCollectors)   { safehttp.SetDef
 func setFleetFetchDefaultObserver(c *FleetFetchCollectors)     { fleetfetch.SetDefaultObserver(c) }
 func setCircuitDefaultObserver(c *CircuitCollectors)           { circuitbreaker.SetDefaultObserver(c) }
 func setWorkpoolDefaultObserver(c *WorkpoolCollectors)         { workpool.SetDefaultObserver(c) }
+func setLoadshedDefaultObserver(c *LoadshedCollectors)         { loadshed.SetDefaultObserver(c) }
 func setBackoffCoordDefaultObserver(c *BackoffCoordCollectors) { backoffcoord.SetDefaultObserver(c) }

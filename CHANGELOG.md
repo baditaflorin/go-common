@@ -4,6 +4,45 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.65.0 — 2026-06-08
+
+### Added
+
+- **`loadshed` — a non-blocking concurrency gate for bounding in-flight
+  calls to a slow, saturatable shared upstream.** Generalises the
+  hand-rolled `renderSem` semaphore landed in
+  `go_infrastructure_fetch_cache` 0.3.8 (PR #12), where a backfill
+  fan-out piled ~8.3k goroutines on a saturated `go-js-proxy` (host
+  loadavg 56/20), thrashing the scheduler until downstream enrichers'
+  `/selftest` probes stalled past their deadline and rolled back healthy
+  fleet deploys. The pattern — "bound concurrent expensive calls to a
+  slow sibling, fast-503 the excess instead of piling goroutines" —
+  recurs across every service that proxies to a saturatable renderer
+  (go-js-proxy / go-html-proxy / …).
+
+  `loadshed.New(name, limit)` returns a `*Gate`; `gate.TryAcquire()` is
+  a non-blocking semaphore acquire returning an idempotent `release`
+  func and an `ok` bool. On `ok == false` the caller fails fast via
+  `loadshed.WriteShed(w, retryAfter, msg)`, which writes the canonical
+  503 + `Retry-After` + `{error_code:"load_shed"}` envelope. For the
+  "gate a whole endpoint" case, `gate.Guard(retryAfter, msg)` is
+  net/http middleware. `limit <= 0` leaves the gate unbounded (the
+  test/opt-out default).
+
+- **`promx.NewLoadshedCollectors` + `promx.AutoLoadshed`** — `AutoWire`
+  now installs a process-wide `loadshed.Observer`, so every gate emits
+  `loadshed_shed_total`, `loadshed_admitted_total`, and
+  `loadshed_in_flight` (labelled `{service, gate}`) with zero per-gate
+  wiring. `loadshed_shed_total` is the canonical "this service is
+  shedding load" alert signal.
+
+  Migrate a hand-rolled `chan struct{}` shed semaphore by swapping the
+  field for a `*loadshed.Gate`, replacing the inline
+  `select { case sem <- …: default: 503 }` with
+  `TryAcquire()`/`WriteShed`, and dropping any bespoke `*_shed` counter
+  (the metric is now emitted fleet-wide via promx). `go_infrastructure_
+  fetch_cache` is the first consumer.
+
 ## v0.64.0 — 2026-06-08
 
 ### Added
