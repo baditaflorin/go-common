@@ -9,6 +9,7 @@ type IssueRequest struct {
 	Note         string `json:"note,omitempty"`
 	NeverExpires bool   `json:"never_expires,omitempty"`
 	Key          string `json:"key,omitempty"` // migration only
+	UseLimit     *int64 `json:"use_limit,omitempty"` // nil = unlimited
 }
 
 // IssueResult is what /issue returns.
@@ -20,4 +21,5 @@ type IssueResult struct {
 	Note      string `json:"note"`
 	CreatedAt string `json:"created_at"`
 	ExpiresAt string `json:"expires_at"`
+	UseLimit  *int64 `json:"use_limit,omitempty"`
 }

@@ -66,12 +66,15 @@ type KeyMeta struct {
 	Key        string `json:"key"`
 	User       string `json:"user"`
 	Scope      string `json:"scope"`
+	Name       string `json:"name,omitempty"`
 	Note       string `json:"note"`
 	CreatedAt  string `json:"created_at"`
 	ExpiresAt  string `json:"expires_at"`
 	RevokedAt  string `json:"revoked_at,omitempty"`
 	LastUsedAt string `json:"last_used_at,omitempty"`
 	Expired    bool   `json:"expired"`
+	UseCount   int64  `json:"use_count"`
+	UseLimit   *int64 `json:"use_limit,omitempty"` // nil = unlimited
 }
 
 // adminOpFromPath maps the admin URL path to a stable, low-cardinality
