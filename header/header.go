@@ -52,6 +52,12 @@ const (
 
 	// VerifyKey is the header used by the keystore /verify endpoint.
 	VerifyKey = "X-Verify-Key"
+
+	// ExpectedScope is set by the nginx gateway on every /verify subrequest
+	// to tell the keystore which service hostname is being accessed.
+	// The keystore rejects keys whose scope is not "*" and does not include
+	// this value. Absent header → no scope enforcement (backward compat).
+	ExpectedScope = "X-Expected-Scope"
 )
 
 // Tracing headers — W3C Trace Context and custom fleet tracing.
