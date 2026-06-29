@@ -4,6 +4,24 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.69.0 — 2026-06-29
+
+### Added
+
+- **`fleetfetch` now sends `X-Fleet-Caller` on every cache request**, so the
+  fetch cache can forward the calling service's identity to `go-js-proxy` /
+  `go-html-proxy` and those renderers can attribute load per-enricher (their
+  `/stats` + `/metrics` were previously seeing the cache as one anonymous
+  hop). Resolution order: per-client `WithCaller(id)` → process-wide
+  `fleetfetch.SetDefaultCaller(id)` → env (`FLEET_SERVICE_ID`, `SERVICE_ID`).
+  When none resolves, no header is sent — un-migrated callers are unaffected.
+- **`server.New` seeds the default caller from `cfg.AppName`** automatically,
+  so every service on the standard server (and the safehttp→fetch-cache
+  delegate it wires) propagates its identity with **zero per-service code
+  change** — a `go-common` bump + redeploy is all that's needed. The header is
+  set only on the internal cache request, never on the direct-to-origin
+  fallback (no internal-header leak to public sites).
+
 ## v0.65.0 — 2026-06-08
 
 ### Added

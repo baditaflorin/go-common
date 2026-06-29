@@ -37,6 +37,13 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// are tagged with cfg.AppName from here on.
 	graph.Init(cfg.AppName, cfg.Version)
 
+	// Identify this service to the fetch cache so it can forward
+	// X-Fleet-Caller to go-js-proxy / go-html-proxy for per-enricher render
+	// attribution. Read lazily by fleetfetch at request time, so this covers
+	// both direct fleetfetch.Client users and the safehttp→fetch-cache
+	// delegate wired below. Zero per-service code change.
+	fleetfetch.SetDefaultCaller(cfg.AppName)
+
 	mux := http.NewServeMux()
 	stats := metrics.New()
 

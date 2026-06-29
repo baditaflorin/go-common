@@ -24,6 +24,12 @@ type Client struct {
 	timeout     time.Duration
 	render      string // "" | "js" | "html"; forwarded as ?render=<mode>
 
+	// caller is the X-Fleet-Caller value this client sends to the cache,
+	// identifying the calling service so downstream renderers (go-js-proxy)
+	// can attribute render load per-enricher. Empty = fall back to the
+	// process default (SetDefaultCaller) then env; see resolveCaller.
+	caller string
+
 	// defaultHeaders are sent on every Get; per-request headers passed
 	// to GetWithHeaders are merged on top (per-request wins).
 	defaultHeaders http.Header
@@ -190,6 +196,14 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	}
 	if c.apiKey != "" {
 		req.Header.Set(header.APIKey, c.apiKey)
+	}
+	// Identify the calling service to the cache so it can forward
+	// X-Fleet-Caller to go-js-proxy / go-html-proxy for per-enricher load
+	// attribution. Set ONLY on the internal cache request — never on the
+	// direct-to-origin fallback (directFetch), which would leak an internal
+	// header to a public site. Empty caller → header omitted (no regression).
+	if caller := c.resolveCaller(); caller != "" {
+		req.Header.Set(header.FleetCaller, caller)
 	}
 	for name, vals := range merged {
 		for _, v := range vals {
