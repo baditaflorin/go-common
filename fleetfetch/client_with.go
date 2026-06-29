@@ -64,6 +64,16 @@ func WithRender(mode string) Option {
 	return func(c *Client) { c.render = mode }
 }
 
+// WithCaller sets the X-Fleet-Caller header this client sends to the fetch
+// cache, identifying the calling service so downstream renderers
+// (go-js-proxy / go-html-proxy) can attribute render load per-enricher.
+// Overrides the process default (SetDefaultCaller) and the env fallback.
+// Most services need not set this: server.New seeds the default from
+// AppName, which every fleetfetch client in the process then inherits.
+func WithCaller(id string) Option {
+	return func(c *Client) { c.caller = sanitizeCaller(id) }
+}
+
 // WithDefaultHeaders sets headers attached to every fetch issued by
 // this client. Per-request headers passed to GetWithHeaders override
 // these on a per-name basis. Common use: a fleet-wide User-Agent or
