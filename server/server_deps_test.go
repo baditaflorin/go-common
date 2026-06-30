@@ -23,7 +23,7 @@ func TestHealthWithoutDeps(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&m); err != nil {
 		t.Fatal(err)
 	}
-	if m["status"] != "healthy" {
+	if m["status"] != "ok" {
 		t.Errorf("status: %v", m["status"])
 	}
 	if _, hasDeps := m["dependencies"]; hasDeps {
@@ -43,7 +43,7 @@ func TestHealthWithAllDepsOK(t *testing.T) {
 
 	var m map[string]interface{}
 	json.NewDecoder(rec.Body).Decode(&m)
-	if m["status"] != "healthy" {
+	if m["status"] != "ok" {
 		t.Errorf("status: %v", m["status"])
 	}
 	deps, ok := m["dependencies"].([]interface{})
