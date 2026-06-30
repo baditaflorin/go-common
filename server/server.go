@@ -92,8 +92,8 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	}
 
 	// Register /health endpoint. Two shapes:
-	//   - no deps registered → flat {"status":"healthy", ...} (legacy)
-	//   - deps registered    → {"status":"healthy|degraded", ...,
+	//   - no deps registered → flat {"status":"ok", ...}
+	//   - deps registered    → {"status":"ok|degraded", ...,
 	//                            "dependencies":[…depcheck.Status]}
 	// HTTP status code is always 200 — degraded is a soft signal, not a
 	// liveness failure.
@@ -101,7 +101,7 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		payload := map[string]interface{}{
-			"status":  "healthy",
+			"status":  "ok",
 			"service": cfg.AppName,
 			"version": cfg.Version,
 		}
@@ -122,11 +122,11 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// BeginDrain has been called on a drain-enabled server.
 	mountReadyz(srv)
 
-	// Register /version endpoint
+	// Register /version endpoint — returns JSON {"version":"<ver>"} per fleet standard.
 	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(cfg.Version))
+		_ = json.NewEncoder(w).Encode(map[string]string{"version": cfg.Version})
 	})
 
 	// /metrics is NOT mounted here on srv.Mux because services that

@@ -4,6 +4,12 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.70.0 — 2026-06-30
+
+### Fixed
+- `server.New()` `/health` handler now returns `"status":"ok"` (was `"healthy"`); fleet E01 eval and fleet-runner smoke gate step 8 now pass for all services using this scaffold
+- `server.New()` `/version` handler now returns `application/json {"version":"<ver>"}` (was `text/plain` bare string); fixes fleet-runner version-match check on deploy
+
 ## v0.69.0 — 2026-06-29
 
 ### Added
