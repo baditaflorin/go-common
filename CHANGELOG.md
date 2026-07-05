@@ -4,6 +4,21 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.71.0 — 2026-07-05
+
+### Added
+- **`nullify` package**: `StringOrNil` / `IsPlaceholder` — the canonical
+  "checked and found nothing" helper for enrichers writing a
+  verdict/classification column. A 2026-07-05 live audit of the
+  `domain_*` enrichment tables
+  (go-url-categorizer-api `docs/audit/2026-07-05-enricher-quality-audit.md`)
+  found at least six enrichers writing a literal placeholder string
+  (`"unknown"`, `"n/a"`, `""`) instead of `NULL` when no real signal
+  was found — the same missing call reintroduced six times, not six
+  unrelated bugs. New enrichers should call `nullify.StringOrNil(...)`
+  at the point a classification is about to be persisted; existing
+  offenders should adopt it per-repo (tracked outside this repo).
+
 ## v0.70.0 — 2026-06-30
 
 ### Fixed
