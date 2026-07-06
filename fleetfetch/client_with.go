@@ -26,6 +26,25 @@ func WithAPIKey(k string) Option {
 // enough that a normal cold-miss upstream fetch completes inside the
 // cache call rather than tripping ErrCacheTimeout. See
 // WithFallbackOnTimeout for the slow-cache behavior.
+//
+// Worst-case latency of a single Get/fetch call is up to 2×d, not d,
+// when WithFallbackOnTimeout is also set: a slow cache call runs for
+// the full d before directFetch takes over, and directFetch then
+// opens its own fresh d-length window rather than sharing what's left
+// of the caller's budget. This is deliberate — the cache attempt and
+// the direct fallback are treated as two independent, fully-timed
+// attempts, not one attempt split across a shared budget (see
+// TestGet_CacheTimeout_FallsBackWhenOptedIn /
+// TestNewHTTPClient_SlowCacheFallsBackNot502 in client_test.go, which
+// pin this as intended behavior). Callers that wrap Get in their own
+// ctx.WithTimeout — or derive a caller-side timeout constant from d —
+// must budget for 2×d, not d, or they will see their own context
+// expire mid-fallback and misread it as a fleetfetch bug. Confirmed
+// live 2026-07-05/06 across multiple consumer services
+// (go_domain_open_source_presence, go_domain_tech_eol_flagger,
+// go_api_extractor, go_domain_mobile_app_resolver,
+// go_seasonal_detector, go_cdn_detector) that each independently
+// doubled their own timeout constants after hitting this.
 func WithTimeout(d time.Duration) Option {
 	return func(c *Client) { c.timeout = d }
 }

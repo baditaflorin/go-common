@@ -288,6 +288,13 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 // directFetch is the fallback path when the cache is unreachable.
 // Uses the SSRF-safe fallback client to fetch targetURL directly
 // from origin. Returns a Response with ViaFallback=true.
+//
+// Deliberately opens its OWN fresh c.timeout window rather than
+// sharing whatever remains of the ctx passed into fetch — a call that
+// times out against the cache and then falls back here can cost up to
+// 2×c.timeout in total. See the WithTimeout doc comment in
+// client_with.go for the full rationale and the two existing tests
+// that pin this as intended, not a bug.
 func (c *Client) directFetch(ctx context.Context, targetURL string, headers http.Header, cacheErr error) (*Response, error) {
 	c.fallbacks.Add(1)
 
