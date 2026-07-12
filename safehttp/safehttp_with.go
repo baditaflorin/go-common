@@ -37,6 +37,16 @@ func WithPortCheck() Option { return func(o *options) { o.portCheck = true } }
 // HTTP/2 still rides the same SSRF-guarded dialer and the TLS-1.2
 // fallback transport, so the SSRF and handshake-recovery guarantees are
 // unchanged.
+//
+// Fetch-cache interaction: WithForceHTTP2 also disqualifies this client
+// from the process-wide DefaultFetchDelegate (the fleet fetch-cache),
+// same as WithoutProxy/WithoutFetchCache. A delegate-served response is
+// reconstructed from cached bytes with no live TLS connection behind it,
+// so resp.TLS is always nil and NegotiatedProtocol(resp) always comes
+// back "" regardless of what the origin actually negotiated — routing a
+// ForceHTTP2 client through the cache silently defeats the option. An
+// explicit per-client WithFetchDelegate() is still honored (it's a
+// deliberate opt-in); only the default delegate is skipped.
 func WithForceHTTP2() Option { return func(o *options) { o.forceHTTP2 = true } }
 
 // WithEgressAllowlist restricts outbound requests to the given hostnames.

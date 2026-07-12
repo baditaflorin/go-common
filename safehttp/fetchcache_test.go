@@ -241,6 +241,64 @@ func TestWithoutFetchCache_IgnoresDefault(t *testing.T) {
 	}
 }
 
+// Regression for the 2026-07 go_page_load_metrics incident: WithForceHTTP2
+// was added to the client's option list (verified present in the compiled
+// binary) but had ZERO observable effect in production against a real
+// HTTP/2-capable origin. Root cause: the default fetch-cache delegate
+// (installed fleet-wide by server.New whenever FLEET_FETCH_CACHE_URL is
+// set) intercepted the eligible GET before it ever reached the base
+// transport that WithForceHTTP2 configures. extrasTransport then
+// synthesizes an *http.Response from the delegate's cached bytes with no
+// live TLS connection behind it (see extras_extras_transport.go) — resp.TLS
+// is always nil and resp.Proto is a hardcoded "HTTP/1.1" — so
+// NegotiatedProtocol always reports "" / never "h2" no matter what the
+// origin actually negotiated. This test asserts WithForceHTTP2 now opts a
+// client OUT of the default delegate (same posture as WithoutProxy /
+// WithoutFetchCache), the same way TestDefaultFetchDelegate_WithoutProxyIgnoresDefault
+// asserts it for WithoutProxy.
+func TestDefaultFetchDelegate_WithForceHTTP2IgnoresDefault(t *testing.T) {
+	allowLoopback(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(203)
+		_, _ = io.WriteString(w, "direct-origin")
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &stubDelegate{status: 200, body: "from-delegate"}
+	SetDefaultFetchDelegate(d)
+	t.Cleanup(func() { SetDefaultFetchDelegate(nil) })
+
+	c := NewClient(WithForceHTTP2())
+	resp, err := c.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if resp.StatusCode != 203 || readBody(t, resp) != "direct-origin" {
+		t.Fatalf("WithForceHTTP2 client should hit origin directly; status=%d", resp.StatusCode)
+	}
+	if len(d.seenURLs) != 0 {
+		t.Fatalf("WithForceHTTP2 client must NOT consult the default delegate, saw %v", d.seenURLs)
+	}
+}
+
+// A per-client WithFetchDelegate is a deliberate opt-in and still wins even
+// when the same client also passes WithForceHTTP2 — mirroring the existing
+// "explicit wins" rule for WithoutProxy/WithoutFetchCache.
+func TestWithFetchDelegate_PerClientWinsOverForceHTTP2(t *testing.T) {
+	t.Cleanup(func() { SetDefaultFetchDelegate(nil) })
+
+	d := &stubDelegate{status: 200, body: "per-client"}
+	c := NewClient(WithForceHTTP2(), WithFetchDelegate(d))
+	req, _ := http.NewRequest(http.MethodGet, "http://does-not-resolve.invalid/", nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if readBody(t, resp) != "per-client" || len(d.seenURLs) != 1 {
+		t.Fatalf("explicit per-client delegate must win even with WithForceHTTP2")
+	}
+}
+
 // WithoutFetchCacheContext opts a single request out of the default
 // delegate even on a normal cache-routing client (the selftest path).
 func TestWithoutFetchCacheContext_BypassesDefault(t *testing.T) {

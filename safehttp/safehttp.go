@@ -435,6 +435,17 @@ func resolveMaxIdleConnsPerHost(n int) int {
 // against HTTP/2-capable origins. WithForceHTTP2 + NegotiatedProtocol is
 // the fleet-canonical replacement for a dedicated TCP/443 ALPN-probe
 // handshake.
+//
+// Fetch-cache callers: since v0.71.0, WithForceHTTP2 also opts the
+// client out of the process-wide default fetch-cache delegate. Before
+// that, a delegate-served response was reconstructed from cached bytes
+// with no live TLS connection behind it — resp.TLS was always nil, so
+// this function returned "" (or, worse, callers reading resp.Proto
+// directly saw a hardcoded "HTTP/1.1") no matter what the origin
+// actually negotiated. If you're inspecting a response from a client
+// built WITHOUT WithForceHTTP2 (or one with an explicit
+// WithFetchDelegate), an empty result here still means "unknown", not
+// "confirmed HTTP/1.1".
 func NegotiatedProtocol(resp *http.Response) string {
 	if resp == nil || resp.TLS == nil {
 		return ""
