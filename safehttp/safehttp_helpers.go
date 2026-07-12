@@ -80,7 +80,25 @@ func NewClient(opts ...Option) *http.Client {
 	// extrasTransport.RoundTrip) so it reaches clients built before
 	// server.New installs it. Here we only capture the per-client explicit
 	// delegate and whether this client is eligible to consult the default.
-	useDefaultFetchCache := !o.noFetchCache && !o.withoutProxy
+	//
+	// forceHTTP2 also disqualifies the DEFAULT delegate, for the same
+	// reason WithoutProxy does. extrasTransport's cache path synthesizes
+	// its *http.Response from delegate-returned bytes with NO live TLS
+	// connection behind it: resp.TLS is always nil and resp.Proto is a
+	// hardcoded "HTTP/1.1" (see extras_extras_transport.go), because the
+	// current FetchResult/fleetfetch wire contract carries no ALPN/protocol
+	// signal at all. A caller that passed WithForceHTTP2() is explicitly
+	// asking to observe the real negotiated protocol via
+	// NegotiatedProtocol(resp) — silently serving that request from the
+	// cache always reports "" / HTTP/1.1 regardless of what the origin
+	// actually negotiated, defeating the option outright. This is exactly
+	// what happened to go_page_load_metrics in 2026-07: WithForceHTTP2 was
+	// added and verified present in the built binary, but every probe was
+	// still served by the fleet fetch-cache, so the fix had zero observable
+	// effect. An explicit per-client WithFetchDelegate is a deliberate
+	// opt-in and still wins — only the *default* (process-wide) delegate is
+	// skipped here.
+	useDefaultFetchCache := !o.noFetchCache && !o.withoutProxy && !o.forceHTTP2
 
 	extras := &extrasTransport{
 		inner:                rt,

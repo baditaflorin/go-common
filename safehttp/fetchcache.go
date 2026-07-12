@@ -90,6 +90,13 @@ func WithFetchDelegate(d FetchDelegate) Option {
 // that must observe real origin behavior (SSRF probers, smuggling
 // detectors, latency/availability monitors) but that don't otherwise set
 // WithoutProxy. An explicit WithFetchDelegate still wins over this flag.
+//
+// Note: WithForceHTTP2() implies this same bypass automatically (see
+// that option's doc comment) — you don't need to also pass
+// WithoutFetchCache() alongside it. Reach for WithoutFetchCache directly
+// when you need a real-origin probe but don't need ForceAttemptHTTP2 for
+// some other reason (e.g. an availability check that only cares about
+// status code / latency, not ALPN).
 func WithoutFetchCache() Option {
 	return func(o *options) { o.noFetchCache = true }
 }

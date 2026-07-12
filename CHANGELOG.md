@@ -4,6 +4,61 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.72.0 — 2026-07-12
+
+### Fixed
+- **`safehttp`: `WithForceHTTP2()` now bypasses the default fetch-cache
+  delegate** — BREAKING (behavior, not signature) for any client that
+  combines `WithForceHTTP2()` with the process-wide fetch-cache (any
+  service with `FLEET_FETCH_CACHE_URL` set, which `server.New` auto-wires
+  via `SetDefaultFetchDelegate`). Root cause of the 2026-07 round-12
+  follow-up: `go_page_load_metrics` added `WithForceHTTP2()` to both its
+  client-construction call sites and confirmed the option compiled into
+  the running binary, yet `https://page-load-metrics.0crawl.com/?target=…`
+  kept reporting `protocol:"HTTP/1.1"` against known-HTTP/2 origins
+  (verified cloudflare.com). The fix was correct — `newBaseTransport`
+  wires `ForceAttemptHTTP2` exactly as documented, confirmed by
+  `TestWithForceHTTP2_NegotiatesH2OnHEAD` — but it had zero effect in
+  production because eligible GETs never reached that transport at all:
+  `useDefaultFetchCache` was `true` for any non-`WithoutProxy` client
+  (the required posture for `FLEET_REQUIRE_PROXY=1` / `proxy_egress:
+  true` services), so `extrasTransport.RoundTrip`
+  (`extras_extras_transport.go`) routed the probe through the fleet
+  fetch-cache delegate instead. That path synthesizes its `*http.Response`
+  from cached bytes with **no live TLS connection behind it** — `resp.TLS`
+  is always `nil` and `resp.Proto` is a hardcoded `"HTTP/1.1"` — because
+  `FetchResult`/`fleetfetch.Response` carry no protocol/ALPN field at all
+  on the current wire contract. `NegotiatedProtocol(resp)` therefore always
+  returned `""` for a delegate-served response regardless of what the
+  origin actually negotiated, silently defeating the option. Confirmed via
+  a minimal repro (`safehttp.NewClient(WithForceHTTP2())` against
+  cloudflare.com): direct egress and proxy-tunneled egress (a local
+  CONNECT proxy, standing in for the production Webshare proxy) both
+  correctly negotiate real h2 (`resp.Proto="HTTP/2.0"`,
+  `NegotiatedProtocol="h2"`) — ruling out the dialer/TLSClientConfig/proxy
+  hypotheses entirely — while installing ANY `DefaultFetchDelegate` flips
+  the same client to `resp.Proto="HTTP/1.1"`, `resp.TLS=nil`,
+  `NegotiatedProtocol=""`, independent of the real origin's capability.
+  `WithForceHTTP2()` now sets `useDefaultFetchCache=false` (mirrors
+  `WithoutProxy`/`WithoutFetchCache`), so a caller who explicitly asked to
+  observe the real negotiated ALPN protocol always gets a live connection.
+  An explicit per-client `WithFetchDelegate(...)` is a deliberate opt-in
+  and still wins over this. New regression tests:
+  `TestDefaultFetchDelegate_WithForceHTTP2IgnoresDefault` and
+  `TestWithFetchDelegate_PerClientWinsOverForceHTTP2`
+  (`safehttp/fetchcache_test.go`) — both fail against the pre-fix code
+  (delegate served a 200 instead of the real origin's 203) and pass with
+  the fix.
+- Documented the same caveat on `NegotiatedProtocol`, `WithForceHTTP2`, and
+  `WithoutFetchCache` doc comments: an empty/`"HTTP/1.1"` reading from a
+  fetch-cache-routed response means "unknown", not "confirmed HTTP/1.1" —
+  the current `FetchResult`/`fleetfetch` wire contract has no channel for
+  the fetch-cache's own upstream protocol at all. Adding one (an
+  `X-FetchCache-Upstream-Protocol` response header from the fetch-cache
+  service through to a `FetchResult.Proto` field) is a separate,
+  cross-repo follow-up — the fetch-cache service itself lives outside this
+  repo.
+
 ## v0.71.0 — 2026-07-05
 
 ### Added
