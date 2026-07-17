@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "name": "test-agent-svc",
+      "summary": "test service",
+      "input_schema": { "type": "object", "properties": { "target": { "type": "string" } }, "required": ["target"] },
+      "auth": { "type": "api_key", "header": "X-API-Key", "query_param": "api_key" }
+    }
+  ]
+}

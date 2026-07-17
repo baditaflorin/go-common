@@ -29,7 +29,7 @@ type AuthEvent struct {
 type AuthSource string
 
 const (
-	AuthSourceBypass   AuthSource = "bypass"   // exempt path: /health, /version, /_gw_health, /capabilities
+	AuthSourceBypass   AuthSource = "bypass"   // exempt path: /health, /version, /_gw_health, /capabilities, /openapi.json, /agent.json
 	AuthSourceGateway  AuthSource = "gateway"  // upstream nginx set the trust header
 	AuthSourceLocal    AuthSource = "local"    // local-token fast path
 	AuthSourceKeystore AuthSource = "keystore" // upstream keystore call (possibly cached)
