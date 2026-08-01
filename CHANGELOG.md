@@ -4,6 +4,42 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.73.0 — 2026-08-01
+
+### Fixed
+- **`dataformat`: encoding to XML no longer trusts a decoded key as a
+  well-formed element/attribute name** — found during a TRL audit of
+  `go_data_format_converter`. `writeXMLElement` wrote a `map[string]any`
+  key (and, for `-`-prefixed attribute keys, the attribute name) straight
+  into the output buffer via `xmlEscapeName`, which is a no-op writer —
+  correct for the *decode* path (names there came from `xml.Unmarshal`
+  parsing already-well-formed markup) but not for *encode*, where the key
+  is an arbitrary JSON/YAML/TOML/CSV field name with no such guarantee.
+  Two concrete, evidence-backed failure modes: (1) an ordinary field like
+  `"first name"` produced syntactically invalid XML
+  (`<first name>Ada</first name>`) instead of erroring; (2) a key
+  containing markup metacharacters was an outright **XML injection** —
+  `{"root":{"a</root><evil>injected":"x"}}` converted to
+  `<root><a</root><evil>injected>x</a</root><evil>injected></root>`,
+  closing the enclosing tag and splicing in attacker-controlled sibling
+  markup rather than rendering the key as inert text. Both were silent:
+  no error was returned in either case, so `go_data_format_converter`'s
+  handler reported `HTTP 200` with a `result` field containing broken or
+  injected markup instead of the existing non-fatal
+  `degraded:["convert_failed:…"]` path it uses for every other
+  unrepresentable shape. Fixed by adding `isValidXMLName` (an ASCII XML
+  1.0 Name-production check, plus the reserved `xml*` prefix) and having
+  `writeXMLElement` validate both the element name and every attribute
+  name *before* writing anything, returning `ErrUnsupportedShape` (the
+  package's existing "target format can't represent this" convention) on
+  failure instead of ever emitting unescaped/invalid markup. Ordinary
+  identifier-shaped keys (letters, digits, `_`, `-`) are unaffected — see
+  `TestXMLEncodeAcceptsOrdinaryIdentifierKeys`; the injection/malformed
+  cases are covered by `TestXMLEncodeRejectsInvalidNames`
+  (`dataformat/dataformat_test.go`). Not a wire-format change: only
+  previously-silent bad output is affected, and it now surfaces through
+  the same degrade path callers already handle.
+
 ## v0.72.0 — 2026-07-12
 
 ### Fixed

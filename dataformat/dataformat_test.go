@@ -303,9 +303,9 @@ func TestXMLRoundTrip(t *testing.T) {
 
 func TestXMLEncodeUnsupportedShape(t *testing.T) {
 	cases := []string{
-		`[1,2,3]`,                 // top-level array
-		`{"a":1,"b":2}`,           // multiple roots
-		`"just a string"`,         // bare scalar
+		`[1,2,3]`,         // top-level array
+		`{"a":1,"b":2}`,   // multiple roots
+		`"just a string"`, // bare scalar
 	}
 	for _, src := range cases {
 		t.Run(src, func(t *testing.T) {
@@ -314,6 +314,65 @@ func TestXMLEncodeUnsupportedShape(t *testing.T) {
 				t.Fatalf("expected ErrUnsupportedShape, got %v", err)
 			}
 		})
+	}
+}
+
+// TestXMLEncodeRejectsInvalidNames guards against a real bug: a decoded key
+// that is not a valid XML 1.0 Name (a JSON/YAML/TOML/CSV field is just a
+// string — it carries no such guarantee) used to be written into the
+// element/attribute name position completely unescaped. That silently
+// produced malformed XML for something as ordinary as a "first name" key,
+// and for a key containing markup metacharacters (`<`, `>`, `&`, `"`) it was
+// an outright XML injection: the decoded key could close the enclosing tag
+// and splice in arbitrary sibling markup instead of being rendered as inert
+// data. Every one of these must now fail closed as ErrUnsupportedShape (the
+// existing non-fatal "target format can't represent this shape" convention)
+// rather than emit broken/injected markup.
+func TestXMLEncodeRejectsInvalidNames(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"space in key", `{"root":{"first name":"Ada"}}`},
+		{"empty key", `{"root":{"":"x"}}`},
+		{"leading digit", `{"root":{"123":"x"}}`},
+		{"injection via closing+opening tag", `{"root":{"a</root><evil>injected":"x"}}`},
+		{"ampersand in key", `{"root":{"a&b":"x"}}`},
+		{"quote in key", `{"root":{"a\"b":"x"}}`},
+		{"injection via attribute key", `{"root":{"-attr\"><evil x=\"":"y"}}`},
+		{"reserved xml prefix", `{"root":{"xmlns":"x"}}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := Convert(JSON, XML, []byte(c.src))
+			if err == nil {
+				t.Fatalf("expected an error for invalid XML name, got output: %s", out)
+			}
+			if !errors.Is(err, ErrUnsupportedShape) {
+				t.Fatalf("expected ErrUnsupportedShape, got %v", err)
+			}
+		})
+	}
+}
+
+// TestXMLEncodeAcceptsOrdinaryIdentifierKeys is the companion positive case:
+// realistic field names (letters, digits, underscore, hyphen) must keep
+// working exactly as before — the fix must not regress legitimate data.
+// (A leading-colon/namespace-prefixed name is deliberately not exercised
+// here: decodeXML already collapses "ns:tag" to "tag" via xml.Name.Local,
+// a pre-existing, separate decode-side asymmetry outside this fix's scope.)
+func TestXMLEncodeAcceptsOrdinaryIdentifierKeys(t *testing.T) {
+	src := `{"root":{"host_name":"example.com","port-8080":"open","a1":"b2"}}`
+	out, err := Convert(JSON, XML, []byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error for valid identifier keys: %v", err)
+	}
+	back, err := Convert(XML, JSON, out)
+	if err != nil {
+		t.Fatalf("XML->JSON: %v", err)
+	}
+	if !jsonEqual(t, []byte(src), back) {
+		t.Fatalf("round-trip mismatch:\n  got = %s\n  via = %s", back, out)
 	}
 }
 
