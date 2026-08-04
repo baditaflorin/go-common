@@ -13,9 +13,12 @@ import (
 //  2. URL path /t/{token}/...     (legacy support)
 //  3. ?api_key=<token> query param (browser-friendly)
 //
-// The /health, /version, and /capabilities paths bypass auth regardless
-// of token. /capabilities is scraped unauthenticated by the catalog and
-// hub so users can discover query flags.
+// The /health, /version, /capabilities, /openapi.json, and /agent.json
+// paths bypass auth regardless of token. /capabilities and /openapi.json
+// are scraped unauthenticated by the catalog and hub so users can
+// discover query flags and the API surface; /agent.json is the agent
+// contract — an agent must read it BEFORE it has a key, so it must be
+// reachable unauthenticated.
 func TokenAuth(validTokens []string) Middleware {
 	validMap := make(map[string]bool)
 	for _, t := range validTokens {

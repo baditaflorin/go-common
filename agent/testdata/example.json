@@ -1,0 +1,11 @@
+{
+  "schema_version": 0,
+  "tools": [
+    {
+      "name": "demo-tool",
+      "summary": "demo",
+      "input_schema": { "type": "object", "properties": {}, "required": [] },
+      "auth": { "type": "api_key", "header": "X-API-Key", "query_param": "api_key" }
+    }
+  ]
+}

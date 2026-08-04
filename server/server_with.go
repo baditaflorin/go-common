@@ -1,6 +1,9 @@
 package server
 
 import (
+	"embed"
+
+	"github.com/baditaflorin/go-common/agent"
 	"github.com/baditaflorin/go-common/apikey"
 	"github.com/baditaflorin/go-common/depcheck"
 	"github.com/baditaflorin/go-common/middleware"
@@ -184,6 +187,71 @@ func WithOpenAPI(spec *openapipkg.Spec) Option {
 			panic("openapi spec serialization failed: " + err.Error())
 		}
 		s.Mux.HandleFunc("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data) //nolint:errcheck // client disconnect is not actionable
+		})
+	}
+}
+
+// WithAgent registers a GET /agent.json handler that serves an
+// agent-facing contract — the machine-readable "how to call me" document
+// for AI agents (MCP servers, Claude, Codex, the catalog hub). It is the
+// agentic counterpart to /capabilities (query-flag dials) and /schema
+// (envelope version).
+//
+// The contract is serialised once at startup, so mutations after this call
+// are not reflected — build it with agent.DefaultContract or
+// agent.LoadEmbed before passing it here.
+//
+//	srv := server.New(cfg, server.WithAgent(agent.DefaultContract(cfg.AppName, cfg.Version)))
+//
+// Most services should prefer WithAgentFromEmbed with a shipped agent.json
+// so the contract carries a precise input schema and examples.
+func WithAgent(c agent.Contract) Option {
+	return func(s *Server) {
+		if c.Service == "" {
+			c.Service = s.Config.AppName
+		}
+		if c.Version == "" {
+			c.Version = s.Config.Version
+		}
+		if c.SchemaVersion == 0 {
+			c.SchemaVersion = agent.DefaultSchemaVersion
+		}
+		data, err := c.JSON()
+		if err != nil {
+			panic("agent contract serialization failed: " + err.Error())
+		}
+		s.Mux.HandleFunc("/agent.json", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data) //nolint:errcheck // client disconnect is not actionable
+		})
+	}
+}
+
+// WithAgentFromEmbed reads agent.json from an embedded filesystem and serves
+// it at GET /agent.json. This is the recommended service pattern:
+//
+//	//go:embed agent.json
+//	var agentFS embed.FS
+//	srv := server.New(cfg, server.WithAgentFromEmbed(agentFS, "agent.json"))
+//
+// service/version are taken from cfg when the embedded file omits them, so a
+// service ships only the fields that differ from the default. A missing or
+// invalid embed fails fast rather than silently serving a wrong contract.
+func WithAgentFromEmbed(fsys embed.FS, name string) Option {
+	return func(s *Server) {
+		c, err := agent.LoadEmbed(fsys, name, s.Config.AppName, s.Config.Version)
+		if err != nil {
+			panic("agent: " + err.Error())
+		}
+		data, err := c.JSON()
+		if err != nil {
+			panic("agent contract serialization failed: " + err.Error())
+		}
+		s.Mux.HandleFunc("/agent.json", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			w.Write(data) //nolint:errcheck // client disconnect is not actionable
