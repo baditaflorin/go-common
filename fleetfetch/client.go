@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/baditaflorin/go-common/safehttp"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/baditaflorin/go-common/safehttp"
 )
 
 // PublicURL is the externally-resolvable HTTPS endpoint exposed at
@@ -24,6 +28,11 @@ const PublicURL = "https://go-infrastructure-fetch-cache.0exec.com"
 // it into the cache key so that different header sets (e.g.
 // Accept: application/rdap+json vs. default) don't collide.
 const ForwardHeaderPrefix = "X-FF-Forward-"
+
+// fetchCacheHopHeader is internal cache-control metadata used by server's
+// loop guard. It must travel to the cache itself, not to the public origin
+// and not through X-FF-Forward-* (where it would fragment cache identity).
+const fetchCacheHopHeader = "X-Fetch-Cache-Hop"
 
 // Response is the result of a fetch. Body is the upstream body
 // verbatim; the cache-side metadata is broken out into typed fields
@@ -88,7 +97,67 @@ const (
 // a slow origin), as distinct from "the cache is down" (which still
 // transparently falls back to a direct fetch). Callers can retry — a
 // second attempt usually lands on a now-warm cache entry.
-var ErrCacheTimeout = errors.New("fleetfetch: cache request timed out")
+var (
+	ErrCacheTimeout = errors.New("fleetfetch: cache request timed out")
+
+	// ErrRenderBusy is the sentinel wrapped by *RenderBusyError when the
+	// fetch cache explicitly sheds a rendered request. It is distinct from
+	// a cache transport outage and from an upstream 503 replayed by the
+	// cache. Callers may use errors.Is(err, ErrRenderBusy), then errors.As
+	// to inspect Retry-After without parsing an error string.
+	ErrRenderBusy = errors.New("fleetfetch: renderer at capacity")
+)
+
+// RenderBusyError preserves the structured load-shed response returned by
+// the fetch cache. RetryAfter is the exact wire value (seconds or HTTP-date)
+// so a coordinator can propagate it without losing information.
+type RenderBusyError struct {
+	StatusCode int
+	RetryAfter string
+	Message    string
+}
+
+func (e *RenderBusyError) Error() string {
+	if e == nil {
+		return ErrRenderBusy.Error()
+	}
+	detail := e.Message
+	if detail == "" {
+		detail = ErrRenderBusy.Error()
+	}
+	if e.RetryAfter != "" {
+		return fmt.Sprintf("%s (http %d, retry-after %s)", detail, e.StatusCode, e.RetryAfter)
+	}
+	return fmt.Sprintf("%s (http %d)", detail, e.StatusCode)
+}
+
+// Unwrap makes errors.Is(err, ErrRenderBusy) work while retaining typed
+// Retry-After details through errors.As.
+func (e *RenderBusyError) Unwrap() error { return ErrRenderBusy }
+
+// RetryDelay converts Retry-After into a non-negative delay. Both forms
+// allowed by RFC 9110 are accepted: integer seconds and an HTTP date.
+func (e *RenderBusyError) RetryDelay(now time.Time) (time.Duration, bool) {
+	if e == nil || strings.TrimSpace(e.RetryAfter) == "" {
+		return 0, false
+	}
+	value := strings.TrimSpace(e.RetryAfter)
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if seconds < 0 {
+			seconds = 0
+		}
+		return time.Duration(seconds) * time.Second, true
+	}
+	when, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	delay := when.Sub(now)
+	if delay < 0 {
+		delay = 0
+	}
+	return delay, true
+}
 
 // Option configures a Client.
 type Option func(*Client)

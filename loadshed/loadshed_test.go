@@ -180,6 +180,34 @@ func TestWriteShed_Wire(t *testing.T) {
 	}
 }
 
+func TestDecodeShed(t *testing.T) {
+	w := httptest.NewRecorder()
+	WriteShed(w, 3, "render queue full")
+
+	message, ok := DecodeShed(w.Code, w.Body.Bytes())
+	if !ok || message != "render queue full" {
+		t.Fatalf("canonical response: message=%q ok=%v", message, ok)
+	}
+
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"wrong status", http.StatusBadGateway, w.Body.String()},
+		{"invalid json", http.StatusServiceUnavailable, "not-json"},
+		{"ordinary upstream envelope", http.StatusServiceUnavailable, `{"status":"error","error":{"code":503,"error_code":"upstream_unavailable","message":"origin down"}}`},
+		{"missing error", http.StatusServiceUnavailable, `{"status":"error"}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if message, ok := DecodeShed(tc.status, []byte(tc.body)); ok {
+				t.Fatalf("unexpected shed classification: message=%q", message)
+			}
+		})
+	}
+}
+
 func TestGuard_GatesWholeHandler(t *testing.T) {
 	g := New("guarded", 1)
 	// Occupy the only slot so the guarded request is shed.

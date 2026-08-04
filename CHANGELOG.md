@@ -4,6 +4,23 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.73.1 — 2026-08-04
+
+### Fixed
+- **`fleetfetch`: coordinated renderer overload without multiplying work.**
+  Canonical `load_shed` responses for JS/HTML/network render requests now
+  return a typed `ErrRenderBusy` / `*RenderBusyError`, preserving the exact
+  `Retry-After` value instead of launching one unshared direct request per
+  caller and silently substituting raw HTML for rendered evidence. Default
+  static requests retain their semantically equivalent direct fallback.
+  Origin/negative-cached 5xx responses carrying `X-FetchCache-Fetched-At`
+  are now replayed as-is instead of bypassing the negative cache. Genuine
+  cache transport failures and untyped cache-service 5xx responses retain
+  the previous direct-fallback behavior. The internal one-hop loop marker
+  now travels as cache control metadata rather than leaking to origins and
+  fragmenting representation cache keys. Added exhaustive direct/render,
+  cache-replay, outage, Retry-After, and HTTP-adapter regression coverage.
+
 ## v0.73.0 — 2026-08-01
 
 ### Fixed
