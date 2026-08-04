@@ -39,6 +39,26 @@ func WriteShed(w http.ResponseWriter, retryAfterSeconds int, msg string) {
 	)
 }
 
+// DecodeShed reports whether an HTTP response is the canonical load-shed
+// envelope emitted by WriteShed. The HTTP status alone is deliberately not
+// enough: a 503 can also be a real upstream response replayed by a cache.
+//
+// The returned message is advisory. Callers should branch on ok (or on
+// ShedErrorCode), never on the human-readable text.
+func DecodeShed(statusCode int, body []byte) (message string, ok bool) {
+	if statusCode != http.StatusServiceUnavailable {
+		return "", false
+	}
+	var envelope response.Response
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope.Error == nil {
+		return "", false
+	}
+	if envelope.Error.ErrorCode != ShedErrorCode {
+		return "", false
+	}
+	return envelope.Error.Message, true
+}
+
 // Guard returns net/http middleware that gates every request through g:
 // a request that obtains a slot runs next (releasing on return); a
 // request that finds the gate full is shed via WriteShed and never

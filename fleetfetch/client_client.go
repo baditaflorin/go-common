@@ -4,13 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/baditaflorin/go-common/header"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/baditaflorin/go-common/header"
+	"github.com/baditaflorin/go-common/loadshed"
 )
 
 // Client wraps the HTTP plumbing for talking to the fleet fetch cache,
@@ -59,8 +61,10 @@ type Client struct {
 	errs      atomic.Int64
 }
 
-// Get fetches targetURL through the cache. On a cache 5xx/network
-// failure, falls back to a direct SSRF-safe fetch.
+// Get fetches targetURL through the cache. Genuine cache-service/network
+// failures fall back to a direct SSRF-safe fetch. Cached upstream failures
+// are returned as-is, and typed load shedding for rendered modes returns
+// ErrRenderBusy rather than silently substituting unrendered bytes.
 func (c *Client) Get(ctx context.Context, targetURL string) (*Response, error) {
 	return c.fetch(ctx, targetURL, 0, nil, c.render)
 }
@@ -145,6 +149,9 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 			}
 		case errors.Is(retErr, ErrCacheTimeout):
 			ev.Result = "timeout"
+		case errors.Is(retErr, ErrRenderBusy):
+			ev.Result = "busy"
+			ev.Status = http.StatusServiceUnavailable
 		case retErr != nil:
 			ev.Result = "error"
 		case fetchRes == nil:
@@ -163,6 +170,11 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 		emit(ev)
 	}()
 	merged := mergeHeaders(c.defaultHeaders, perReqHeaders)
+	// The server loop marker controls the cache request itself. Keeping it
+	// out of merged prevents both public-header leakage and a unique
+	// X-FF-Forward-* cache-key cohort for delegated requests.
+	cacheHop := merged.Get(fetchCacheHopHeader)
+	merged.Del(fetchCacheHopHeader)
 
 	// WithoutCache: never touch the cache — fetch direct via the
 	// proxy-aware fallback client. Emits result="direct" / "direct_error"
@@ -205,6 +217,9 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	if caller := c.resolveCaller(); caller != "" {
 		req.Header.Set(header.FleetCaller, caller)
 	}
+	if cacheHop != "" {
+		req.Header.Set(fetchCacheHopHeader, cacheHop)
+	}
 	for name, vals := range merged {
 		for _, v := range vals {
 			req.Header.Add(ForwardHeaderPrefix+name, v)
@@ -238,21 +253,41 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	}
 	defer resp.Body.Close()
 
-	// Cache returned a 5xx → fallback.
-	if resp.StatusCode >= 500 {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache body: %w", err))
+	}
+
+	// A fetched-at marker means the cache is replaying an origin result,
+	// including a negative-cached 5xx. Preserve it exactly; direct-fetching
+	// here defeats negative caching and multiplies origin load per caller.
+	fetchedAt := resp.Header.Get("X-FetchCache-Fetched-At")
+	if resp.StatusCode >= 500 && fetchedAt == "" {
+		if message, shed := loadshed.DecodeShed(resp.StatusCode, body); shed {
+			busyErr := &RenderBusyError{
+				StatusCode: resp.StatusCode,
+				RetryAfter: resp.Header.Get("Retry-After"),
+				Message:    message,
+			}
+			// A static/default fetch can degrade to a semantically equivalent
+			// direct request. Rendered modes cannot: doing so silently replaces
+			// post-JS evidence with raw HTML and creates unshared origin work.
+			if render != RenderDefault {
+				c.errs.Add(1)
+				return nil, busyErr
+			}
+			return c.directFetch(ctx, targetURL, merged, busyErr)
+		}
+		// Preserve the historical fallback for genuine cache-service 5xx
+		// responses that are neither origin replay nor typed load shedding.
 		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache status %d", resp.StatusCode))
 	}
 	// Cache returned a 4xx but the response has no X-FetchCache-*
 	// headers → the cache itself rejected us (auth, malformed input,
 	// rate limit), not an upstream-passed 4xx. Fall back so the
 	// producer still gets a real response.
-	if resp.StatusCode >= 400 && resp.Header.Get("X-FetchCache-Fetched-At") == "" {
+	if resp.StatusCode >= 400 && fetchedAt == "" {
 		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache rejected with status %d (no X-FetchCache headers)", resp.StatusCode))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache body: %w", err))
 	}
 
 	out := &Response{
@@ -268,8 +303,8 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	if v := resp.Header.Get("X-FetchCache-Upstream-Ms"); v != "" {
 		out.UpstreamMS, _ = strconv.ParseInt(v, 10, 64)
 	}
-	if v := resp.Header.Get("X-FetchCache-Fetched-At"); v != "" {
-		out.FetchedAt, _ = time.Parse(time.RFC3339, v)
+	if fetchedAt != "" {
+		out.FetchedAt, _ = time.Parse(time.RFC3339, fetchedAt)
 	}
 	out.Render = resp.Header.Get("X-FetchCache-Render")
 	out.Via = resp.Header.Get("X-FetchCache-Via")

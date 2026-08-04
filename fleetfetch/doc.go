@@ -48,12 +48,20 @@
 //
 // # Resilience
 //
-// If the cache returns 5xx, rejects the request (4xx with no
-// X-FetchCache-* headers), or is unreachable at the transport level
-// (connection refused / DNS / no route), fleetfetch transparently
-// falls back to a direct safehttp.NewClient fetch (with SSRF guard
-// intact). The caller never sees a cache outage as a fetch failure —
-// only as a missing hit (Response.ViaFallback, metric result="fallback").
+// If the cache itself returns an untyped 5xx, rejects the request (4xx with
+// no X-FetchCache-* headers), or is unreachable at the transport level
+// (connection refused / DNS / no route), fleetfetch transparently falls
+// back to a direct safehttp.NewClient fetch (with SSRF guard intact). The
+// caller sees that degradation through Response.ViaFallback and metric
+// result="fallback". An upstream 5xx carrying X-FetchCache-Fetched-At is
+// instead returned as-is so negative caching is not defeated.
+//
+// A canonical load_shed 503 is also distinct from an outage. Default/static
+// fetches may degrade to equivalent direct bytes, but rendered modes return
+// ErrRenderBusy (metric result="busy") with Retry-After preserved on the
+// typed *RenderBusyError. This prevents a saturated renderer from causing
+// one unshared direct origin request per waiting service and prevents raw
+// HTML from being mistaken for post-JS evidence.
 //
 // A *slow* cache is treated differently from a *dead* one. When the
 // request to the cache exceeds the client timeout — typically a cold

@@ -37,6 +37,8 @@ type Observer interface {
 //	              (unless WithFallbackOnTimeout) — distinct from
 //	              "fallback" so a slow cache doesn't pollute the
 //	              direct-egress / proxy-bypass metric
+//	"busy"      — cache explicitly shed a rendered request; no direct
+//	              fallback was attempted because it would change semantics
 //	"error"     — both cache and fallback failed, or caller context done
 //	"direct"    — WithoutCache client: cache deliberately skipped, fetched
 //	              direct via the proxy-aware path (returned a response).
