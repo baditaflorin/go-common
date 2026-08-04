@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/baditaflorin/go-common/agent"
 	"github.com/baditaflorin/go-common/client"
 	"github.com/baditaflorin/go-common/config"
 	"github.com/baditaflorin/go-common/depcheck"
@@ -86,6 +87,17 @@ type Server struct {
 	// Server-Timing + X-Request-Stats on every response). Set via
 	// WithoutRequestStats; default is enabled.
 	noRequestStats bool
+
+	// AgentContract is the resolved contract from WithAgent /
+	// WithAgentFromEmbed, stashed here (regardless of option order) so
+	// WithMCP can build its MCP tool list from the same source of truth
+	// that serves GET /agent.json. Zero value if neither option was used.
+	AgentContract agent.Contract
+
+	// mcpEnabled is set by WithMCP; the /mcp mount happens in New(),
+	// after every option has run, so WithAgent/WithAgentFromEmbed and
+	// WithMCP can be passed in either order.
+	mcpEnabled bool
 }
 
 // Handler returns the fully-wrapped HTTP handler — middleware chain
