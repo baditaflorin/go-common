@@ -4,6 +4,46 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.74.0 — 2026-08-05
+
+### Added
+
+- **`server.WithMCP()` — bridge a service's agent contract onto a real Model
+  Context Protocol Streamable HTTP endpoint at `/mcp`.** Phase 1 of making
+  fleet services directly usable as MCP tools from Claude/Codex/other
+  agents, using the official `github.com/modelcontextprotocol/go-sdk`
+  (pinned `v1.5.0`, stable Streamable HTTP + OAuth support).
+
+  Each `agent.Tool` in the service's `agent.Contract` (see `WithAgent` /
+  `WithAgentFromEmbed`, `v0.73.0`) becomes one MCP tool. A `tools/call`
+  replays as an in-process `*http.Request` against the service's own
+  `s.Mux` — the same route its HTTP callers hit — so the MCP surface can
+  never drift from the real handler. No second auth path either: `/mcp`
+  sits behind the same middleware chain (`WithKeystoreAuth`) as every
+  other route, so it takes the same `Authorization: Bearer <key>` the
+  fleet keystore already issues.
+
+  `WithAgent`/`WithAgentFromEmbed` and `WithMCP` can be passed to
+  `server.New` in either order — the contract is resolved into
+  `Server.AgentContract` during option application, and `/mcp` is
+  mounted after the full option list has run.
+
+  New optional `agent.Tool` fields `Method` and `Path` tell the bridge
+  how to build the synthetic request (default `GET "/"`, matching the
+  existing `DefaultTool` convention of a query-string-driven primary
+  input). Additive — existing `agent.json` files with no `method`/`path`
+  keep working unchanged.
+
+  ```go
+  srv := server.New(cfg,
+      server.WithAgent(agent.DefaultContract(cfg.AppName, cfg.Version)),
+      server.WithMCP(),
+  )
+  ```
+
+  `WithMCP()` with no agent contract panics at `New()` — a service with
+  nothing to expose as a tool has no reason to mount `/mcp`.
+
 ## v0.73.1 — 2026-08-04
 
 ### Fixed

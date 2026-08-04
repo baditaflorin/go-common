@@ -156,6 +156,13 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// See server/schema.go for the rationale.
 	mountSchema(srv)
 
+	// Register /mcp — MCP Streamable HTTP endpoint bridging the agent
+	// contract (WithAgent/WithAgentFromEmbed, applied above regardless
+	// of option order) into MCP tools. See server/mcp.go.
+	if srv.mcpEnabled {
+		mountMCP(srv)
+	}
+
 	// Add Default Middlewares (executed in slice order — [0] is outermost)
 	// 0. reqstats (outermost: measures total wall-time incl. all middleware,
 	//    emits Server-Timing + X-Request-Stats on every response)

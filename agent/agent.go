@@ -67,6 +67,15 @@ type Tool struct {
 	OutputShape string `json:"output_shape,omitempty"`
 	// Examples are ready-to-run invocations (curl) for the catalog/hub.
 	Examples []string `json:"examples,omitempty"`
+	// Method is the HTTP method server.WithMCP uses to invoke this tool
+	// against the service's own route. Empty defaults to GET.
+	Method string `json:"method,omitempty"`
+	// Path is the HTTP path server.WithMCP invokes, relative to the
+	// service root. Empty defaults to "/". InputSchema properties are
+	// sent as query parameters for GET/HEAD/DELETE, or as a JSON body
+	// otherwise — matching the fleet convention that most services take
+	// their primary input via a query string.
+	Path string `json:"path,omitempty"`
 }
 
 // Auth describes the authorization an agent must attach.
@@ -84,7 +93,7 @@ type Auth struct {
 type Contract struct {
 	// SchemaVersion lets drift checkers distinguish contract shapes.
 	// Bump when Tool/Auth gain fields in a breaking way.
-	SchemaVersion int `json:"schema_version"`
+	SchemaVersion int    `json:"schema_version"`
 	Service       string `json:"service"`
 	Version       string `json:"version"`
 	Tools         []Tool `json:"tools"`
@@ -122,6 +131,8 @@ func DefaultTool(service, version string) Tool {
 		},
 		Auth:        DefaultAuth(),
 		OutputShape: "response.Envelope-wrapped JSON (see server/schema.go _schema_version).",
+		Method:      "GET",
+		Path:        "/",
 	}
 }
 

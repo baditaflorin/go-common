@@ -219,6 +219,7 @@ func WithAgent(c agent.Contract) Option {
 		if c.SchemaVersion == 0 {
 			c.SchemaVersion = agent.DefaultSchemaVersion
 		}
+		s.AgentContract = c
 		data, err := c.JSON()
 		if err != nil {
 			panic("agent contract serialization failed: " + err.Error())
@@ -247,6 +248,7 @@ func WithAgentFromEmbed(fsys embed.FS, name string) Option {
 		if err != nil {
 			panic("agent: " + err.Error())
 		}
+		s.AgentContract = c
 		data, err := c.JSON()
 		if err != nil {
 			panic("agent contract serialization failed: " + err.Error())
