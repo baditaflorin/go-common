@@ -128,7 +128,7 @@ type ScopeChecker interface {
 	VerifyScope(ctx context.Context, key, claimedScope string) error
 }
 
-// extractToken pulls the API key from the three canonical sources, in
+// ExtractToken pulls the API key from the three canonical sources, in
 // priority order:
 //
 //  1. Authorization: Bearer <key>     — what every SDK and API gateway sends
@@ -139,7 +139,13 @@ type ScopeChecker interface {
 // go-common v0.11.0 (2026-05-14). Gateway returns 410 Gone for that
 // shape, so any caller still using it is broken at the edge anyway —
 // no need to honor it at the upstream. Defense in depth.
-func extractToken(r *http.Request) string {
+//
+// Exported (v0.76.0) so callers outside this package can forward the
+// SAME credential the middleware itself trusts — canonically
+// go-common/ledger.CredentialFromRequest, which needs the caller's own
+// token to attribute a metered charge to the right account instead of
+// the forwarding service's own FLEET_API_KEY.
+func ExtractToken(r *http.Request) string {
 	if v := r.Header.Get("Authorization"); strings.HasPrefix(v, "Bearer ") {
 		return strings.TrimPrefix(v, "Bearer ")
 	}

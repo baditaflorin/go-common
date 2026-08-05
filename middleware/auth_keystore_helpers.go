@@ -61,7 +61,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				//     escalate. See KeystoreOpts.OutOfBandScopeCheck.
 				if opts.OutOfBandScopeCheck && opts.ScopeChecker != nil {
 					claimedScope := r.Header.Get(header.AuthScope)
-					token := extractToken(r)
+					token := ExtractToken(r)
 					if token == "" {
 						// No key to re-verify against. Reject —
 						// a request with X-Auth-User but no token
@@ -115,7 +115,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 
 			// 3. Extract the raw token from the same three sources legacy
 			//    TokenAuth checks: Bearer header, /t/<token>/ path, ?api_key=.
-			token := extractToken(r)
+			token := ExtractToken(r)
 			if token == "" {
 				observe(AuthSourceMissing, AuthResultDeny, 0)
 				deny(w, "missing token")
