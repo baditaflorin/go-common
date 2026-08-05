@@ -4,6 +4,36 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.76.0 — 2026-08-05
+
+### Added
+
+- **New `ledger` package — the canonical client for
+  `go-fleet-token-ledger` (ADR-0033).** `ledger.New().Charge(ctx,
+  cred, amount, reason)` deducts tokens from a caller's prepaid
+  balance, attributed via `Credential` — never the calling service's
+  own `FLEET_API_KEY`. `ledger.CredentialFromRequest(r)` forwards the
+  exact token `server.WithKeystoreAuth` already verified for the
+  inbound request, the same caller-credential-forwarding model
+  `go-fleet-mcp-gateway` uses (ADR-0032). A 402 response comes back as
+  `*PaymentRequired` (`errors.As`), carrying the ledger's x402-shaped
+  body verbatim so `ledger.WritePaymentRequired` can proxy it straight
+  through to the metered service's own caller without this client
+  re-deriving the shape.
+
+  This is the "fleet rule: change the library, not every service" for
+  metering — a service opts into charging a caller with three lines
+  in its handler; the account/balance/402 logic lives here once,
+  not duplicated per service.
+
+### Changed
+
+- **`middleware.extractToken` is now exported as `ExtractToken`.**
+  Same three-shape lookup (`Authorization: Bearer` → `X-API-Key` →
+  `?api_key=`), now reusable outside the middleware package —
+  `ledger.CredentialFromRequest` is the first consumer. No behavior
+  change for existing callers of `TokenAuthKeystore`.
+
 ## v0.75.0 — 2026-08-05
 
 ### Added
