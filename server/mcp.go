@@ -117,6 +117,7 @@ func mcpToolHandler(s *Server, t agent.Tool) sdkmcp.ToolHandler {
 		if err != nil {
 			return mcpErrorResult(err.Error()), nil
 		}
+		copyRequestContext(req, httpReq)
 
 		rec := httptest.NewRecorder()
 		s.Mux.ServeHTTP(rec, httpReq)
@@ -129,6 +130,38 @@ func mcpToolHandler(s *Server, t agent.Tool) sdkmcp.ToolHandler {
 			result.IsError = true
 		}
 		return result, nil
+	}
+}
+
+// copyRequestContext propagates the caller's real request-identity headers
+// (X-Forwarded-For, X-Real-IP, User-Agent, Accept-Language, ...) from the
+// original inbound HTTP request onto the synthesized in-process replay, so
+// handlers that inspect the caller (an IP-echo service, User-Agent-derived
+// behaviour, locale negotiation) see the same facts through /mcp as they
+// would through the plain HTTP surface. Without this, every tools/call
+// arrives at the handler as an anonymous request with no RemoteAddr and no
+// headers — reproduced live 2026-08-05 against go-fleet-ip, whose ?json
+// response came back with every field empty.
+//
+// Content-Type / Content-Length are skipped — buildToolRequest already set
+// them correctly for the synthesized body, and copying the *original*
+// request's values would describe the wrong body. Authorization / X-API-Key
+// are also skipped: per this file's package doc, auth already ran against
+// the inbound request before this replay happens, so the synthetic request
+// does not need to carry credentials of its own, and not copying them keeps
+// this bridge from becoming a second place a credential is handled.
+func copyRequestContext(req *sdkmcp.CallToolRequest, upstream *http.Request) {
+	if req.Extra == nil || req.Extra.Header == nil {
+		return
+	}
+	for k, vv := range req.Extra.Header {
+		switch http.CanonicalHeaderKey(k) {
+		case "Authorization", "X-Api-Key", "Content-Type", "Content-Length":
+			continue
+		}
+		for _, v := range vv {
+			upstream.Header.Add(k, v)
+		}
 	}
 }
 

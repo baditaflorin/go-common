@@ -4,6 +4,30 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.77.0 — 2026-08-05
+
+### Fixed
+
+- **`server.WithMCP()`'s tools/call replay dropped every request-identity
+  header, so any handler that inspects the caller saw an anonymous
+  request.** `mcpToolHandler` synthesized a brand-new `*http.Request` via
+  `http.NewRequestWithContext` for the in-process replay against `s.Mux`,
+  carrying none of the original inbound request's headers or RemoteAddr.
+  Reproduced live against `go-fleet-ip`: its `?json` response came back
+  with `ip`, `forwarded_for`, and `user_agent` all empty when called
+  through `/mcp`, even though the identical request over plain HTTP (or
+  through `go-fleet-mcp-gateway`, which forwards `X-Forwarded-For`
+  separately) worked correctly — the gap was specifically in the
+  in-process bridge. New `copyRequestContext` propagates the MCP caller's
+  headers (`X-Forwarded-For`, `X-Real-IP`, `User-Agent`, `Accept-Language`,
+  etc., available via `CallToolRequest.Extra.Header`) onto the synthesized
+  request before replay, skipping `Content-Type`/`Content-Length` (already
+  correctly set for the synthesized body) and `Authorization`/`X-API-Key`
+  (auth already ran against the inbound request; the replay doesn't need
+  its own credentials — see this file's package doc). Any service using
+  `WithMCP()` was affected, not just IP-echo services — this is the
+  general fix, not a `go-fleet-ip`-specific one.
+
 ## v0.76.0 — 2026-08-05
 
 ### Added
