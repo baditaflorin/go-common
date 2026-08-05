@@ -71,11 +71,28 @@ type Tool struct {
 	// against the service's own route. Empty defaults to GET.
 	Method string `json:"method,omitempty"`
 	// Path is the HTTP path server.WithMCP invokes, relative to the
-	// service root. Empty defaults to "/". InputSchema properties are
-	// sent as query parameters for GET/HEAD/DELETE, or as a JSON body
-	// otherwise — matching the fleet convention that most services take
-	// their primary input via a query string.
+	// service root. Empty defaults to "/". May contain "{name}"
+	// placeholders (e.g. "/{type}/{name}") substituted from matching
+	// InputSchema properties before the request is built — several
+	// fleet services (go-fleet-dig's /{type}/{name}) take their
+	// primary input from the path, not a query string. Whatever
+	// InputSchema properties aren't consumed by a placeholder become
+	// query parameters for GET/HEAD/DELETE, or a JSON body otherwise
+	// (unless BodyField is set — see below).
 	Path string `json:"path,omitempty"`
+	// BodyField names the one InputSchema property (must be a string)
+	// sent as the raw, un-encoded request body on non-GET methods,
+	// instead of JSON-marshaling every property. Several fleet
+	// services (go-fleet-md: POST the markdown itself, not a JSON
+	// envelope) take their primary input as a raw body with the rest
+	// of their knobs on the query string. Every other property still
+	// becomes a query parameter, same as the GET/HEAD/DELETE case.
+	// Ignored when Method is empty/GET/HEAD/DELETE.
+	BodyField string `json:"body_field,omitempty"`
+	// BodyContentType is the Content-Type sent with BodyField's raw
+	// value. Defaults to "text/plain; charset=utf-8" when BodyField is
+	// set and this is empty.
+	BodyContentType string `json:"body_content_type,omitempty"`
 }
 
 // Auth describes the authorization an agent must attach.

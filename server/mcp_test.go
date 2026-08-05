@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -11,6 +13,112 @@ import (
 	"github.com/baditaflorin/go-common/agent"
 	"github.com/baditaflorin/go-common/config"
 )
+
+// TestSubstitutePathParams covers the go-fleet-dig shape (path-embedded
+// params, e.g. /{type}/{name}) that a pure query-string convention can't
+// express.
+func TestSubstitutePathParams(t *testing.T) {
+	path, remaining := substitutePathParams("/{type}/{name}", map[string]any{
+		"type": "A", "name": "example.com", "json": true,
+	})
+	if want := "/A/example.com"; path != want {
+		t.Fatalf("path = %q, want %q", path, want)
+	}
+	if len(remaining) != 1 || remaining["json"] != true {
+		t.Fatalf("remaining = %+v, want only {json: true}", remaining)
+	}
+}
+
+func TestSubstitutePathParamsMissingArgSubstitutesEmpty(t *testing.T) {
+	path, remaining := substitutePathParams("/{type}/{name}", map[string]any{"type": "A"})
+	if want := "/A/"; path != want {
+		t.Fatalf("path = %q, want %q (missing arg -> empty, not an error)", path, want)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("remaining = %+v, want empty", remaining)
+	}
+}
+
+// TestBuildToolRequestBodyField covers the go-fleet-md shape: a raw
+// (non-JSON) request body plus separate query-string knobs.
+func TestBuildToolRequestBodyField(t *testing.T) {
+	req, err := buildToolRequest(context.Background(), http.MethodPost, "/", "markdown", "",
+		map[string]any{"markdown": "# hi", "to": "html"})
+	if err != nil {
+		t.Fatalf("buildToolRequest: %v", err)
+	}
+	if req.URL.RequestURI() != "/?to=html" {
+		t.Fatalf("URI = %q, want /?to=html (markdown must not leak into the query string)", req.URL.RequestURI())
+	}
+	body, _ := io.ReadAll(req.Body)
+	if string(body) != "# hi" {
+		t.Fatalf("body = %q, want raw %q, not JSON-wrapped", body, "# hi")
+	}
+	if ct := req.Header.Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want the text/plain default", ct)
+	}
+}
+
+// TestWithMCPEndToEndPathParams proves the full wire path for a
+// go-fleet-dig-shaped tool: initialize -> tools/list -> tools/call with
+// path-embedded args, replayed against a real path-pattern handler.
+func TestWithMCPEndToEndPathParams(t *testing.T) {
+	digHandler := func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.SplitN(strings.Trim(r.URL.Path, "/"), "/", 2)
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(parts[0] + " " + parts[1])) //nolint:errcheck
+	}
+
+	cfg := config.Load("test-mcp-path-params", "1.0.0")
+	contract := agent.Contract{
+		Service: cfg.AppName,
+		Version: cfg.Version,
+		Tools: []agent.Tool{{
+			Name: "dig",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"type": map[string]any{"type": "string"},
+					"name": map[string]any{"type": "string"},
+				},
+				"required": []string{"type", "name"},
+			},
+			Method: "GET",
+			Path:   "/{type}/{name}",
+		}},
+	}
+	srv := New(cfg, WithAgent(contract), WithMCP())
+	srv.Mux.HandleFunc("/", digHandler)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
+	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{Endpoint: ts.URL + "/mcp"}, nil)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer session.Close()
+
+	result, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
+		Name:      "dig",
+		Arguments: map[string]any{"type": "A", "name": "example.com"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("CallTool IsError=true: %+v", result.Content)
+	}
+	text := result.Content[0].(*sdkmcp.TextContent).Text
+	if want := "A example.com"; text != want {
+		t.Fatalf("CallTool text = %q, want %q", text, want)
+	}
+}
 
 // TestWithMCPRequiresAgentContract asserts the fail-fast: WithMCP with no
 // WithAgent/WithAgentFromEmbed has nothing to expose and must panic rather

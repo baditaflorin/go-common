@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -112,7 +113,7 @@ func mcpToolHandler(s *Server, t agent.Tool) sdkmcp.ToolHandler {
 			}
 		}
 
-		httpReq, err := buildToolRequest(ctx, method, path, args)
+		httpReq, err := buildToolRequest(ctx, method, path, t.BodyField, t.BodyContentType, args)
 		if err != nil {
 			return mcpErrorResult(err.Error()), nil
 		}
@@ -131,22 +132,66 @@ func mcpToolHandler(s *Server, t agent.Tool) sdkmcp.ToolHandler {
 	}
 }
 
-// buildToolRequest encodes args as query parameters for GET/HEAD/DELETE
-// (the fleet convention most single-purpose services follow — a primary
-// ?target= or similar param), or as a JSON body for every other method.
-func buildToolRequest(ctx context.Context, method, path string, args map[string]any) (*http.Request, error) {
+// pathParamPattern matches "{name}" placeholders in a Tool.Path.
+var pathParamPattern = regexp.MustCompile(`\{([a-zA-Z_][a-zA-Z0-9_]*)\}`)
+
+// substitutePathParams replaces every "{name}" placeholder in path with
+// args["name"] (URL-path-escaped) and returns the substituted path plus
+// a copy of args with the consumed keys removed, so callers can safely
+// turn whatever's left into query parameters or a body without
+// double-sending the path-bound values.
+//
+// A placeholder with no matching arg substitutes as empty — the
+// resulting 404/400 from the real handler is a clearer signal than a
+// bridge-level error for a case that's really "the agent didn't supply
+// a required field."
+func substitutePathParams(path string, args map[string]any) (string, map[string]any) {
+	remaining := make(map[string]any, len(args))
+	for k, v := range args {
+		remaining[k] = v
+	}
+	substituted := pathParamPattern.ReplaceAllStringFunc(path, func(m string) string {
+		name := m[1 : len(m)-1]
+		v, ok := remaining[name]
+		if !ok {
+			return ""
+		}
+		delete(remaining, name)
+		return url.PathEscape(scalarString(v))
+	})
+	return substituted, remaining
+}
+
+// buildToolRequest builds the *http.Request for one tools/call. Path
+// placeholders are substituted first (see substitutePathParams); of
+// what's left:
+//   - GET/HEAD/DELETE: query parameters.
+//   - non-GET with bodyField set: args[bodyField] (a string) becomes
+//     the raw request body verbatim, everything else becomes query
+//     parameters — the go-fleet-md shape (raw body + query knobs).
+//   - non-GET otherwise: the whole remaining map, JSON-marshaled, is
+//     the body — the default shape for services with a JSON-object API.
+func buildToolRequest(ctx context.Context, method, path, bodyField, bodyContentType string, args map[string]any) (*http.Request, error) {
+	path, args = substitutePathParams(path, args)
+
 	switch strings.ToUpper(method) {
 	case http.MethodGet, http.MethodHead, http.MethodDelete:
-		q := url.Values{}
-		for k, v := range args {
-			q.Set(k, scalarString(v))
-		}
-		target := path
-		if enc := q.Encode(); enc != "" {
-			target += "?" + enc
-		}
-		return http.NewRequestWithContext(ctx, method, target, nil)
+		return http.NewRequestWithContext(ctx, method, withQuery(path, args), nil)
 	default:
+		if bodyField != "" {
+			raw, _ := args[bodyField].(string)
+			delete(args, bodyField)
+			r, err := http.NewRequestWithContext(ctx, method, withQuery(path, args), strings.NewReader(raw))
+			if err != nil {
+				return nil, err
+			}
+			ct := bodyContentType
+			if ct == "" {
+				ct = "text/plain; charset=utf-8"
+			}
+			r.Header.Set("Content-Type", ct)
+			return r, nil
+		}
 		body, err := json.Marshal(args)
 		if err != nil {
 			return nil, fmt.Errorf("encode arguments: %w", err)
@@ -158,6 +203,19 @@ func buildToolRequest(ctx context.Context, method, path string, args map[string]
 		r.Header.Set("Content-Type", "application/json")
 		return r, nil
 	}
+}
+
+// withQuery appends args as a query string onto path (path may already
+// have been through substitutePathParams).
+func withQuery(path string, args map[string]any) string {
+	q := url.Values{}
+	for k, v := range args {
+		q.Set(k, scalarString(v))
+	}
+	if enc := q.Encode(); enc != "" {
+		return path + "?" + enc
+	}
+	return path
 }
 
 // scalarString renders one decoded JSON argument value as a query-string
