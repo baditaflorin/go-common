@@ -4,6 +4,31 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.75.0 — 2026-08-05
+
+### Added
+
+- **`agent.Tool.Path` now supports `{name}` placeholders, and a new
+  `agent.Tool.BodyField` covers raw-body services.** Discovered
+  onboarding the first real pilot services (Phase 5 of the MCP
+  rollout, go-fleet-dig / go-fleet-md / go-fleet-pwgen):
+  `server.WithMCP()`'s original two shapes — GET+query-string,
+  POST+JSON-object-body — didn't cover services whose primary input
+  is path-embedded (`go-fleet-dig`: `GET /{type}/{name}`) or a raw
+  body with separate query knobs (`go-fleet-md`: `POST /` with the
+  markdown itself as the body, `?to=`/`?width=` alongside it).
+
+  `Path: "/{type}/{name}"` substitutes matching `InputSchema`
+  properties before the request is built; whatever's left becomes
+  query parameters (GET/HEAD/DELETE) or the JSON body (default,
+  non-GET). Setting `BodyField: "markdown"` sends
+  `args["markdown"]` as the raw, un-encoded request body instead —
+  every other property still becomes a query parameter.
+  `BodyContentType` overrides the default `text/plain; charset=utf-8`.
+
+  Both fields are additive; existing `agent.json` files and the
+  original two shapes are unaffected.
+
 ## v0.74.0 — 2026-08-05
 
 ### Added
