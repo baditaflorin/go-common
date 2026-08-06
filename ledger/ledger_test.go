@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestCredentialFromRequest_bearer(t *testing.T) {
@@ -110,5 +112,114 @@ func TestCharge_unavailable(t *testing.T) {
 	_, err := c.Charge(context.Background(), "caller-token", 10, "test")
 	if !errors.Is(err, ErrLedgerUnavailable) {
 		t.Fatalf("want ErrLedgerUnavailable, got %v", err)
+	}
+}
+
+func TestBalance_noCredential(t *testing.T) {
+	c := &Client{BaseURL: "http://unused", HTTPClient: http.DefaultClient}
+	_, err := c.Balance(context.Background(), "")
+	if !errors.Is(err, ErrNoCredential) {
+		t.Fatalf("want ErrNoCredential, got %v", err)
+	}
+}
+
+func TestBalance_success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("want GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/balance" {
+			t.Errorf("want /v1/balance, got %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer caller-token" {
+			t.Errorf("want forwarded caller token, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "success",
+			"data":   map[string]any{"account": "alice", "balance": 42},
+		})
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL, HTTPClient: http.DefaultClient, UserAgent: "test"}
+	balance, err := c.Balance(context.Background(), "caller-token")
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if balance != 42 {
+		t.Fatalf("want balance 42, got %d", balance)
+	}
+}
+
+func TestBalance_doesNotMutateState(t *testing.T) {
+	// Balance must never be POST /v1/charge in disguise — assert the
+	// client only ever issues a GET, no request body.
+	var gotMethod, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "success",
+			"data":   map[string]any{"account": "alice", "balance": 0},
+		})
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL, HTTPClient: http.DefaultClient, UserAgent: "test"}
+	if _, err := c.Balance(context.Background(), "caller-token"); err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if gotMethod != http.MethodGet {
+		t.Fatalf("want GET, got %s", gotMethod)
+	}
+	if gotBody != "" {
+		t.Fatalf("want empty body, got %q", gotBody)
+	}
+}
+
+func TestBalance_unavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL, HTTPClient: http.DefaultClient, UserAgent: "test"}
+	_, err := c.Balance(context.Background(), "caller-token")
+	if !errors.Is(err, ErrLedgerUnavailable) {
+		t.Fatalf("want ErrLedgerUnavailable, got %v", err)
+	}
+}
+
+func TestBalance_timeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL, HTTPClient: http.DefaultClient, UserAgent: "test"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	_, err := c.Balance(ctx, "caller-token")
+	if !errors.Is(err, ErrLedgerUnavailable) {
+		t.Fatalf("want ErrLedgerUnavailable on timeout, got %v", err)
+	}
+}
+
+func TestBalance_malformedBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL, HTTPClient: http.DefaultClient, UserAgent: "test"}
+	_, err := c.Balance(context.Background(), "caller-token")
+	if !errors.Is(err, ErrLedgerUnavailable) {
+		t.Fatalf("want ErrLedgerUnavailable on malformed body, got %v", err)
 	}
 }

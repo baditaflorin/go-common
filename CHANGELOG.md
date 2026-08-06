@@ -4,6 +4,27 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.79.0 — 2026-08-06
+
+### Added
+
+- **`ledger.Client` gained `Balance(ctx, cred)`**, a read-only
+  `GET /v1/balance` call that returns the caller's current balance
+  without spending anything (ADR-0033, ADR-0036 Phase 1). Previously the
+  client only exposed `Charge`, which mutates state on every call —
+  repurposing it as a probe ("charge 1 token to check access") would have
+  meant every caller doing an allow/deny check pays for the privilege.
+  `Balance` mirrors `Charge`'s error handling (`ErrNoCredential`,
+  `ErrLedgerUnavailable`) and reuses the same envelope-decode pattern.
+
+### Fixed
+
+- **`ledger.New()`'s `LEDGER_SERVICE_URL` default pointed at the ledger's
+  pre-collision-fix port (18208) instead of its current registry port
+  (18314).** Anyone constructing a client without setting the env var
+  explicitly silently talked to nothing. Fixed the default; callers that
+  already set `LEDGER_SERVICE_URL` are unaffected.
+
 ## v0.78.0 — 2026-08-06
 
 ### Added
