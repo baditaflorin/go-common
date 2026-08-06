@@ -4,6 +4,16 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.78.0 — 2026-08-06
+
+### Added
+
+- **`apikey.IssueRequest`/`IssueResult`/`KeyMeta` gained an optional
+  `Email` field.** Lets a caller tag a key with an owner's email address
+  so keys issued separately (e.g. one per service) can be grouped as
+  belonging to the same account. Purely advisory metadata, not used for
+  auth — omitted from the wire when empty (`omitempty`).
+
 ## v0.77.0 — 2026-08-05
 
 ### Fixed

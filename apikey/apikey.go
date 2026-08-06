@@ -75,6 +75,7 @@ type KeyMeta struct {
 	Expired    bool   `json:"expired"`
 	UseCount   int64  `json:"use_count"`
 	UseLimit   *int64 `json:"use_limit,omitempty"` // nil = unlimited
+	Email      string `json:"email,omitempty"`
 }
 
 // adminOpFromPath maps the admin URL path to a stable, low-cardinality

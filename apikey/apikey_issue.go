@@ -10,6 +10,10 @@ type IssueRequest struct {
 	NeverExpires bool   `json:"never_expires,omitempty"`
 	Key          string `json:"key,omitempty"` // migration only
 	UseLimit     *int64 `json:"use_limit,omitempty"` // nil = unlimited
+	// Email tags a key with an owner address so keys issued separately
+	// (e.g. one per service) can be grouped as belonging to the same
+	// person/account. Purely advisory metadata — not used for auth.
+	Email string `json:"email,omitempty"`
 }
 
 // IssueResult is what /issue returns.
@@ -22,4 +26,5 @@ type IssueResult struct {
 	CreatedAt string `json:"created_at"`
 	ExpiresAt string `json:"expires_at"`
 	UseLimit  *int64 `json:"use_limit,omitempty"`
+	Email     string `json:"email,omitempty"`
 }
