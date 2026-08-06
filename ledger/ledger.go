@@ -5,7 +5,7 @@
 // or balance table; see CLAUDE.md's cardinal rule: change the library,
 // not every service.
 //
-// Attribution — forward the caller's credential, not your own
+// # Attribution — forward the caller's credential, not your own
 //
 // A metered charge must land on the account of the human/agent that made
 // the original request, not on the service doing the metering. Build a
@@ -25,9 +25,15 @@
 //	                        PaymentRequirements body (proxy verbatim to
 //	                        your own caller with WritePaymentRequired)
 //
+//	GET  /v1/balance  Authorization: Bearer <caller's own token>
+//	                  200 → {"account","balance"}, no state mutated.
+//	                  Use this for a read-only "does this account have
+//	                  anything at all" check — never repurpose Charge as
+//	                  a probe, it spends the caller's balance on every call.
+//
 // Environment
 //
-//	LEDGER_SERVICE_URL   base URL (default: http://localhost:18208)
+//	LEDGER_SERVICE_URL   base URL (default: http://localhost:18314)
 //
 // Production URL is the fleet-token-ledger registry entry
 // (services.json); see private fleet-state/OPS.md for topology.
@@ -127,7 +133,7 @@ type Client struct {
 // New returns a Client wired from env vars.
 func New() *Client {
 	return &Client{
-		BaseURL: env.String("LEDGER_SERVICE_URL", "http://localhost:18208"),
+		BaseURL: env.String("LEDGER_SERVICE_URL", "http://localhost:18314"),
 		HTTPClient: &http.Client{
 			Timeout:   5 * time.Second,
 			Transport: &http.Transport{Proxy: nil},
@@ -197,4 +203,56 @@ func (c *Client) Charge(ctx context.Context, cred Credential, amount int64, reas
 	default:
 		return nil, fmt.Errorf("%w: HTTP %d", ErrLedgerUnavailable, resp.StatusCode)
 	}
+}
+
+// BalanceResult is what a successful (200) balance read returns.
+type BalanceResult struct {
+	Account string `json:"account"`
+	Balance int64  `json:"balance"`
+}
+
+// balanceEnvelope mirrors go-common/response.Response for the balance
+// endpoint's {"status":"success","data":{...}} body — see envelope above
+// for why this client decodes just enough rather than importing response.
+type balanceEnvelope struct {
+	Data BalanceResult `json:"data"`
+}
+
+// Balance reads the caller's current balance, attributed to cred, without
+// spending anything. Returns ErrNoCredential if cred is empty and
+// ErrLedgerUnavailable for network/non-200 failures. Callers that only
+// need to know "is there anything left" (e.g. an overflow/allow-through
+// check) should use this instead of attempting a Charge as a probe —
+// Charge mutates the caller's balance on every call, Balance never does.
+func (c *Client) Balance(ctx context.Context, cred Credential) (int64, error) {
+	if cred == "" {
+		return 0, ErrNoCredential
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/balance", nil)
+	if err != nil {
+		return 0, fmt.Errorf("ledger balance: build req: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+string(cred))
+	req.Header.Set("User-Agent", c.UserAgent)
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrLedgerUnavailable, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return 0, fmt.Errorf("%w: read response: %v", ErrLedgerUnavailable, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("%w: HTTP %d", ErrLedgerUnavailable, resp.StatusCode)
+	}
+
+	var env balanceEnvelope
+	if err := json.Unmarshal(respBody, &env); err != nil {
+		return 0, fmt.Errorf("%w: decode response: %v", ErrLedgerUnavailable, err)
+	}
+	return env.Data.Balance, nil
 }
