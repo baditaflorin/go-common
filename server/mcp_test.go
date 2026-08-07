@@ -263,3 +263,80 @@ func TestWithMCPForwardsClientHeaders(t *testing.T) {
 		t.Fatalf("CallTool text = %q, want %q", text.Text, want)
 	}
 }
+
+// TestWithMCPDoesNotForwardUnlistedHeaders locks in the allowlist fix for a
+// real security gap flagged 2026-08-07: copyRequestContext used to be a
+// DENYLIST (Authorization/X-API-Key/Content-Type/Content-Length only), so
+// any privileged header a caller happened to send for unrelated reasons —
+// X-Admin-Token is the concrete example that prompted this fix — would
+// silently ride along into the synthesized replay and reach any handler
+// that checks for it. An allowlist is safe by construction: this test
+// sends a header that is NOT in copyRequestContextAllowlist and asserts it
+// never reaches the handler, alongside one that IS allowlisted to confirm
+// the allowlist path still works end-to-end (regression coverage for
+// TestWithMCPForwardsClientHeaders above, from the other direction).
+func TestWithMCPDoesNotForwardUnlistedHeaders(t *testing.T) {
+	var gotAdminToken, gotXFF string
+	echo := func(w http.ResponseWriter, r *http.Request) {
+		gotAdminToken = r.Header.Get("X-Admin-Token")
+		gotXFF = r.Header.Get("X-Forwarded-For")
+		w.WriteHeader(http.StatusOK)
+	}
+
+	cfg := config.Load("test-mcp-allowlist", "1.0.0")
+	contract := agent.DefaultContract(cfg.AppName, cfg.Version)
+	srv := New(cfg, WithAgent(contract), WithMCP())
+	srv.Mux.HandleFunc("/", echo)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
+	transport := &sdkmcp.StreamableClientTransport{
+		Endpoint: ts.URL + "/mcp",
+		HTTPClient: &http.Client{
+			Transport: &multiHeaderInjectingRoundTripper{
+				headers: map[string]string{
+					"X-Admin-Token":   "super-secret-admin-value",
+					"X-Forwarded-For": "203.0.113.99",
+				},
+			},
+		},
+	}
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer session.Close()
+
+	if _, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: cfg.AppName, Arguments: map[string]any{}}); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	if gotAdminToken != "" {
+		t.Fatalf("handler saw X-Admin-Token = %q, want empty — unlisted headers must never reach the replayed request", gotAdminToken)
+	}
+	if gotXFF != "203.0.113.99" {
+		t.Fatalf("handler saw X-Forwarded-For = %q, want %q — allowlisted headers must still pass through", gotXFF, "203.0.113.99")
+	}
+}
+
+// multiHeaderInjectingRoundTripper sets several headers on every outbound
+// request, for tests that need more than the single-header
+// headerInjectingRoundTripper above supports.
+type multiHeaderInjectingRoundTripper struct {
+	headers map[string]string
+	base    http.RoundTripper
+}
+
+func (rt *multiHeaderInjectingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	for k, v := range rt.headers {
+		req.Header.Set(k, v)
+	}
+	base := rt.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(req)
+}

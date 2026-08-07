@@ -4,6 +4,25 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.80.0 — 2026-08-07
+
+### Fixed
+
+- **SECURITY: `server/mcp.go`'s `copyRequestContext` was a denylist
+  (`Authorization`/`X-API-Key`/`Content-Type`/`Content-Length` only),
+  so any other header an MCP caller sent — including a privileged one
+  like `X-Admin-Token` that has nothing to do with this bridge — rode
+  along silently into the synthesized in-process replay and reached
+  whatever handler happened to check for it. Flagged 2026-08-07 during
+  a fleet-wide MCP security review. Replaced with an explicit allowlist
+  (`Accept`, `Accept-Language`, `Cache-Control`, `User-Agent`,
+  `X-Fleet-Caller`, `X-Forwarded-For`, `X-Forwarded-Host`,
+  `X-Forwarded-Proto`, `X-Real-Ip`) confirmed against real handler usage
+  across the fleet — an allowlist is safe by construction against any
+  *future* privileged header too, not just the ones known dangerous
+  today. New regression test `TestWithMCPDoesNotForwardUnlistedHeaders`
+  locks this in.
+
 ## v0.79.0 — 2026-08-06
 
 ### Added

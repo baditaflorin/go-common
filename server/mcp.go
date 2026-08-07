@@ -133,30 +133,59 @@ func mcpToolHandler(s *Server, t agent.Tool) sdkmcp.ToolHandler {
 	}
 }
 
-// copyRequestContext propagates the caller's real request-identity headers
-// (X-Forwarded-For, X-Real-IP, User-Agent, Accept-Language, ...) from the
-// original inbound HTTP request onto the synthesized in-process replay, so
-// handlers that inspect the caller (an IP-echo service, User-Agent-derived
-// behaviour, locale negotiation) see the same facts through /mcp as they
-// would through the plain HTTP surface. Without this, every tools/call
-// arrives at the handler as an anonymous request with no RemoteAddr and no
-// headers — reproduced live 2026-08-05 against go-fleet-ip, whose ?json
-// response came back with every field empty.
+// copyRequestContextAllowlist is every header this bridge is willing to
+// carry from the original inbound MCP call onto the synthesized in-process
+// replay — caller-identity and content-negotiation facts a handler
+// legitimately inspects (an IP-echo service, User-Agent-derived behaviour,
+// locale negotiation, the fleet's own X-Fleet-Caller convention). Confirmed
+// against real handler usage across the fleet (go-fleet-ip,
+// go_infrastructure_fetch_cache, go-fleet-mcp-gateway) 2026-08-07.
 //
-// Content-Type / Content-Length are skipped — buildToolRequest already set
-// them correctly for the synthesized body, and copying the *original*
+// This is deliberately an ALLOWLIST, not a denylist of known-dangerous
+// headers. A denylist only stays safe as long as every future privileged
+// header gets added to it by hand; an allowlist is safe by construction —
+// anything not named here never reaches the replayed request, including
+// X-Admin-Token or any other credential a caller might carry for reasons
+// unrelated to this call (a shared client, a misconfigured proxy, a
+// forwarding bug upstream). Flagged as a real gap 2026-08-07: the previous
+// denylist (Authorization/X-API-Key/Content-Type/Content-Length only)
+// would have silently forwarded X-Admin-Token straight through to any
+// handler that happened to check for it.
+var copyRequestContextAllowlist = map[string]bool{
+	"Accept":            true,
+	"Accept-Language":   true,
+	"Cache-Control":     true,
+	"User-Agent":        true,
+	"X-Fleet-Caller":    true,
+	"X-Forwarded-For":   true,
+	"X-Forwarded-Host":  true,
+	"X-Forwarded-Proto": true,
+	"X-Real-Ip":         true,
+}
+
+// copyRequestContext propagates the caller's real request-identity headers
+// (see copyRequestContextAllowlist) from the original inbound HTTP request
+// onto the synthesized in-process replay, so handlers that inspect the
+// caller see the same facts through /mcp as they would through the plain
+// HTTP surface. Without this, every tools/call arrives at the handler as an
+// anonymous request with no RemoteAddr and no headers — reproduced live
+// 2026-08-05 against go-fleet-ip, whose ?json response came back with every
+// field empty.
+//
+// Content-Type / Content-Length are never carried — buildToolRequest already
+// set them correctly for the synthesized body, and copying the *original*
 // request's values would describe the wrong body. Authorization / X-API-Key
-// are also skipped: per this file's package doc, auth already ran against
-// the inbound request before this replay happens, so the synthetic request
-// does not need to carry credentials of its own, and not copying them keeps
-// this bridge from becoming a second place a credential is handled.
+// are never carried either: per this file's package doc, auth already ran
+// against the inbound request before this replay happens, so the synthetic
+// request does not need to carry credentials of its own, and not copying
+// them keeps this bridge from becoming a second place a credential is
+// handled.
 func copyRequestContext(req *sdkmcp.CallToolRequest, upstream *http.Request) {
 	if req.Extra == nil || req.Extra.Header == nil {
 		return
 	}
 	for k, vv := range req.Extra.Header {
-		switch http.CanonicalHeaderKey(k) {
-		case "Authorization", "X-Api-Key", "Content-Type", "Content-Length":
+		if !copyRequestContextAllowlist[http.CanonicalHeaderKey(k)] {
 			continue
 		}
 		for _, v := range vv {
