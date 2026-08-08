@@ -4,6 +4,28 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.81.0 — 2026-08-08
+
+### Added
+
+- **`apikey` package gained a `Tier` field** on `IssueRequest`, `IssueResult`,
+  `VerifyResult`, and `KeyMeta` — the first-class extension point for
+  per-key access tiers (e.g. `"open"`, `"free"`, `"vetted-pentest"`),
+  needed so the fleet's keystore can express caller trust level, not just
+  identity (`user`) and hostname allow-list (`scope`). Fully additive: a
+  key with no tier verifies exactly as before, with `Tier == ""`.
+- **New header constant `header.AuthTier` (`X-Auth-Tier`)** — `/verify`'s
+  success path has no JSON body (nginx `auth_request` only forwards
+  headers), so the tier is carried as a response header, mirroring the
+  existing `X-Auth-User`/`X-Auth-Scope` convention exactly.
+- **`middleware.TokenAuthKeystore` now propagates `X-Auth-Tier`** onto the
+  incoming request after a successful keystore verify, using the same
+  `.Set` (not `.Add`) clobber-not-append pattern already used for
+  `X-Auth-User`/`X-Auth-Scope` — a client-forged `X-Auth-Tier` header is
+  always overwritten with the keystore's real answer, never trusted.
+  Regression tests: `TestKeystore_KeystoreApproves_SetsAuthTierHeader`,
+  `TestKeystore_KeystoreApproves_ClobbersClientSuppliedTierHeader`.
+
 ## v0.80.0 — 2026-08-07
 
 ### Fixed

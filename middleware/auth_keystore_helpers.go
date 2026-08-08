@@ -144,6 +144,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				// callers can't smuggle their own.
 				r.Header.Set(header.AuthUser, res.User)
 				r.Header.Set(header.AuthScope, res.Scope)
+				r.Header.Set(header.AuthTier, res.Tier)
 				observe(AuthSourceKeystore, AuthResultAllow, dur)
 				next.ServeHTTP(w, r)
 				return

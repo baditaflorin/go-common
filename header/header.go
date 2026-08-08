@@ -22,6 +22,13 @@ const (
 	// AuthScope is the verified key scope injected by the gateway.
 	// Services that need scope enforcement re-check via apikey.VerifyScope.
 	AuthScope = "X-Auth-Scope"
+
+	// AuthTier is the verified key's access tier injected by the gateway
+	// (e.g. "open", "free", "vetted-pentest"). Empty/absent means the key
+	// predates tiering or was issued with no tier — callers that enforce
+	// tiers should treat that as the lowest trust level, never as "all
+	// tiers granted".
+	AuthTier = "X-Auth-Tier"
 )
 
 // Request identification headers — threaded through the full
