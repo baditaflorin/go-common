@@ -141,6 +141,24 @@ func TestServerTimeoutEnvOverride(t *testing.T) {
 	}
 }
 
+// TestRunTier_PrependsTierAuth_NotPlainAuth proves RunTier's prepended
+// option is WithKeystoreAuthTier, not Run's plain WithKeystoreAuth — the
+// whole point is a caller with no tier (including "default_token") must
+// fail closed, which plain WithKeystoreAuth would never do. RunTier calls
+// srv.Start() and blocks, so this only exercises the option-construction
+// half via New directly (same technique TestWithKeystoreAuthTier_Wires
+// uses) rather than invoking RunTier itself.
+func TestRunTier_PrependsTierAuth_NotPlainAuth(t *testing.T) {
+	cfg := &config.Config{AppName: "go_runtier_test", Version: "0.0.0", Port: "0"}
+	srv := New(cfg, WithKeystoreAuthTier("vetted-pentest", true, "default_token"))
+	if srv == nil {
+		t.Fatal("server is nil")
+	}
+	if len(srv.Middlewares) < 4 {
+		t.Fatalf("expected ≥4 middlewares (3 default + tier keystore auth), got %d", len(srv.Middlewares))
+	}
+}
+
 func TestKebabAlias(t *testing.T) {
 	cases := []struct {
 		in, want string

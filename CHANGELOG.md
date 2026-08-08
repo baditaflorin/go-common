@@ -4,6 +4,22 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.85.0 — 2026-08-09
+
+### Added
+
+- **`server.RunTier(serviceName, version, handler, requiredTier string, enforce bool, opts ...Option)`** —
+  `Run` with the prepended auth swapped from `WithKeystoreAuth` to
+  `WithKeystoreAuthTier` (v0.84.0). `Run` unconditionally prepends
+  `WithKeystoreAuth("default_token")`; a handful of pentest-tagged
+  services (Coolify-runtime, 5-line `main.go` via `Run`, not `New`) need
+  their direct entrypoint tier-gated too. Passing `WithKeystoreAuthTier`
+  as an extra `Run` option would stack two keystore verifies (the
+  prepended untiered one still admits any valid key or `default_token`,
+  then the tier one runs second) — correct but wasteful and confusing.
+  `RunTier` replaces the prepended option outright, same one-verify-per-
+  request shape as `Run`.
+
 ## v0.84.0 — 2026-08-09
 
 ### Added

@@ -53,6 +53,30 @@ func Run(serviceName, version string, handler http.HandlerFunc, opts ...Option) 
 	srv.Start()
 }
 
+// RunTier is Run with the prepended auth swapped from WithKeystoreAuth to
+// WithKeystoreAuthTier — for services whose access_tier registry override
+// needs enforcing on their own direct entrypoint, not just via the gateway.
+// Same 5-line-main.go shape as Run; use this instead of Run + a redundant
+// WithKeystoreAuthTier in opts (which would stack two keystore verifies).
+//
+//	func main() {
+//	    server.RunTier("go-pentest-nuclei", version, Handler, "vetted-pentest", true)
+//	}
+func RunTier(serviceName, version string, handler http.HandlerFunc, requiredTier string, enforce bool, opts ...Option) {
+	cfg := config.Load(serviceName, version)
+
+	allOpts := append([]Option{WithKeystoreAuthTier(requiredTier, enforce, "default_token")}, opts...)
+	srv := New(cfg, allOpts...)
+
+	srv.Mux.HandleFunc("/", handler)
+	srv.Mux.HandleFunc("/"+serviceName, handler)
+	if alias := KebabAlias(serviceName); alias != "" && alias != serviceName {
+		srv.Mux.HandleFunc("/"+alias, handler)
+	}
+
+	srv.Start()
+}
+
 // KebabAlias derives the public kebab-case slug from a Go service name.
 // "go_email_extractor" → "email-extractor". Returns "" if the input has
 // no go_ prefix and no underscores (no transform produced).
