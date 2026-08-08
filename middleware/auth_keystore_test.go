@@ -302,3 +302,136 @@ func TestKeystore_TrustPrivateMeshOffByDefault(t *testing.T) {
 		t.Fatalf("default (mesh trust off) must not trust a private peer, got 200")
 	}
 }
+
+// ─── RequiredTier / TierEnforce ─────────────────────────────────────────
+
+func TestKeystore_RequiredTier_KeystoreVerify_MatchAllows(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		return &apikey.VerifyResult{User: "alice", Tier: "vetted-pentest"}, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v, RequiredTier: "vetted-pentest", TierEnforce: true})
+	r := newReq("/scan?target=x&api_key=ak_valid")
+	if code, _ := run(t, mw, r); code != http.StatusOK {
+		t.Fatalf("matching tier, enforced: want 200 got %d", code)
+	}
+}
+
+func TestKeystore_RequiredTier_KeystoreVerify_Mismatch_Enforced_Denies403(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		return &apikey.VerifyResult{User: "alice", Tier: "free"}, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v, RequiredTier: "vetted-pentest", TierEnforce: true})
+	r := newReq("/scan?target=x&api_key=ak_valid")
+	code, _ := run(t, mw, r)
+	if code != http.StatusForbidden {
+		t.Fatalf("mismatched tier, enforced: want 403 got %d", code)
+	}
+}
+
+func TestKeystore_RequiredTier_KeystoreVerify_Mismatch_ShadowMode_StillAllows(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		return &apikey.VerifyResult{User: "alice", Tier: "free"}, nil
+	}}
+	var events []AuthEvent
+	obs := observerFunc(func(e AuthEvent) { events = append(events, e) })
+	mw := TokenAuthKeystore(KeystoreOpts{
+		Verifier: v, RequiredTier: "vetted-pentest", TierEnforce: false, Observer: obs,
+	})
+	r := newReq("/scan?target=x&api_key=ak_valid")
+	code, _ := run(t, mw, r)
+	if code != http.StatusOK {
+		t.Fatalf("mismatched tier, shadow mode: want 200 (not yet enforced) got %d", code)
+	}
+	if len(events) != 1 || events[0].Result != AuthResultTierShadowDenied {
+		t.Fatalf("expected one AuthResultTierShadowDenied event, got %+v", events)
+	}
+}
+
+func TestKeystore_RequiredTier_EmptyCallerTier_Denied(t *testing.T) {
+	// A key issued before tiering existed (Tier == "") must not satisfy
+	// any non-empty RequiredTier — fail closed, not "grandfather them in".
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		return &apikey.VerifyResult{User: "alice"}, nil // no Tier
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v, RequiredTier: "vetted-pentest", TierEnforce: true})
+	r := newReq("/scan?target=x&api_key=ak_valid")
+	if code, _ := run(t, mw, r); code != http.StatusForbidden {
+		t.Fatalf("pre-tiering key against a tier gate: want 403 got %d", code)
+	}
+}
+
+func TestKeystore_RequiredTier_LocalToken_NoEscapeHatch(t *testing.T) {
+	// The local-token fast path (default_token, static fallback keys)
+	// never verifies a tier. It must never satisfy a tier gate — there is
+	// no "the demo key is secretly vetted-pentest" shortcut.
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		t.Fatal("verifier should not be called for local tokens")
+		return nil, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{
+		Verifier: v, LocalTokens: []string{"default_token"},
+		RequiredTier: "vetted-pentest", TierEnforce: true,
+	})
+	r := newReq("/scan?target=x&api_key=default_token")
+	if code, _ := run(t, mw, r); code != http.StatusForbidden {
+		t.Fatalf("local token against a tier gate: want 403 got %d", code)
+	}
+}
+
+func TestKeystore_RequiredTier_PrivateMesh_NoEscapeHatch(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		t.Fatal("verifier must not be called on the private-mesh trust path")
+		return nil, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{
+		Verifier: v, TrustPrivateMesh: true,
+		RequiredTier: "vetted-pentest", TierEnforce: true,
+	})
+	r := newReq("/scan?target=x")
+	r.RemoteAddr = "127.0.0.1:5555"
+	if code, _ := run(t, mw, r); code != http.StatusForbidden {
+		t.Fatalf("private-mesh call against a tier gate: want 403 got %d", code)
+	}
+}
+
+func TestKeystore_RequiredTier_GatewayHeaderTrust_UsesXAuthTierHeader(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		t.Fatal("verifier should not be called when X-Auth-User is set")
+		return nil, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v, RequiredTier: "vetted-pentest", TierEnforce: true})
+
+	// nginx forwarded a matching X-Auth-Tier -> allowed.
+	r := newReq("/scan?target=x")
+	r.Header.Set(header.AuthUser, "operator")
+	r.Header.Set(header.AuthTier, "vetted-pentest")
+	if code, _ := run(t, mw, r); code != http.StatusOK {
+		t.Fatalf("gateway-trusted with matching X-Auth-Tier: want 200 got %d", code)
+	}
+
+	// nginx trusted the user but never forwarded X-Auth-Tier (not yet
+	// wired, or a non-tiered service's config) -> fails closed, not open.
+	r2 := newReq("/scan?target=x")
+	r2.Header.Set(header.AuthUser, "operator")
+	if code, _ := run(t, mw, r2); code != http.StatusForbidden {
+		t.Fatalf("gateway-trusted with absent X-Auth-Tier: want 403 (fail closed) got %d", code)
+	}
+}
+
+func TestKeystore_RequiredTier_NotSet_NoEffect(t *testing.T) {
+	// RequiredTier == "" (the default for every service that doesn't opt
+	// in) must behave exactly as before this feature existed.
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		return &apikey.VerifyResult{User: "alice"}, nil // no Tier at all
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v})
+	r := newReq("/scan?target=x&api_key=ak_valid")
+	if code, _ := run(t, mw, r); code != http.StatusOK {
+		t.Fatalf("no RequiredTier configured: want 200 got %d", code)
+	}
+}
+
+// observerFunc adapts a plain func into an AuthObserver for tests.
+type observerFunc func(AuthEvent)
+
+func (f observerFunc) ObserveAuth(e AuthEvent) { f(e) }

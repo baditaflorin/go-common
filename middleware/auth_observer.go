@@ -46,4 +46,17 @@ const (
 	AuthResultAllow       AuthResult = "allow"
 	AuthResultDeny        AuthResult = "deny"        // 401: invalid or missing token
 	AuthResultUnavailable AuthResult = "unavailable" // 503: keystore down + no cache
+
+	// AuthResultTierDenied: the caller authenticated fine but their tier
+	// (possibly "", e.g. the local-token/private-mesh paths, which never
+	// verify a tier at all) doesn't satisfy KeystoreOpts.RequiredTier, and
+	// TierEnforce is true — 403, request rejected.
+	AuthResultTierDenied AuthResult = "deny-tier"
+
+	// AuthResultTierShadowDenied: same mismatch as above, but TierEnforce
+	// is false — the request is ALLOWED (shadow mode: observe what would
+	// happen without actually breaking traffic) while this result still
+	// fires so an operator can watch the would-be-denied rate before
+	// flipping TierEnforce to true.
+	AuthResultTierShadowDenied AuthResult = "shadow-deny-tier"
 )
