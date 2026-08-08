@@ -120,6 +120,28 @@ type KeystoreOpts struct {
 	// *apikey.Client (the *apikey.Cache wrapper used as Verifier does
 	// not expose VerifyScope — keep a reference to the raw client).
 	ScopeChecker ScopeChecker
+
+	// RequiredTier, when non-empty, gates every authenticated request
+	// through apikey.TierSatisfies(callerTier, RequiredTier) before
+	// dispatch — regardless of WHICH trust path authenticated the caller.
+	// Paths that never verify a real tier (the local-token fast path,
+	// TrustPrivateMesh) are treated as callerTier == "", which fails
+	// closed against any non-empty RequiredTier by construction: a demo
+	// key or a container-to-container call can never satisfy a tier gate,
+	// there is no special-case to forget. Default "" — no effect on any
+	// service that doesn't opt in (the ~100+ existing keystore consumers
+	// that predate tiering are unaffected).
+	RequiredTier string
+
+	// TierEnforce controls whether a tier mismatch actually rejects the
+	// request (true → 403) or only observes it (false → shadow mode:
+	// the request is allowed and an AuthResultTierShadowDenied event
+	// fires, so an operator can watch the would-be-denied rate via
+	// Observer/metrics before flipping this on). Mirrors this fleet's own
+	// LEDGER_OVERFLOW_ENABLED/ENFORCE pattern (ADR-0036/0037) for the same
+	// reason: don't cliff-edge a new authorization rule into production.
+	// Has no effect when RequiredTier == "".
+	TierEnforce bool
 }
 
 // ScopeChecker is the abstract interface for out-of-band scope
@@ -159,6 +181,19 @@ func deny(w http.ResponseWriter, why string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": "Unauthorized", "reason": why})
+}
+
+// denyTier rejects a request that authenticated fine but whose tier is
+// insufficient — 403 (distinct from deny's 401: the credential itself is
+// valid, it just isn't privileged enough for this resource).
+func denyTier(w http.ResponseWriter, requiredTier string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error":  "Forbidden",
+		"reason": "insufficient access tier",
+		"tier":   requiredTier,
+	})
 }
 
 // isPrivateRemoteAddr reports whether addr (an http.Request.RemoteAddr in

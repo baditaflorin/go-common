@@ -35,7 +35,11 @@ import (
 // you how much keystore load is being shielded by nginx auth_request.
 // "result" lets you alert on a sudden spike in "unavailable" (keystore
 // outage with no cached fallback) or "stale" (caches papering over a
-// real outage).
+// real outage). Since this is generic on ev.Result's string value, a
+// service that sets KeystoreOpts.RequiredTier gets "deny-tier" (enforced)
+// and "shadow-deny-tier" (shadow mode) label values on apikey_auth_total
+// for free — no new metric needed to watch a tier rollout's shadow-mode
+// would-be-denied rate before flipping TierEnforce.
 type AuthCollectors struct {
 	service string
 

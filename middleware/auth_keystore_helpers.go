@@ -40,6 +40,33 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 		}
 	}
 
+	// admit is the single funnel every trust path (bypass excluded — see
+	// below) routes through before calling next.ServeHTTP. Authentication
+	// alone (which token/path/header got the caller this far) is no
+	// longer sufficient to dispatch; every path must also state its
+	// callerTier so the shared RequiredTier gate applies uniformly.
+	//
+	// Paths that never verify a real tier (local-token fast path,
+	// TrustPrivateMesh) call this with callerTier == "" — which fails
+	// TierSatisfies against any non-empty RequiredTier by construction,
+	// not because each call site remembered to special-case it.
+	admit := func(w http.ResponseWriter, r *http.Request, next http.Handler, src AuthSource, callerTier string, d time.Duration) {
+		if opts.RequiredTier == "" || apikey.TierSatisfies(callerTier, opts.RequiredTier) {
+			observe(src, AuthResultAllow, d)
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !opts.TierEnforce {
+			// Shadow mode: observe the would-be denial, but don't break
+			// traffic yet. See KeystoreOpts.TierEnforce.
+			observe(src, AuthResultTierShadowDenied, d)
+			next.ServeHTTP(w, r)
+			return
+		}
+		observe(src, AuthResultTierDenied, d)
+		denyTier(w, opts.RequiredTier)
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// 1. /health, /version, /_gw_health, /capabilities always pass —
@@ -95,8 +122,12 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 						return
 					}
 				}
-				observe(AuthSourceGateway, AuthResultAllow, 0)
-				next.ServeHTTP(w, r)
+				// The gateway/nginx path stamps X-Auth-Tier the same way it
+				// stamps X-Auth-User/X-Auth-Scope (auth_request_set +
+				// proxy_set_header on the auth_request response) — read
+				// whatever's there; absent means "" (fails closed against
+				// any RequiredTier until that nginx wiring exists).
+				admit(w, r, next, AuthSourceGateway, r.Header.Get(header.AuthTier), 0)
 				return
 			}
 
@@ -108,8 +139,12 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			//     fetch cache's container-to-container model. Not spoofable:
 			//     keyed on r.RemoteAddr, never on a header.
 			if opts.TrustPrivateMesh && isPrivateRemoteAddr(r.RemoteAddr) {
-				observe(AuthSourcePrivateMesh, AuthResultAllow, 0)
-				next.ServeHTTP(w, r)
+				// callerTier "" by design — a container-to-container call
+				// never verified a tier, so it can't satisfy a tier gate.
+				// If a tiered private-mesh caller is ever needed, that's a
+				// deliberate future option (e.g. a MeshTier field), not an
+				// accidental bypass of this one.
+				admit(w, r, next, AuthSourcePrivateMesh, "", 0)
 				return
 			}
 
@@ -125,8 +160,12 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			// 4. Local-token fast path (the gateway's static fallback, demo
 			//    token, etc.). Avoids a network hop for the hot common case.
 			if local[token] {
-				observe(AuthSourceLocal, AuthResultAllow, 0)
-				next.ServeHTTP(w, r)
+				// callerTier "" by design — a local/static/demo token
+				// (default_token, the gateway's fallback key, etc.) never
+				// touches the keystore, so it never carries a real tier.
+				// It cannot satisfy a non-empty RequiredTier; there is no
+				// "the demo key is secretly vetted-pentest" escape hatch.
+				admit(w, r, next, AuthSourceLocal, "", 0)
 				return
 			}
 
@@ -145,8 +184,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				r.Header.Set(header.AuthUser, res.User)
 				r.Header.Set(header.AuthScope, res.Scope)
 				r.Header.Set(header.AuthTier, res.Tier)
-				observe(AuthSourceKeystore, AuthResultAllow, dur)
-				next.ServeHTTP(w, r)
+				admit(w, r, next, AuthSourceKeystore, res.Tier, dur)
 				return
 			}
 			if errors.Is(err, apikey.ErrInvalidKey) {

@@ -4,6 +4,34 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.82.0 — 2026-08-08
+
+### Added
+
+- **`apikey.TierSatisfies(callerTier, requiredTier string) bool`** — the
+  fleet's single, testable policy for "does this caller's tier satisfy
+  this resource's tier requirement." Exact-string-equality, fail-closed
+  (`requiredTier != "" && callerTier == ""` → false). Deliberately no
+  hierarchy or multi-tier-per-key set matching for v1 — a caller needing
+  two tiers holds two keys.
+- **`middleware.KeystoreOpts.RequiredTier` / `.TierEnforce`** —
+  `TokenAuthKeystore` now gates dispatch through `TierSatisfies` when
+  `RequiredTier` is set, mirroring this fleet's own
+  `LEDGER_OVERFLOW_ENABLED`/`ENFORCE` shadow-then-enforce pattern
+  (ADR-0036/0037): `TierEnforce=false` observes what *would* be denied
+  without breaking traffic; `TierEnforce=true` actually returns 403.
+  **Every** trust path funnels through one shared check before dispatch —
+  the local-token fast path and `TrustPrivateMesh` never verify a real
+  tier, so they resolve to `callerTier == ""` and fail closed against any
+  non-empty `RequiredTier` by construction, not by each call site
+  remembering to special-case it. Regression tests prove both have no
+  escape hatch. Default `RequiredTier == ""` — zero behavior change for
+  every service that doesn't opt in.
+- **New `AuthResult` values** `deny-tier` / `shadow-deny-tier` — fully
+  generic in `promx.AuthCollectors` (no new metric needed), so a service
+  gating on `RequiredTier` gets its shadow-mode would-be-denied rate on
+  the existing `apikey_auth_total{result=...}` metric for free.
+
 ## v0.81.0 — 2026-08-08
 
 ### Added
