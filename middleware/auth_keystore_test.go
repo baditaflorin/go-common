@@ -96,6 +96,48 @@ func TestKeystore_KeystoreApproves(t *testing.T) {
 	}
 }
 
+func TestKeystore_KeystoreApproves_SetsAuthTierHeader(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		return &apikey.VerifyResult{User: "alice", Scope: "*", Tier: "vetted-pentest"}, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v})
+	var seenTier string
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenTier = r.Header.Get(header.AuthTier)
+		w.WriteHeader(http.StatusOK)
+	}))
+	r := newReq("/scan?target=x&api_key=ak_valid")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, r)
+	if seenTier != "vetted-pentest" {
+		t.Fatalf("downstream handler saw X-Auth-Tier=%q, want %q", seenTier, "vetted-pentest")
+	}
+}
+
+func TestKeystore_KeystoreApproves_ClobbersClientSuppliedTierHeader(t *testing.T) {
+	// A malicious caller sets X-Auth-Tier themselves, hoping the
+	// middleware forwards it unchanged. It must be overwritten with the
+	// keystore's real answer (empty, here), never left as the client's
+	// claimed value — same anti-spoofing guarantee already proven for
+	// X-Auth-User/X-Auth-Scope.
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		return &apikey.VerifyResult{User: "alice", Scope: "*"}, nil // no Tier granted
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v})
+	var seenTier string
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenTier = r.Header.Get(header.AuthTier)
+		w.WriteHeader(http.StatusOK)
+	}))
+	r := newReq("/scan?target=x&api_key=ak_valid")
+	r.Header.Set(header.AuthTier, "vetted-pentest") // forged by the client
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, r)
+	if seenTier != "" {
+		t.Fatalf("client-forged X-Auth-Tier was not clobbered: downstream saw %q", seenTier)
+	}
+}
+
 func TestKeystore_KeystoreRejects(t *testing.T) {
 	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
 		return nil, apikey.ErrInvalidKey

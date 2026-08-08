@@ -47,6 +47,7 @@ func (c *Client) Verify(ctx context.Context, key string) (*VerifyResult, error) 
 		return &VerifyResult{
 			User:  resp.Header.Get(header.AuthUser),
 			Scope: resp.Header.Get(header.AuthScope),
+			Tier:  resp.Header.Get(header.AuthTier),
 		}, nil
 	case http.StatusUnauthorized:
 		return nil, ErrInvalidKey

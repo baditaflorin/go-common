@@ -57,6 +57,9 @@ var ErrAdminTokenMissing = errors.New("apikey: admin token not configured")
 type VerifyResult struct {
 	User  string
 	Scope string
+	// Tier is the key's access tier (e.g. "open", "free",
+	// "vetted-pentest"), empty for keys issued before tiering existed.
+	Tier string
 }
 
 // ─── Admin endpoints ───────────────────────────────────────────────────
@@ -76,6 +79,7 @@ type KeyMeta struct {
 	UseCount   int64  `json:"use_count"`
 	UseLimit   *int64 `json:"use_limit,omitempty"` // nil = unlimited
 	Email      string `json:"email,omitempty"`
+	Tier       string `json:"tier,omitempty"`
 }
 
 // adminOpFromPath maps the admin URL path to a stable, low-cardinality
