@@ -65,6 +65,22 @@ const (
 	// The keystore rejects keys whose scope is not "*" and does not include
 	// this value. Absent header → no scope enforcement (backward compat).
 	ExpectedScope = "X-Expected-Scope"
+
+	// RequiredTier is set by the nginx gateway on a /verify subrequest,
+	// from a service's access_tier registry override, to tell the
+	// keystore which tier the calling key must have. The keystore
+	// rejects a key whose tier doesn't match. Absent header → no tier
+	// enforcement (backward compat).
+	//
+	// This MUST be checked inside the /verify subrequest itself, not via
+	// a post-hoc nginx `if` after auth_request returns — nginx's `if`
+	// runs in the REWRITE phase, which completes entirely before
+	// auth_request's ACCESS-phase subrequest even fires, so any `if`
+	// checking an auth_request_set variable always sees it empty,
+	// regardless of textual placement in the vhost config. Found live
+	// 2026-08-08 (locked every caller out of a real pilot service for a
+	// few minutes) — see go_apikey_service's verifyHandler for the fix.
+	RequiredTier = "X-Required-Tier"
 )
 
 // Tracing headers — W3C Trace Context and custom fleet tracing.
