@@ -4,6 +4,24 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.83.0 — 2026-08-08
+
+### Added
+
+- **New header constant `header.RequiredTier` (`X-Required-Tier`)** —
+  correction to the `access_tier` design: enforcement was originally
+  attempted via a post-hoc nginx `if ($auth_tier != ...) { return 403; }`
+  after `auth_request`, which is broken by nginx's phase ordering — `if`
+  runs in the REWRITE phase, entirely before `auth_request`'s ACCESS
+  phase even fires, so the check always saw an empty variable regardless
+  of textual placement (found live, locked out every caller of a real
+  pilot service for a few minutes). The fix moves the comparison inside
+  the `/verify` subrequest itself: nginx sends `X-Required-Tier` (from a
+  service's `access_tier` registry override) alongside the existing
+  `X-Expected-Scope`, and the keystore denies inside `/verify` — the
+  same mechanism `X-Expected-Scope`/scope enforcement already uses
+  correctly.
+
 ## v0.82.0 — 2026-08-08
 
 ### Added
