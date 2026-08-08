@@ -4,6 +4,21 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.84.0 — 2026-08-09
+
+### Added
+
+- **`server.WithKeystoreAuthTier(requiredTier string, enforce bool, localTokens ...string) Option`** —
+  the direct-service-path counterpart to `go-fleet-mcp-gateway`'s tier
+  enforcement. Closes the bypass where a caller who skips the gateway and
+  hits a service's own `/mcp` endpoint directly was never subject to
+  `access_tier` at all. Mirrors `WithKeystoreAuth`/`WithKeystoreAuthMesh`'s
+  established pattern, wiring `middleware.KeystoreOpts.RequiredTier`/
+  `.TierEnforce` (added in v0.82.0). `localTokens` (e.g. `"default_token"`)
+  are NOT exempt — they resolve to an empty caller tier by construction, so
+  they fail closed against any non-empty `requiredTier` the same way a
+  live keystore-verified caller with no tier would.
+
 ## v0.83.0 — 2026-08-08
 
 ### Added

@@ -21,3 +21,19 @@ func TestWithKeystoreAuth_Wires(t *testing.T) {
 			len(srv.Middlewares))
 	}
 }
+
+// TestWithKeystoreAuthTier_Wires mirrors TestWithKeystoreAuth_Wires for the
+// tier-gated variant — construction must not blow up regardless of
+// requiredTier/enforce, since actual deny/allow behavior is covered by
+// middleware's own TokenAuthKeystore tests.
+func TestWithKeystoreAuthTier_Wires(t *testing.T) {
+	cfg := &config.Config{AppName: "test", Version: "0.0.0", Port: "0"}
+	srv := New(cfg, WithKeystoreAuthTier("vetted-pentest", true, "default_token"))
+	if srv == nil {
+		t.Fatal("server is nil")
+	}
+	if len(srv.Middlewares) < 4 {
+		t.Fatalf("expected ≥4 middlewares (3 default + keystore auth), got %d",
+			len(srv.Middlewares))
+	}
+}

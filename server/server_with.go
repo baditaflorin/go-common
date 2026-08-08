@@ -150,6 +150,38 @@ func WithKeystoreAuthMesh(localTokens ...string) Option {
 	}
 }
 
+// WithKeystoreAuthTier is WithKeystoreAuth plus an access_tier gate: the
+// caller's key must carry a tier matching requiredTier (apikey.TierSatisfies,
+// exact-string equality, fail-closed) or the request is denied. localTokens
+// (e.g. "default_token") are NOT exempt from the tier check — they resolve to
+// an empty callerTier, which never satisfies a non-empty requiredTier. This
+// is the direct-service-path counterpart to the gateway's own tier
+// enforcement (go-fleet-mcp-gateway's toolHandler); wire it into any service
+// whose access_tier override in services-registry needs enforcing on its own
+// /mcp endpoint, not just when called through the gateway.
+//
+// enforce mirrors this fleet's shadow-then-enforce convention
+// (LEDGER_OVERFLOW_ENABLED/ENFORCE): false observes and logs a would-deny
+// without actually denying; true denies with 403. requiredTier == "" makes
+// this behave exactly like WithKeystoreAuth (no tier gate at all).
+//
+//	srv := server.New(cfg, server.WithKeystoreAuthTier("vetted-pentest", true, "default_token"))
+func WithKeystoreAuthTier(requiredTier string, enforce bool, localTokens ...string) Option {
+	return func(s *Server) {
+		ks := apikey.NewCache(apikey.New())
+		if s.PromAuthCollectors != nil {
+			ks.Observer = s.PromAuthCollectors
+		}
+		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
+			Verifier:     ks,
+			LocalTokens:  localTokens,
+			Observer:     s.PromAuthCollectors,
+			RequiredTier: requiredTier,
+			TierEnforce:  enforce,
+		}))
+	}
+}
+
 // WithDependencies attaches a dep registry whose probes are run on every
 // /health request. Health JSON gains a "dependencies":[…] array and the
 // top-level "status" flips to "degraded" if any probe fails (HTTP stays
