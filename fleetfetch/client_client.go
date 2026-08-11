@@ -13,6 +13,7 @@ import (
 
 	"github.com/baditaflorin/go-common/header"
 	"github.com/baditaflorin/go-common/loadshed"
+	"github.com/baditaflorin/go-common/safehttp"
 )
 
 // Client wraps the HTTP plumbing for talking to the fleet fetch cache,
@@ -59,6 +60,13 @@ type Client struct {
 	fallbacks atomic.Int64
 	timeouts  atomic.Int64
 	errs      atomic.Int64
+
+	// authRejected is a permanent, per-client circuit opened by a cache-side
+	// 401/403. The API key is immutable after NewClient, so retrying the same
+	// credentials on every origin request can only hammer the cache. A new
+	// client (normally a process restart after credential rotation) starts
+	// with a closed circuit.
+	authRejected atomic.Int32
 }
 
 // Get fetches targetURL through the cache. Genuine cache-service/network
@@ -186,6 +194,17 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 		return c.directFetch(ctx, targetURL, merged, nil)
 	}
 
+	// Authentication failures are configuration failures, not cache
+	// availability failures. Once this client has seen a 401/403, fail fast
+	// without repeatedly presenting the same immutable credential. The
+	// safehttp process-wide delegate treats this error as a signal to use its
+	// own direct transport, while direct fleetfetch callers get a typed error
+	// that makes the bad configuration visible.
+	if status := int(c.authRejected.Load()); status != 0 {
+		c.errs.Add(1)
+		return nil, &CacheAuthError{StatusCode: status, CircuitOpen: true}
+	}
+
 	q := url.Values{}
 	q.Set("url", targetURL)
 	if maxAge > 0 {
@@ -262,6 +281,11 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	// including a negative-cached 5xx. Preserve it exactly; direct-fetching
 	// here defeats negative caching and multiplies origin load per caller.
 	fetchedAt := resp.Header.Get("X-FetchCache-Fetched-At")
+	if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && fetchedAt == "" {
+		c.authRejected.CompareAndSwap(0, int32(resp.StatusCode))
+		c.errs.Add(1)
+		return nil, &CacheAuthError{StatusCode: resp.StatusCode}
+	}
 	if resp.StatusCode >= 500 && fetchedAt == "" {
 		if message, shed := loadshed.DecodeShed(resp.StatusCode, body); shed {
 			busyErr := &RenderBusyError{
@@ -335,6 +359,13 @@ func (c *Client) directFetch(ctx context.Context, targetURL string, headers http
 
 	fctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
+	// This is already the cache's degradation path. A normal safehttp client
+	// resolves the process-wide fetch delegate at RoundTrip time, so without
+	// this request-level opt-out it can route straight back into this same
+	// fleetfetch client (cache rejects -> fallback -> delegate -> cache ...).
+	// Keep the guard even though NewClient's built-in fallback also opts out:
+	// callers may supply an ordinary safehttp client via WithFallbackClient.
+	fctx = safehttp.WithoutFetchCacheContext(fctx)
 
 	req, err := http.NewRequestWithContext(fctx, http.MethodGet, targetURL, nil)
 	if err != nil {

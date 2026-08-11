@@ -4,6 +4,28 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.86.0 — 2026-08-12
+
+### Fixed
+
+- **`fleetfetch` fallback recursion on cache-side 400/401/403** — the
+  built-in direct fallback is now constructed with
+  `safehttp.WithoutFetchCache()`, and every fallback request carries
+  `safehttp.WithoutFetchCacheContext`. Previously, the fallback's normal
+  `safehttp.Client` resolved the process-wide fetch-cache delegate at call
+  time and re-entered the same `fleetfetch.Client`: cache rejection →
+  fallback → default delegate → cache rejection, repeating until a caller
+  deadline and generating a request storm. The context guard also protects
+  caller-supplied ordinary `safehttp` fallback clients.
+- **Cache authentication errors are terminal and circuit-broken** — a
+  cache-side 401/403 without fetch-cache provenance now returns typed
+  `*fleetfetch.CacheAuthError` (`errors.Is(err,
+  fleetfetch.ErrCacheAuth)`), opens a permanent circuit for that Client,
+  and suppresses subsequent attempts with the same immutable API key.
+  `safehttp`'s process-wide delegate still fails open to its own direct
+  transport; direct `fleetfetch` consumers see the configuration error and
+  must create a new Client after rotating credentials.
+
 ## v0.85.0 — 2026-08-09
 
 ### Added

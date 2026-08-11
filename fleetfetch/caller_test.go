@@ -95,9 +95,11 @@ func TestFallbackDoesNotLeakFleetCaller(t *testing.T) {
 	SetDefaultCaller("go_should_not_leak")
 	defer SetDefaultCaller("")
 
-	// Cache rejects with a bare 401 (no X-FetchCache-* headers) → fallback.
+	// Cache rejects a malformed request with a bare 400 (no
+	// X-FetchCache-* headers) → fallback. Authentication rejections are
+	// terminal and covered by TestGet_CacheAuthRejectionIsTerminalAndOpensCircuit.
 	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(401)
+		w.WriteHeader(400)
 	}))
 	defer cacheSrv.Close()
 
