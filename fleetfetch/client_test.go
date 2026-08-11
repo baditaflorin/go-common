@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/baditaflorin/go-common/header"
+	"github.com/baditaflorin/go-common/safehttp"
 )
 
 func TestNewClient_DefaultsAndEnv(t *testing.T) {
@@ -46,11 +48,12 @@ func TestNewClient_DefaultAPIKeyIsDefaultToken(t *testing.T) {
 	}
 }
 
-func TestGet_CacheReturns4xx_WithoutFetchCacheHeader_FallsBack(t *testing.T) {
-	// Cache returns 401 (no X-FetchCache-* headers) — simulates the
-	// in-process keystore rejecting an unauthenticated request.
+func TestGet_CacheReturns400_WithoutFetchCacheHeader_FallsBack(t *testing.T) {
+	// A malformed cache request is not an origin response and may still
+	// degrade to a direct fetch. Authentication rejections are tested
+	// separately because they open the auth circuit instead.
 	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(401)
+		w.WriteHeader(400)
 	}))
 	defer cacheSrv.Close()
 
@@ -58,7 +61,7 @@ func TestGet_CacheReturns4xx_WithoutFetchCacheHeader_FallsBack(t *testing.T) {
 	originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		originHit++
 		w.WriteHeader(200)
-		_, _ = io.WriteString(w, "direct after 401")
+		_, _ = io.WriteString(w, "direct after 400")
 	}))
 	defer originSrv.Close()
 
@@ -71,13 +74,102 @@ func TestGet_CacheReturns4xx_WithoutFetchCacheHeader_FallsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !r.ViaFallback {
-		t.Error("expected ViaFallback=true on cache-side 4xx")
+		t.Error("expected ViaFallback=true on cache-side 400")
 	}
-	if string(r.Body) != "direct after 401" {
+	if string(r.Body) != "direct after 400" {
 		t.Errorf("body: %q", r.Body)
 	}
 	if originHit != 1 {
 		t.Errorf("origin hit count: %d", originHit)
+	}
+}
+
+func TestGet_CacheAuthRejectionIsTerminalAndOpensCircuit(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			cacheHits := 0
+			cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				cacheHits++
+				w.WriteHeader(status)
+			}))
+			defer cacheSrv.Close()
+
+			originHits := 0
+			originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				originHits++
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer originSrv.Close()
+
+			c := NewClient(
+				WithCacheURL(cacheSrv.URL),
+				WithFallbackClient(originSrv.Client()),
+			)
+			for call := 0; call < 2; call++ {
+				_, err := c.Get(context.Background(), originSrv.URL)
+				if !errors.Is(err, ErrCacheAuth) {
+					t.Fatalf("call %d: got %v, want ErrCacheAuth", call+1, err)
+				}
+				var authErr *CacheAuthError
+				if !errors.As(err, &authErr) || authErr.StatusCode != status {
+					t.Fatalf("call %d: auth error = %#v", call+1, authErr)
+				}
+				if authErr.CircuitOpen != (call == 1) {
+					t.Fatalf("call %d: CircuitOpen=%v", call+1, authErr.CircuitOpen)
+				}
+			}
+			if cacheHits != 1 {
+				t.Fatalf("auth circuit should suppress retries: cache hits=%d, want 1", cacheHits)
+			}
+			if originHits != 0 {
+				t.Fatalf("auth rejection must not use fleetfetch direct fallback: origin hits=%d", originHits)
+			}
+			if stats := c.Stats(); stats.Fallbacks != 0 || stats.Errors != 2 {
+				t.Fatalf("stats=%+v", stats)
+			}
+		})
+	}
+}
+
+type countingFetchDelegate struct{ calls int }
+
+func (d *countingFetchDelegate) FetchGet(context.Context, string, http.Header) (*safehttp.FetchResult, error) {
+	d.calls++
+	return nil, errors.New("unexpected recursive delegate call")
+}
+
+func TestGet_Cache400FallbackDoesNotResolveProcessDefaultDelegate(t *testing.T) {
+	safehttp.SetAllowedPrivateIPs([]net.IP{net.ParseIP("127.0.0.1")})
+	t.Cleanup(func() { safehttp.SetAllowedPrivateIPs(nil) })
+
+	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer cacheSrv.Close()
+	originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "direct origin")
+	}))
+	defer originSrv.Close()
+
+	// Construct an ordinary safehttp fallback while a process-wide delegate
+	// is installed. directFetch's context guard must bypass that delegate.
+	d := &countingFetchDelegate{}
+	safehttp.SetDefaultFetchDelegate(d)
+	t.Cleanup(func() { safehttp.SetDefaultFetchDelegate(nil) })
+	c := NewClient(
+		WithCacheURL(cacheSrv.URL),
+		WithFallbackClient(safehttp.NewClient(safehttp.WithTimeout(2*time.Second))),
+	)
+
+	resp, err := c.Get(context.Background(), originSrv.URL)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(resp.Body) != "direct origin" || !resp.ViaFallback {
+		t.Fatalf("response=%+v body=%q", resp, resp.Body)
+	}
+	if d.calls != 0 {
+		t.Fatalf("fallback recursively resolved process delegate %d times", d.calls)
 	}
 }
 

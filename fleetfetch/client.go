@@ -100,6 +100,12 @@ const (
 var (
 	ErrCacheTimeout = errors.New("fleetfetch: cache request timed out")
 
+	// ErrCacheAuth is returned when the cache itself rejects this client's
+	// credential with 401 or 403. It is terminal for the Client: because the
+	// API key cannot change after construction, the client opens an auth
+	// circuit and subsequent calls fail fast until a new Client is created.
+	ErrCacheAuth = errors.New("fleetfetch: cache authentication rejected")
+
 	// ErrRenderBusy is the sentinel wrapped by *RenderBusyError when the
 	// fetch cache explicitly sheds a rendered request. It is distinct from
 	// a cache transport outage and from an upstream 503 replayed by the
@@ -107,6 +113,28 @@ var (
 	// to inspect Retry-After without parsing an error string.
 	ErrRenderBusy = errors.New("fleetfetch: renderer at capacity")
 )
+
+// CacheAuthError describes a cache-side 401/403. CircuitOpen is true on
+// calls rejected locally after an earlier authentication failure; false on
+// the first response received from the cache.
+type CacheAuthError struct {
+	StatusCode  int
+	CircuitOpen bool
+}
+
+func (e *CacheAuthError) Error() string {
+	if e == nil {
+		return ErrCacheAuth.Error()
+	}
+	if e.CircuitOpen {
+		return fmt.Sprintf("%s (http %d; circuit open)", ErrCacheAuth, e.StatusCode)
+	}
+	return fmt.Sprintf("%s (http %d)", ErrCacheAuth, e.StatusCode)
+}
+
+// Unwrap makes errors.Is(err, ErrCacheAuth) work while errors.As retains
+// the status and whether the error came from the open circuit.
+func (e *CacheAuthError) Unwrap() error { return ErrCacheAuth }
 
 // RenderBusyError preserves the structured load-shed response returned by
 // the fetch cache. RetryAfter is the exact wire value (seconds or HTTP-date)
@@ -233,7 +261,15 @@ func NewClient(opts ...Option) *Client {
 		}
 	}
 	if c.fallback == nil {
-		c.fallback = safehttp.NewClient(safehttp.WithTimeout(c.timeout))
+		// A fleetfetch fallback must never resolve safehttp's process-wide
+		// fetch-cache delegate: doing so re-enters this Client when the cache
+		// is unavailable or rejects a request. directFetch also stamps the
+		// per-request context opt-out so caller-provided safehttp fallbacks get
+		// the same protection.
+		c.fallback = safehttp.NewClient(
+			safehttp.WithTimeout(c.timeout),
+			safehttp.WithoutFetchCache(),
+		)
 	}
 	return c
 }
