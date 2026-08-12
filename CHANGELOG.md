@@ -4,6 +4,26 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.87.0 — 2026-08-12
+
+### Added
+
+- **`safehttp.ErrDomainDenied` + `safehttp.IsDomainDenied` / `safehttp.DeniedDomains()`**
+  — a hardcoded, fleet-wide compliance denylist (sci-hub.st, sci-hub.ru,
+  thepiratebay.org, thepiratebay.se, rapidgator.net, avito.st, avito.ru,
+  avitop.com, rutracker.org, ddos-guard.net, vglista.no). Our upstream
+  proxy provider named these copyright-infringement-related targets and
+  continuing to route requests to them risks the account being banned
+  outright. Enforced inside `GuardHost`, which both `CheckURL` (the
+  handler front-gate used by go-html-proxy/go-js-proxy/domainscope) and
+  every `safehttp.NewClient` dialer already call — a blocked host never
+  reaches DNS or the wire, and this one bump propagates the block to
+  every consumer without per-service code changes. Matching is
+  exact-or-subdomain and case/trailing-dot insensitive. Distinct error
+  from `ErrBlocked` (private-network/SSRF) and `ErrEgressNotAllowed`
+  (per-client allowlist) so callers can surface a specific compliance
+  message instead of a generic block.
+
 ## v0.86.0 — 2026-08-12
 
 ### Fixed

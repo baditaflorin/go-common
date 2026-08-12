@@ -137,6 +137,9 @@ func GuardHost(ctx context.Context, host string) error {
 	if host == "" {
 		return ErrMissingHost
 	}
+	if IsDomainDenied(host) {
+		return ErrDomainDenied
+	}
 	if ip := net.ParseIP(host); ip != nil {
 		if IsBlocked(ip) {
 			return ErrBlocked
