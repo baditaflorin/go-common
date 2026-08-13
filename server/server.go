@@ -11,6 +11,7 @@ import (
 	"github.com/baditaflorin/go-common/middleware"
 	"github.com/baditaflorin/go-common/promx"
 	"github.com/baditaflorin/go-common/reqstats"
+	"github.com/baditaflorin/go-common/runtimetune"
 	"github.com/baditaflorin/go-common/safehttp"
 	"net/http"
 	"os"
@@ -31,6 +32,22 @@ func WithoutRequestStats() Option {
 
 // New creates a new Server with optional configuration
 func New(cfg *config.Config, opts ...Option) *Server {
+	// Apply container-aware Go runtime memory/GC tuning before the
+	// process starts allocating in earnest. This is where every fleet
+	// service converges (server.Run calls New, and services with custom
+	// wiring call New directly), so one call here covers the fleet.
+	//
+	// It derives GOMEMLIMIT from the cgroup memory limit -- turning a
+	// hard kernel OOM kill into GC back-pressure -- and holds a floor
+	// under the next-GC target so tiny-heap services stop burning CPU on
+	// constant collection (fleet-discovery: 550,741 GC cycles / 15,460 s
+	// = 23% of its CPU on an 11 MB heap).
+	//
+	// Idempotent and once-per-process, so repeated New calls (including
+	// in tests) tune once. Operator-set GOGC/GOMEMLIMIT are never
+	// overridden; FLEET_RUNTIME_TUNING=off disables it per service.
+	runtimetune.Apply()
+
 	// Initialise the fleet-graph identity for this process. Safe to
 	// call multiple times; subsequent calls only update identity.
 	// All outbound (safehttp) + inbound (graph.Middleware below) events
