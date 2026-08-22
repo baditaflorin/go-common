@@ -4,6 +4,32 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.89.0 — 2026-08-23
+
+### Added
+
+- **New package `wordbound`** — the canonical fix for a Go regexp footgun
+  that independently bit two fleet services: `\b` (word boundary) is
+  ASCII-only, so it silently misbehaves next to any non-ASCII letter
+  (Cyrillic, Han, Hangul, Greek, or an accented/extended Latin letter).
+  Two confirmed real incidents motivated this: `go_gdpr_compliance`'s
+  `legalFormSuffixRE` false-matched Latvian business-hours text
+  ("S.-Sv. Slēgts") as a company name because `\b` incorrectly asserted a
+  boundary right after "Sl" (the next character, "ē", isn't an ASCII word
+  char); `go_update_frequency`'s `monthNameMDYRE` silently truncated
+  Turkish "Şubat" (February) to "ubat" because a leading `\b` couldn't
+  assert a boundary before "Ş". `go_legal_entity` had already solved this
+  correctly years earlier with a manual rune-decoding `containsSuffix`/
+  `isWordRune`/`prevRune` trio; `go_tos_finder` vendored a byte-for-byte
+  copy of it rather than importing it (its own file comment already
+  flagged this as tech debt), because no shared home existed until now.
+  `wordbound` promotes that implementation to a single source of truth,
+  exposed two ways: `ContainsToken`/`IsWordRune`/`PrevRune`/`IsGluedScript`
+  for manual scanning, and the `LeadingBoundary`/`TrailingBoundary` regex
+  fragment constants for splicing into hand-built patterns in place of a
+  bare `\b`. `go_legal_entity`, `go_tos_finder`, and `go_update_frequency`
+  are being migrated onto it in the same pass as this release.
+
 ## v0.87.0 — 2026-08-12
 
 ### Added
