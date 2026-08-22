@@ -4,6 +4,21 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.89.1 — 2026-08-23
+
+### Security
+
+- Bumped `golang.org/x/net` v0.43.0 → v0.55.0 in the root module (GitHub
+  Dependabot alert #1, medium: Go's HTML parser is vulnerable to a denial
+  of service).
+- Bumped `google.golang.org/grpc` v1.80.0 → v1.82.1 and
+  `golang.org/x/net` v0.52.0 → v0.55.0 in the `telemetry` nested module
+  (Dependabot alert #2, high: gRPC-Go xDS RBAC and HTTP/2
+  vulnerabilities). Transitive `golang.org/x/sys`/`golang.org/x/text`/
+  `google.golang.org/genproto` bumps followed from `go mod tidy`.
+  `go build`/`go vet`/`gofmt`/`go test` clean in both modules; no source
+  changes, dependency versions only.
+
 ## v0.89.0 — 2026-08-23
 
 ### Added
