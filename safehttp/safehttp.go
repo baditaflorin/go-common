@@ -49,6 +49,18 @@ var (
 // IPs that bypass the private-network check. Use it ONLY for trusted
 // fleet egress targets (e.g. a LAN-IP loopback past the public NAT
 // hairpin); leaving it unset keeps the SSRF defense intact.
+//
+// CAUTION — IsBlocked's allowlist is IP-only: it says nothing about
+// which HOSTNAME produced ip. That's fine for a fixed, hardcoded
+// target (e.g. a client that only ever calls one known internal URL).
+// It is NOT safe to rely on for a service that resolves and fetches
+// ARBITRARY caller-supplied hostnames (a URL-fetching proxy/analyzer):
+// once an IP is allowlisted, every hostname that happens to resolve to
+// it — including unrelated internal-only vhosts sharing the same
+// gateway address — is reachable too. Callers in that shape should
+// route through GuardHost/the safehttp dialer (which additionally
+// consult SAFEHTTP_ALLOW_PRIVATE_HOSTS via IsBlockedForHost) rather
+// than gate on IsBlocked(ip) alone. See IsBlockedForHost.
 func IsBlocked(ip net.IP) bool {
 	if ip == nil {
 		return true
@@ -121,6 +133,117 @@ func SetAllowedPrivateIPs(ips []net.IP) {
 	allowedPrivateIPs = cpy
 }
 
+// allowedPrivateHosts holds the once-parsed SAFEHTTP_ALLOW_PRIVATE_HOSTS
+// list: hostname suffixes (a bare domain matches itself and any
+// subdomain) that, in combination with SAFEHTTP_ALLOW_PRIVATE_IPS, are
+// permitted to resolve to a private/blocked address. See
+// IsBlockedForHost for why this exists and how the two lists combine.
+var (
+	allowedPrivateHostsMu sync.RWMutex
+	allowedPrivateHosts   = parseAllowedPrivateHosts(os.Getenv("SAFEHTTP_ALLOW_PRIVATE_HOSTS"))
+)
+
+func parseAllowedPrivateHosts(s string) []string {
+	if s == "" {
+		return nil
+	}
+	out := make([]string, 0, 4)
+	for _, part := range strings.Split(s, ",") {
+		h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(part), "."))
+		if h != "" {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// isAllowedPrivateHost reports whether host equals, or is a subdomain
+// of, one of the SAFEHTTP_ALLOW_PRIVATE_HOSTS entries.
+func isAllowedPrivateHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if host == "" {
+		return false
+	}
+	allowedPrivateHostsMu.RLock()
+	defer allowedPrivateHostsMu.RUnlock()
+	for _, suffix := range allowedPrivateHosts {
+		if host == suffix || strings.HasSuffix(host, "."+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAllowedPrivateHosts reports whether SAFEHTTP_ALLOW_PRIVATE_HOSTS (or
+// SetAllowedPrivateHosts) currently configures any entries.
+func hasAllowedPrivateHosts() bool {
+	allowedPrivateHostsMu.RLock()
+	defer allowedPrivateHostsMu.RUnlock()
+	return len(allowedPrivateHosts) > 0
+}
+
+// SetAllowedPrivateHosts replaces the hostname allowlist at runtime
+// (mainly for tests). Production callers should prefer the
+// SAFEHTTP_ALLOW_PRIVATE_HOSTS env var.
+func SetAllowedPrivateHosts(hosts []string) {
+	allowedPrivateHostsMu.Lock()
+	defer allowedPrivateHostsMu.Unlock()
+	cpy := make([]string, len(hosts))
+	copy(cpy, hosts)
+	allowedPrivateHosts = cpy
+}
+
+// IsBlockedForHost is IsBlocked with an additional, narrower bypass:
+// when SAFEHTTP_ALLOW_PRIVATE_HOSTS is configured, an IP that is on the
+// SAFEHTTP_ALLOW_PRIVATE_IPS allowlist is only treated as reachable for
+// hostnames that are ALSO on SAFEHTTP_ALLOW_PRIVATE_HOSTS. Both lists
+// must agree before a blocked-range IP is let through.
+//
+// Why this exists: a fleet's split-horizon internal DNS commonly
+// rewrites a whole family of hostnames — the operator's own public
+// sites AND every sibling fleet service's hostname — to the SAME
+// internal gateway IP (to skip a NAT hairpin). Allowlisting that IP
+// with SAFEHTTP_ALLOW_PRIVATE_IPS alone (via IsBlocked) would let a
+// caller reach ANY hostname that resolves there, not just the
+// intended ones — including internal-only sibling services that share
+// the gateway address and have no other network-layer protection
+// (e.g. an internal-only service configured with auth: none, gated
+// purely by an upstream IP allowlist that already trusts the whole
+// internal LAN). That's a real SSRF pivot for any service whose job is
+// fetching ARBITRARY caller-supplied URLs (a URL-fetching
+// proxy/analyzer), because the attacker fully controls the hostname.
+//
+// IsBlockedForHost closes that gap: set SAFEHTTP_ALLOW_PRIVATE_HOSTS to
+// the specific hostname(s) that are actually meant to resolve
+// privately (e.g. "example.com,example.org" — subdomains included
+// automatically) alongside SAFEHTTP_ALLOW_PRIVATE_IPS with the
+// gateway IP(s). Only that combination is treated as safe; every other
+// hostname that happens to resolve to the same private IP stays
+// blocked exactly as before.
+//
+// Backward compatible: when SAFEHTTP_ALLOW_PRIVATE_HOSTS is unset (the
+// default — nothing in the fleet sets it today), IsBlockedForHost
+// behaves identically to IsBlocked, so this is a pure opt-in.
+//
+// GuardHost and the safehttp dialer's DNS-rebind re-check both call
+// this instead of IsBlocked, so both real enforcement points honor the
+// host-scoped allowlist. Call sites that only ever see a raw IP
+// literal placed directly in a URL (no hostname to scope by — the
+// caller already controls the IP directly) intentionally keep calling
+// IsBlocked unchanged.
+func IsBlockedForHost(host string, ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if isAllowedPrivateIP(ip) {
+		if !hasAllowedPrivateHosts() || isAllowedPrivateHost(host) {
+			return false
+		}
+		return true
+	}
+	return IsBlocked(ip)
+}
+
 // GuardHost resolves host and returns ErrBlocked if any returned IP is in a
 // blocked range. Accepts a bare IP literal as well as a hostname. DNS is
 // revalidated with a 3-second timeout (DNS-rebind safe when combined with
@@ -141,7 +264,7 @@ func GuardHost(ctx context.Context, host string) error {
 		return ErrDomainDenied
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		if IsBlocked(ip) {
+		if IsBlockedForHost(host, ip) {
 			return ErrBlocked
 		}
 		return nil
@@ -161,7 +284,7 @@ func GuardHost(ctx context.Context, host string) error {
 		return ErrBlocked
 	}
 	for _, ip := range ips {
-		if IsBlocked(ip) {
+		if IsBlockedForHost(host, ip) {
 			defaultGuardCache.put(host, ErrBlocked)
 			return ErrBlocked
 		}
@@ -474,7 +597,13 @@ func makeDialer(portCheck bool) func(ctx context.Context, network, addr string) 
 			Control: func(network, address string, c syscall.RawConn) error {
 				h, _, _ := net.SplitHostPort(address)
 				ip := net.ParseIP(h)
-				if ip == nil || IsBlocked(ip) {
+				// host is the ORIGINAL hostname captured above, before
+				// resolution — this is the DNS-rebind re-check, so it
+				// must validate the ACTUAL connected ip against that
+				// original host via IsBlockedForHost, not just the
+				// bare IsBlocked(ip). See IsBlockedForHost's doc for
+				// why an IP-only check here would be exploitable.
+				if ip == nil || IsBlockedForHost(host, ip) {
 					return ErrBlocked
 				}
 				return nil

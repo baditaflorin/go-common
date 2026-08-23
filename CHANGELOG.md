@@ -4,6 +4,54 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.90.0 — 2026-08-24
+
+### Added
+
+- `safehttp.IsBlockedForHost(host, ip)` + `SAFEHTTP_ALLOW_PRIVATE_HOSTS`
+  env var (`SetAllowedPrivateHosts` for tests/runtime overrides): a
+  hostname-scoped narrowing of the existing `SAFEHTTP_ALLOW_PRIVATE_IPS`
+  escape hatch.
+  - **Problem:** `SAFEHTTP_ALLOW_PRIVATE_IPS` bypasses the SSRF guard for
+    an IP, full stop — ANY hostname that happens to resolve to that IP
+    gets through, not just the intended target. On a fleet whose
+    split-horizon internal DNS rewrites both the operator's own public
+    domains AND every sibling fleet service's `*.0exec.com`/`*.0crawl.com`
+    hostname to the same internal gateway IP (to skip a public NAT
+    hairpin), allowlisting that one IP for a service that fetches
+    ARBITRARY caller-supplied URLs (a URL-fetch cache/analyzer) would
+    let any caller pivot to sibling services sharing that gateway
+    address — including ones with no protection beyond "must originate
+    from inside the fleet LAN" (the IP-based bypass makes the fetcher
+    look like it's inside the LAN). Confirmed concretely exploitable
+    against at least one real internal-only, `auth: none` fleet service
+    during the investigation that motivated this change.
+  - **Fix:** `IsBlockedForHost(host, ip)` requires BOTH
+    `SAFEHTTP_ALLOW_PRIVATE_IPS` (the IP) AND `SAFEHTTP_ALLOW_PRIVATE_HOSTS`
+    (the ORIGINAL hostname, suffix-matched so subdomains are included) to
+    independently allow the pair before bypassing the private-range
+    check. `GuardHost` and the dialer's `Dialer.Control` DNS-rebind
+    re-check (`makeDialer`) both now call `IsBlockedForHost` instead of
+    the bare `IsBlocked`, so both real enforcement points honor the
+    narrower scoping — including at actual dial time, so a hostname that
+    IS trusted but gets DNS-rebound to a private IP outside the
+    IP-allowlist is still blocked.
+  - **Fully backward compatible / opt-in:** when
+    `SAFEHTTP_ALLOW_PRIVATE_HOSTS` is unset (true for every fleet service
+    today — confirmed nothing currently sets `SAFEHTTP_ALLOW_PRIVATE_IPS`
+    either), `IsBlockedForHost` behaves identically to `IsBlocked`. The
+    plain `IsBlocked(ip)` function, its doc comment, and every existing
+    call site that only ever sees a raw IP (no hostname to scope by,
+    e.g. the egress-allowlist transport's IP-literal fast path) are
+    unchanged.
+  - New tests: `safehttp/allow_private_hosts_test.go` (unit-level
+    `IsBlockedForHost` coverage, including the suffix-confusion and
+    "untrusted hostname sharing the allowed IP" regression cases) and
+    `safehttp/allow_private_hosts_internal_test.go` (real hostname
+    resolution through `GuardHost`, plus dialer-level DNS-rebind
+    adversarial cases mirroring the existing
+    `dnsguardcache_rebind_test.go` methodology).
+
 ## v0.89.1 — 2026-08-23
 
 ### Security
