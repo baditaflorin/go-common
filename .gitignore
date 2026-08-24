@@ -1,0 +1,5 @@
+# Build & test artefacts.
+*.test
+*.out
+coverage.out
+.DS_Store
