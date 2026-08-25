@@ -97,6 +97,12 @@ func FromContext(ctx context.Context) (Trace, bool) {
 	return t, ok && validID(t.ID) && t.Domain != ""
 }
 
+// WithoutTrace removes a trace from a derived request context. Consumers
+// should use this when the requested resource is outside the session domain.
+func WithoutTrace(ctx context.Context) context.Context {
+	return context.WithValue(ctx, contextKey{}, Trace{})
+}
+
 func ApplyHeaders(ctx context.Context, h http.Header) {
 	t, ok := FromContext(ctx)
 	if !ok {
