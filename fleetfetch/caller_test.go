@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/baditaflorin/go-common/header"
+	"github.com/baditaflorin/go-common/peektrace"
 )
 
 func TestSanitizeCaller(t *testing.T) {
@@ -86,6 +87,50 @@ func TestFetchSendsFleetCallerToCache(t *testing.T) {
 	}
 	if gotCaller != "go_founding_year" {
 		t.Fatalf("cache saw X-Fleet-Caller=%q, want go_founding_year", gotCaller)
+	}
+}
+
+func TestFetchSendsPeekTraceToCacheButNotOriginFallback(t *testing.T) {
+	id, err := peektrace.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := peektrace.WithTrace(context.Background(), peektrace.Trace{ID: id, Domain: "example.com"})
+
+	var cacheID, cacheDomain string
+	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cacheID = r.Header.Get(peektrace.IDHeader)
+		cacheDomain = r.Header.Get(peektrace.DomainHeader)
+		w.Header().Set("X-FetchCache-Hit", "false")
+		w.Header().Set("X-FetchCache-Fetched-At", time.Now().UTC().Format(time.RFC3339))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("cached"))
+	}))
+	defer cacheSrv.Close()
+
+	c := NewClient(WithCacheURL(cacheSrv.URL))
+	if _, err := c.Get(ctx, "https://example.com/"); err != nil {
+		t.Fatal(err)
+	}
+	if cacheID != id || cacheDomain != "example.com" {
+		t.Fatalf("cache trace = %q/%q, want %q/example.com", cacheID, cacheDomain, id)
+	}
+
+	var originID, originDomain string
+	originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originID = r.Header.Get(peektrace.IDHeader)
+		originDomain = r.Header.Get(peektrace.DomainHeader)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer originSrv.Close()
+	badCache := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) }))
+	defer badCache.Close()
+	c = NewClient(WithCacheURL(badCache.URL), WithFallbackClient(originSrv.Client()))
+	if _, err := c.Get(ctx, originSrv.URL); err != nil {
+		t.Fatal(err)
+	}
+	if originID != "" || originDomain != "" {
+		t.Fatalf("origin leaked peek trace %q/%q", originID, originDomain)
 	}
 }
 
