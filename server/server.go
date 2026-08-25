@@ -9,6 +9,7 @@ import (
 	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/metrics"
 	"github.com/baditaflorin/go-common/middleware"
+	"github.com/baditaflorin/go-common/peektrace"
 	"github.com/baditaflorin/go-common/promx"
 	"github.com/baditaflorin/go-common/reqstats"
 	"github.com/baditaflorin/go-common/runtimetune"
@@ -197,6 +198,7 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		graph.Middleware,
 		middleware.RequestID,
 		middleware.Logging,
+		peektrace.Middleware,
 	)
 	if srv.maxBodyBytes > 0 {
 		defaultMWs = append(defaultMWs, bodyLimitMiddleware(srv.maxBodyBytes))

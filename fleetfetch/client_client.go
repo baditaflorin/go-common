@@ -13,6 +13,7 @@ import (
 
 	"github.com/baditaflorin/go-common/header"
 	"github.com/baditaflorin/go-common/loadshed"
+	"github.com/baditaflorin/go-common/peektrace"
 	"github.com/baditaflorin/go-common/safehttp"
 )
 
@@ -236,6 +237,11 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	if caller := c.resolveCaller(); caller != "" {
 		req.Header.Set(header.FleetCaller, caller)
 	}
+	// Trace headers are attached only to the internal cache request. The
+	// cache consumes them for its temporary report and never forwards them to
+	// the public origin. They are intentionally not X-FF-Forward-* headers,
+	// so they cannot affect cache identity.
+	peektrace.ApplyHeaders(ctx, req.Header)
 	if cacheHop != "" {
 		req.Header.Set(fetchCacheHopHeader, cacheHop)
 	}

@@ -41,6 +41,12 @@ const (
 	// FleetCaller is optionally set by mesh proxies to identify the
 	// calling service when the User-Agent has been rewritten.
 	FleetCaller = "X-Fleet-Caller"
+
+	// PeekID and PeekDomain identify an explicitly started, short-lived
+	// operator diagnostic session. They are internal-only and must never be
+	// forwarded to a public origin or included in a cache key.
+	PeekID     = "X-Fleet-Peek-ID"
+	PeekDomain = "X-Fleet-Peek-Domain"
 )
 
 // Client credential headers — set by callers, read by auth middleware.
