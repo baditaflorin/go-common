@@ -115,6 +115,25 @@ type Config struct {
 	// Fleet default: ".0crawl.com,.0exec.com,localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,host.docker.internal"
 	NoProxy string
 
+	// WebshareAPIKey selects PROXY_SUPPLIER=webshare_direct: round-robins
+	// every ProxyURL() call across a Webshare account's individually-
+	// dialable proxy IPs (fetched from Webshare's own account API), rather
+	// than the shared p.webshare.io rotating gateway's opaque per-
+	// connection assignment. This is the account-level API token (Webshare
+	// dashboard -> API), distinct from the per-proxy username/password in
+	// Host/Port/Username/Password. The fleet materializes this as
+	// WEBSHARE_API_KEY alongside the other shared proxy creds.
+	//
+	// Use this instead of KeepAliveEnabled when the target itself rate-
+	// limits by IP reputation (traced live 2026-08-26: DuckDuckGo search
+	// began serving bot-detection "anomaly" pages under sustained volume
+	// through the shared gateway) -- reusing one warm connection
+	// concentrates request volume onto whichever single exit IP that
+	// connection landed on, which is the wrong direction for evading an
+	// IP-reputation-based limiter. Deterministic round-robin across the
+	// full pool spreads load evenly instead.
+	WebshareAPIKey string
+
 	// KeepAliveEnabled controls whether HTTPClient's Transport reuses
 	// connections. Zero-value false preserves this package's original,
 	// unconditional behavior (DisableKeepAlives: true, a fresh proxy
@@ -160,6 +179,7 @@ func EnvConfig() Config {
 		ProxyWeights:     os.Getenv("PROXY_WEIGHTS"),
 		NoProxy:          firstNonEmpty(os.Getenv("NO_PROXY"), os.Getenv("no_proxy")),
 		KeepAliveEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("PROXY_KEEPALIVE_ENABLED")), "true"),
+		WebshareAPIKey:   os.Getenv("WEBSHARE_API_KEY"),
 	}
 }
 

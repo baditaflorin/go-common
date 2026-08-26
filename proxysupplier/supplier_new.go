@@ -43,6 +43,13 @@ func NewFromConfig(cfg Config) Supplier {
 		ms.keepAlive = cfg.KeepAliveEnabled
 		return ms // self-proxy guard already applied inside newMultiSupplier
 
+	case "webshare_direct":
+		// Own fetch-and-refresh lifecycle (an HTTP call to Webshare's API,
+		// not a static URL) -- returns directly rather than falling through
+		// to the isSelfProxy guard below, which only makes sense for a
+		// single static rawURL.
+		return newWebshareDirectSupplier(cfg)
+
 	default:
 		return noneSupplier{}
 	}
