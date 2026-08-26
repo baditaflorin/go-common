@@ -1,6 +1,7 @@
 package proxysupplier
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -162,5 +163,115 @@ func TestWebshareDirect_AllInvalidEntriesLeavesProxyURLEmpty(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if u := s.ProxyURL(); u != "" {
 		t.Fatalf("ProxyURL() = %q, want \"\" when every fetched entry is invalid", u)
+	}
+}
+
+func TestWebshareDirect_MarkResultSkipsFailedEntryUntilCooldownElapses(t *testing.T) {
+	srv := mockWebshareListServer(t, 3)
+	defer srv.Close()
+	withWebshareDirectBaseURL(t, srv.URL)
+
+	s := NewFromConfig(Config{Supplier: "webshare_direct", WebshareAPIKey: "test-key"})
+	rr, ok := s.(ResultReporter)
+	if !ok {
+		t.Fatal("webshare_direct supplier must implement ResultReporter")
+	}
+	first := waitForNonEmptyProxyURL(t, s, time.Second)
+	addr := AddrFromProxyURL(first)
+
+	// One bad result is enough to trip the cooldown (webshareDirectMaxConsecutiveFailures = 1).
+	rr.MarkResult(addr, false)
+
+	for i := 0; i < 10; i++ {
+		if u := s.ProxyURL(); u == first {
+			t.Fatalf("Next() returned the just-failed entry %s after MarkResult(ok=false), want it skipped", first)
+		}
+	}
+}
+
+func TestWebshareDirect_MarkResultOKClearsCooldownImmediately(t *testing.T) {
+	srv := mockWebshareListServer(t, 2)
+	defer srv.Close()
+	withWebshareDirectBaseURL(t, srv.URL)
+
+	s := NewFromConfig(Config{Supplier: "webshare_direct", WebshareAPIKey: "test-key"})
+	rr := s.(ResultReporter)
+	first := waitForNonEmptyProxyURL(t, s, time.Second)
+	addr := AddrFromProxyURL(first)
+
+	rr.MarkResult(addr, false)
+	rr.MarkResult(addr, true) // a later success should clear the cooldown right away
+
+	seenAgain := false
+	for i := 0; i < 10; i++ {
+		if u := s.ProxyURL(); u == first {
+			seenAgain = true
+			break
+		}
+	}
+	if !seenAgain {
+		t.Fatal("entry should be eligible again immediately after MarkResult(ok=true)")
+	}
+}
+
+func TestWebshareDirect_ProxyURLEmptyWhenEveryEntryInCooldown(t *testing.T) {
+	srv := mockWebshareListServer(t, 2)
+	defer srv.Close()
+	withWebshareDirectBaseURL(t, srv.URL)
+
+	s := NewFromConfig(Config{Supplier: "webshare_direct", WebshareAPIKey: "test-key"})
+	rr := s.(ResultReporter)
+	waitForNonEmptyProxyURL(t, s, time.Second)
+
+	// Fail every entry in the pool.
+	seen := map[string]bool{}
+	for len(seen) < 2 {
+		u := s.ProxyURL()
+		if u == "" {
+			t.Fatal("ProxyURL() went empty before every entry was marked failed")
+		}
+		addr := AddrFromProxyURL(u)
+		if !seen[addr] {
+			rr.MarkResult(addr, false)
+			seen[addr] = true
+		}
+	}
+
+	if u := s.ProxyURL(); u != "" {
+		t.Fatalf("ProxyURL() = %q, want \"\" when every entry is in cooldown (fail closed against a rate limiter, not open)", u)
+	}
+}
+
+func TestWebshareDirect_RefreshPreservesFailureStateForSurvivingEntries(t *testing.T) {
+	entries := []webshareEntry{
+		{Username: "u", Password: "p", ProxyAddress: "10.0.0.1", Port: 5001, Valid: true},
+		{Username: "u", Password: "p", ProxyAddress: "10.0.0.2", Port: 5002, Valid: true},
+	}
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(webshareListResponse{Count: len(entries), Results: entries})
+	}))
+	defer srv.Close()
+	withWebshareDirectBaseURL(t, srv.URL)
+
+	s := NewFromConfig(Config{Supplier: "webshare_direct", WebshareAPIKey: "test-key"})
+	rr := s.(ResultReporter)
+	wds := s.(*webshareDirectSupplier)
+	first := waitForNonEmptyProxyURL(t, s, time.Second)
+	addr := AddrFromProxyURL(first)
+	rr.MarkResult(addr, false)
+
+	// A manual refresh with the same account list (as a real 10-minute
+	// tick would fetch) must not reset that entry's cooldown -- same
+	// rationale as webshareproxy.Pool's own refresh test this session.
+	if err := wds.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh failed: %v", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		if u := s.ProxyURL(); u == first {
+			t.Fatalf("Next() returned %s after a refresh, want it to stay in cooldown across refreshes", first)
+		}
 	}
 }
