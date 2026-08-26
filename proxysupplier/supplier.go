@@ -237,7 +237,13 @@ func firstNonEmpty(values ...string) string {
 //	    client = safehttp.NewClient(...)
 //	}
 func HTTPClient(s Supplier, timeout time.Duration) *http.Client {
-	if s.ProxyURL() == "" {
+	// Some suppliers, such as webshare_direct, populate their proxy pool
+	// asynchronously. Checking ProxyURL at construction time would return nil
+	// during that startup window and leave callers with a permanently nil
+	// client even after the pool becomes available. A Supplier named "none"
+	// is the explicit direct/no-proxy sentinel; all other suppliers get a
+	// transport whose Proxy function resolves the current URL per request.
+	if s == nil || s.Name() == "none" {
 		return nil
 	}
 	// Capture optional capabilities once — cheaper than asserting every request.

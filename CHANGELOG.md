@@ -4,6 +4,17 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.94.0 — 2026-08-26
+
+### Fixed
+
+- `proxysupplier.HTTPClient` now supports the asynchronous
+  `webshare_direct` supplier during its initial proxy-pool refresh. It no
+  longer returns a permanently nil client merely because no proxy URL is
+  available at construction time; the transport resolves the current proxy
+  URL per request instead. This prevents dependent services from panicking
+  on their first live outbound request after startup.
+
 ## v0.90.0 — 2026-08-24
 
 ### Added

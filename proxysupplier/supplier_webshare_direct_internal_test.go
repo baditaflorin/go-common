@@ -119,6 +119,23 @@ func TestWebshareDirect_ProxyURLEmptyBeforeFirstFetchCompletes(t *testing.T) {
 	if u := s.ProxyURL(); u != "" {
 		t.Fatalf("ProxyURL() = %q, want \"\" while the initial fetch is still pending", u)
 	}
+
+	// HTTPClient must remain usable during the asynchronous initial refresh.
+	// Its transport will use a direct connection until the pool is populated,
+	// then resolve a proxy URL on each subsequent request.
+	client := HTTPClient(s, time.Second)
+	if client == nil {
+		t.Fatal("HTTPClient() = nil while webshare_direct refresh is pending")
+	}
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok || tr.Proxy == nil {
+		t.Fatal("HTTPClient transport must expose a proxy resolver")
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://duckduckgo.com/html/", nil)
+	proxyURL, err := tr.Proxy(req)
+	if err != nil || proxyURL != nil {
+		t.Fatalf("pending pool proxy resolver = %v, %v; want direct nil proxy", proxyURL, err)
+	}
 }
 
 func TestWebshareDirect_HTTPClientKeepsFreshConnectionPerRequest(t *testing.T) {
