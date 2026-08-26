@@ -76,6 +76,33 @@ type keepAliver interface {
 	KeepAliveEnabled() bool
 }
 
+// ResultReporter is an optional capability -- currently implemented only
+// by the webshare_direct supplier -- for callers that can judge a
+// request's outcome at a level the HTTP transport itself cannot see. A
+// transport-level success/failure signal (connection error vs not) can't
+// tell "the exit IP got a 200 whose body was a rate limiter's challenge
+// page" from a genuinely good response; only the caller inspecting that
+// body can. Exported (unlike bypasser/keepAliver, which HTTPClient
+// consults internally) because the reporting caller lives in the
+// APPLICATION, not this package -- e.g. a search-scraping service that
+// parses DDG's response body for bot-detection markers reports back here
+// after the fact, in a different repo, well after HTTPClient's own
+// Transport.Proxy call already picked and used the entry.
+//
+// Type-assert the Supplier ResolveSupplier()/NewFromConfig() returned:
+//
+//	if rr, ok := supplier.(proxysupplier.ResultReporter); ok {
+//	    rr.MarkResult(addr, ok)
+//	}
+//
+// addr is the plain host:port a caller recovers via
+// httptrace.ClientTrace's GotConn/ConnectDone hooks reading
+// conn.RemoteAddr() -- see webshareDirectSupplier.MarkResult's doc comment
+// for why that, not ProxyURL()'s full credentialed URL, is the key.
+type ResultReporter interface {
+	MarkResult(addr string, ok bool)
+}
+
 // Config holds the raw proxy configuration values. Populate it from env vars,
 // a struct config, or a YAML file — whatever the calling service uses.
 type Config struct {
