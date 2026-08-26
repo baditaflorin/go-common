@@ -105,9 +105,16 @@ func newWebshareDirectSupplier(cfg Config) Supplier {
 		rules:           parseNoProxy(cfg.NoProxy),
 		stop:            make(chan struct{}),
 	}
-	if err := s.refresh(context.Background()); err != nil {
-		return noneSupplier{}
-	}
+	// The initial fetch runs in the background rather than blocking here.
+	// Traced live 2026-08-26: paginating a real account (~1800 entries,
+	// growing) sequentially against Webshare's API took long enough
+	// (roughly a second per 100-entry page, so tens of seconds total) to
+	// blow through a deploy's health-check grace period when this
+	// constructor sat synchronously in a service's startup path --
+	// NewFromConfig is typically called from main()/init, so blocking here
+	// blocks the entire service from listening at all. ProxyURL() safely
+	// returns "" (== no proxy, identical to every other supplier's
+	// empty-URL behavior) until the first background fetch completes.
 	go s.refreshLoop()
 	return s
 }
@@ -180,6 +187,18 @@ func (s *webshareDirectSupplier) fetchPage(ctx context.Context, pageURL string) 
 }
 
 func (s *webshareDirectSupplier) refreshLoop() {
+	// The initial fetch itself, not just subsequent ones -- this is what
+	// actually makes newWebshareDirectSupplier's early return non-blocking
+	// mean anything. It ran the fetch synchronously in the constructor
+	// before; moving the goroutine boundary without also moving this call
+	// would leave the pool empty until the FIRST ticker fires, silently
+	// (webshareDirectDefaultRefreshInterval is 10 minutes by default) --
+	// caught by TestWebshareDirect_FetchesAndRoundRobins timing out
+	// waiting for a non-empty ProxyURL() during review of this change.
+	ctx, cancel := context.WithTimeout(context.Background(), webshareDirectRefreshBudget)
+	_ = s.refresh(ctx) // best-effort; ProxyURL() returns "" until a later refresh succeeds
+	cancel()
+
 	ticker := time.NewTicker(s.refreshInterval)
 	defer ticker.Stop()
 	for {

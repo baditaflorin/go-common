@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func mockWebshareListServer(t *testing.T, n int) *httptest.Server {
@@ -36,6 +37,23 @@ func withWebshareDirectBaseURL(t *testing.T, url string) {
 	t.Cleanup(func() { webshareDirectDefaultBaseURL = orig })
 }
 
+// waitForNonEmptyProxyURL polls ProxyURL() until it returns something or
+// the deadline passes. The initial fetch is deliberately asynchronous
+// (see newWebshareDirectSupplier's doc comment) so tests must wait for it
+// instead of asserting immediately after construction.
+func waitForNonEmptyProxyURL(t *testing.T, s Supplier, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if u := s.ProxyURL(); u != "" {
+			return u
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("ProxyURL() still empty after %s", timeout)
+	return ""
+}
+
 func TestWebshareDirect_NoAPIKeyReturnsNone(t *testing.T) {
 	s := NewFromConfig(Config{Supplier: "webshare_direct"})
 	if s.Name() != "none" {
@@ -52,6 +70,11 @@ func TestWebshareDirect_FetchesAndRoundRobins(t *testing.T) {
 	if s.Name() != "webshare_direct" {
 		t.Fatalf("want webshare_direct supplier, got %q", s.Name())
 	}
+
+	// The background fetch (see newWebshareDirectSupplier) needs a moment
+	// to complete; wait for the first non-empty result before asserting
+	// on distribution.
+	waitForNonEmptyProxyURL(t, s, time.Second)
 
 	// Every entry should appear, and appear an equal number of times, over
 	// several full cycles -- this is the "rotate evenly" requirement.
@@ -74,12 +97,36 @@ func TestWebshareDirect_FetchesAndRoundRobins(t *testing.T) {
 	}
 }
 
+func TestWebshareDirect_ProxyURLEmptyBeforeFirstFetchCompletes(t *testing.T) {
+	// A server that stalls past the test's own patience simulates the
+	// exact condition that motivated making the initial fetch
+	// asynchronous: a slow/degraded Webshare API must not block anything
+	// that calls ProxyURL() early -- it just gets "" (no proxy), the same
+	// safe fallback every other misconfigured supplier already produces.
+	block := make(chan struct{})
+	defer close(block)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block
+	}))
+	defer srv.Close()
+	withWebshareDirectBaseURL(t, srv.URL)
+
+	s := NewFromConfig(Config{Supplier: "webshare_direct", WebshareAPIKey: "test-key"})
+	if s.Name() != "webshare_direct" {
+		t.Fatalf("want webshare_direct supplier even while the fetch is still in flight, got %q", s.Name())
+	}
+	if u := s.ProxyURL(); u != "" {
+		t.Fatalf("ProxyURL() = %q, want \"\" while the initial fetch is still pending", u)
+	}
+}
+
 func TestWebshareDirect_HTTPClientKeepsFreshConnectionPerRequest(t *testing.T) {
 	srv := mockWebshareListServer(t, 3)
 	defer srv.Close()
 	withWebshareDirectBaseURL(t, srv.URL)
 
 	s := NewFromConfig(Config{Supplier: "webshare_direct", WebshareAPIKey: "test-key"})
+	waitForNonEmptyProxyURL(t, s, time.Second) // HTTPClient returns nil for an empty ProxyURL()
 	client := HTTPClient(s, 0)
 	tr, ok := client.Transport.(*http.Transport)
 	if !ok {
@@ -96,7 +143,7 @@ func TestWebshareDirect_HTTPClientKeepsFreshConnectionPerRequest(t *testing.T) {
 	}
 }
 
-func TestWebshareDirect_EmptyPoolReturnsEmptyProxyURL(t *testing.T) {
+func TestWebshareDirect_AllInvalidEntriesLeavesProxyURLEmpty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(webshareListResponse{Count: 1, Results: []webshareEntry{
@@ -107,10 +154,13 @@ func TestWebshareDirect_EmptyPoolReturnsEmptyProxyURL(t *testing.T) {
 	withWebshareDirectBaseURL(t, srv.URL)
 
 	s := NewFromConfig(Config{Supplier: "webshare_direct", WebshareAPIKey: "test-key"})
-	// An all-invalid fetch fails newWebshareDirectSupplier's initial
-	// refresh, so this falls back to noneSupplier{} entirely -- verify
-	// that fallback, not a webshare_direct supplier with an empty list.
-	if s.Name() != "none" {
-		t.Fatalf("want none supplier when every fetched entry is invalid, got %q", s.Name())
+	// The supplier type is fixed at construction (webshare_direct, not a
+	// fallback to none) since whether the fetch will succeed isn't known
+	// synchronously anymore -- what's safe is that ProxyURL() keeps
+	// returning "" (no proxy) rather than ever returning a URL built from
+	// invalid/empty data. Give the background fetch time to run and fail.
+	time.Sleep(50 * time.Millisecond)
+	if u := s.ProxyURL(); u != "" {
+		t.Fatalf("ProxyURL() = %q, want \"\" when every fetched entry is invalid", u)
 	}
 }
