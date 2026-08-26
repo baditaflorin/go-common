@@ -66,6 +66,16 @@ type bypasser interface {
 	Bypass(host string) bool
 }
 
+// keepAliver is an optional capability — Suppliers built via NewFromConfig
+// with Config.KeepAliveEnabled implement it. HTTPClient consults it to
+// decide the Transport's DisableKeepAlives setting; a Supplier that does
+// not implement this interface (including any pre-existing custom Supplier
+// implementation from before this interface existed) gets the original
+// unconditional DisableKeepAlives: true behavior, unchanged.
+type keepAliver interface {
+	KeepAliveEnabled() bool
+}
+
 // Config holds the raw proxy configuration values. Populate it from env vars,
 // a struct config, or a YAML file — whatever the calling service uses.
 type Config struct {
@@ -104,6 +114,32 @@ type Config struct {
 	//
 	// Fleet default: ".0crawl.com,.0exec.com,localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,host.docker.internal"
 	NoProxy string
+
+	// KeepAliveEnabled controls whether HTTPClient's Transport reuses
+	// connections. Zero-value false preserves this package's original,
+	// unconditional behavior (DisableKeepAlives: true, a fresh proxy
+	// connection per request) -- existing callers that construct Config{}
+	// directly or via EnvConfig() before this field existed are completely
+	// unaffected; only a caller that explicitly reads the new env var (or
+	// sets this field) opts in.
+	//
+	// Why this needs to be a real option, not just a doc note: fresh-
+	// connection-per-request is the RIGHT tradeoff for suppliers where
+	// rotation is the entire point and the target is lenient about connect
+	// latency. It is the WRONG tradeoff for a strained/rate-limited proxy
+	// pool, where every request paying a full TCP+TLS+CONNECT handshake
+	// turns ordinary pool congestion into request-level timeouts -- traced
+	// live 2026-08-26: go-search-duck-go's DDG search requests were
+	// failing with "context deadline exceeded" against the shared Webshare
+	// gateway not because the gateway was fully down (a direct probe from
+	// the same egress path succeeded 2 of 3 tries), but because every
+	// single search paid a fresh handshake into an already-congested pool.
+	// go-html-proxy's webshare_direct mode solved the identical problem
+	// for its own traffic by keeping per-IP connections warm; this field
+	// is the equivalent knob for services still on PROXY_SUPPLIER=env that
+	// choose to accept "a few connections see more traffic" in exchange
+	// for not re-paying handshake cost on every request.
+	KeepAliveEnabled bool
 }
 
 // EnvConfig builds a Config by reading the canonical fleet env vars.
@@ -123,6 +159,7 @@ func EnvConfig() Config {
 		ProxyURLs:        os.Getenv("PROXY_URLS"),
 		ProxyWeights:     os.Getenv("PROXY_WEIGHTS"),
 		NoProxy:          firstNonEmpty(os.Getenv("NO_PROXY"), os.Getenv("no_proxy")),
+		KeepAliveEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("PROXY_KEEPALIVE_ENABLED")), "true"),
 	}
 }
 
@@ -156,8 +193,19 @@ func HTTPClient(s Supplier, timeout time.Duration) *http.Client {
 	if s.ProxyURL() == "" {
 		return nil
 	}
-	// Capture an optional bypasser once — cheaper than asserting every request.
+	// Capture optional capabilities once — cheaper than asserting every request.
 	bp, _ := s.(bypasser)
+	ka, _ := s.(keepAliver)
+	// Fresh TCP per request by default — required for rotating-IP endpoints
+	// to actually rotate: the proxy gateway routes each new CONNECT tunnel
+	// through a different exit IP. A Supplier built with
+	// Config.KeepAliveEnabled opts out of that per request in exchange for
+	// not re-paying handshake cost against a congested pool — see
+	// Config.KeepAliveEnabled's doc comment for when that tradeoff is right.
+	disableKeepAlives := true
+	if ka != nil && ka.KeepAliveEnabled() {
+		disableKeepAlives = false
+	}
 	return &http.Client{
 		Transport: &http.Transport{
 			// Proxy is called per-request; single-URL suppliers always return
@@ -175,10 +223,7 @@ func HTTPClient(s Supplier, timeout time.Duration) *http.Client {
 				}
 				return url.Parse(raw)
 			},
-			// Fresh TCP per request — required for rotating-IP endpoints to
-			// actually rotate. The proxy gateway routes each new CONNECT
-			// tunnel through a different exit IP.
-			DisableKeepAlives: true,
+			DisableKeepAlives: disableKeepAlives,
 		},
 		Timeout: timeout,
 	}

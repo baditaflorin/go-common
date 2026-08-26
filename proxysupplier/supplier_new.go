@@ -18,7 +18,7 @@ func NewFromConfig(cfg Config) Supplier {
 		if rawURL == "" {
 			return noneSupplier{}
 		}
-		s = &urlSupplier{name: "plain_proxies", rawURL: rawURL, rules: rules}
+		s = &urlSupplier{name: "plain_proxies", rawURL: rawURL, rules: rules, keepAlive: cfg.KeepAliveEnabled}
 
 	case "env":
 		rawURL := cfg.ExternalProxyURL
@@ -32,7 +32,7 @@ func NewFromConfig(cfg Config) Supplier {
 		if rawURL == "" {
 			return noneSupplier{}
 		}
-		s = &urlSupplier{name: "env", rawURL: rawURL, rules: rules}
+		s = &urlSupplier{name: "env", rawURL: rawURL, rules: rules, keepAlive: cfg.KeepAliveEnabled}
 
 	case "multi":
 		ms := newMultiSupplier(cfg.ProxyURLs, cfg.ProxyWeights)
@@ -40,6 +40,7 @@ func NewFromConfig(cfg Config) Supplier {
 			return noneSupplier{}
 		}
 		ms.rules = rules
+		ms.keepAlive = cfg.KeepAliveEnabled
 		return ms // self-proxy guard already applied inside newMultiSupplier
 
 	default:
