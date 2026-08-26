@@ -7,10 +7,13 @@ import (
 // multiSupplier picks a proxy URL for each request using weighted random
 // selection. It satisfies [Supplier].
 type multiSupplier struct {
-	entries []multiEntry
-	total   int
-	rules   *noProxyRules
+	entries   []multiEntry
+	total     int
+	rules     *noProxyRules
+	keepAlive bool
 }
+
+func (m *multiSupplier) KeepAliveEnabled() bool { return m.keepAlive }
 
 func (m *multiSupplier) Bypass(host string) bool {
 	if m.rules == nil {
