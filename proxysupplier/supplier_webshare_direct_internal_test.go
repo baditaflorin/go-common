@@ -292,3 +292,69 @@ func TestWebshareDirect_RefreshPreservesFailureStateForSurvivingEntries(t *testi
 		}
 	}
 }
+
+func TestWebshareDirect_PoolMetricsMatchFetchedList(t *testing.T) {
+	srv := mockWebshareListServer(t, 5)
+	defer srv.Close()
+	withWebshareDirectBaseURL(t, srv.URL)
+
+	s := NewFromConfig(Config{Supplier: "webshare_direct", WebshareAPIKey: "test-key"})
+	wds := s.(*webshareDirectSupplier)
+	waitForNonEmptyProxyURL(t, s, time.Second)
+
+	state := wds.poolSnapshot(time.Now().UnixNano())
+	if state.Total != 5 || state.InCooldown != 0 || state.Eligible != 5 {
+		t.Fatalf("pool state = %+v, want total=5 in_cooldown=0 eligible=5", state)
+	}
+}
+
+func TestWebshareDirect_PoolMetricsTrackCooldownExpiry(t *testing.T) {
+	srv := mockWebshareListServer(t, 3)
+	defer srv.Close()
+	withWebshareDirectBaseURL(t, srv.URL)
+
+	s := NewFromConfig(Config{Supplier: "webshare_direct", WebshareAPIKey: "test-key"})
+	wds := s.(*webshareDirectSupplier)
+	first := waitForNonEmptyProxyURL(t, s, time.Second)
+	addr := AddrFromProxyURL(first)
+	wds.MarkResult(addr, false)
+
+	wds.mu.RLock()
+	var cooldownUntil int64
+	for _, e := range wds.list {
+		if e.addr == addr {
+			cooldownUntil = e.cooldownUntil.Load()
+			break
+		}
+	}
+	wds.mu.RUnlock()
+	if cooldownUntil == 0 {
+		t.Fatal("failed entry has no cooldown deadline")
+	}
+
+	during := wds.poolSnapshot(cooldownUntil - 1)
+	if during.Total != 3 || during.InCooldown != 1 || during.Eligible != 2 {
+		t.Fatalf("pool state during cooldown = %+v, want total=3 in_cooldown=1 eligible=2", during)
+	}
+	if during.Eligible != during.Total-during.InCooldown {
+		t.Fatalf("eligible invariant during cooldown: %+v", during)
+	}
+
+	after := wds.poolSnapshot(cooldownUntil)
+	if after.Total != 3 || after.InCooldown != 0 || after.Eligible != 3 {
+		t.Fatalf("pool state after cooldown = %+v, want total=3 in_cooldown=0 eligible=3", after)
+	}
+	if after.Eligible != after.Total-after.InCooldown {
+		t.Fatalf("eligible invariant after cooldown: %+v", after)
+	}
+}
+
+func TestWebshareDirect_PoolMetricsAreZeroWithoutAPIKey(t *testing.T) {
+	s := newWebshareDirectSupplier(Config{})
+	if s.Name() != "none" {
+		t.Fatalf("supplier name = %q, want none", s.Name())
+	}
+	if state := WebshareDirectPoolSnapshot(); state != (WebshareDirectPoolState{}) {
+		t.Fatalf("disabled pool state = %+v, want all zeros", state)
+	}
+}
