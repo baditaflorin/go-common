@@ -1,0 +1,19 @@
+# Woodpecker CI (services-registry ADR-0035). go-common is a library rather
+# than a deployable container, so its gate covers both Go modules and has no
+# container/compose smoke stage.
+steps:
+  validate:
+    image: golang:1.25
+    environment:
+      CGO_ENABLED: "0"
+    commands:
+      - test -z "$(gofmt -l .)"
+      - go vet ./...
+      - go test -count=1 ./...
+      - go build ./...
+      - cd telemetry
+      - go vet ./...
+      - go test -count=1 ./...
+      - go build ./...
+    when:
+      event: [push, pull_request]

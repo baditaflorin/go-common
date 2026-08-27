@@ -39,7 +39,7 @@ func TestNoProxy_BypassedHostsReturnNil(t *testing.T) {
 	check("http://host.docker.internal:18021/verify", false)
 	check("http://localhost:8080/health", false)
 	check("http://127.0.0.1:9090/", false)
-	check("http://10.10.10.30:23481/", false)   // 10.0.0.0/8 → matches
+	check("http://10.10.10.30:23481/", false)      // 10.0.0.0/8 → matches
 	check("http://172.20.0.5:3401/?q=test", false) // 172.16.0.0/12 → matches docker bridge
 
 	// These MUST go through the proxy.
