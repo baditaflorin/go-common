@@ -14,7 +14,7 @@ import "encoding/json"
 // Spec is the root OpenAPI 3.0.3 document.  Only the fields fleet services
 // use are included — the type is intentionally minimal.
 type Spec struct {
-	OpenAPI    string              `json:"openapi"`              // always "3.0.3"
+	OpenAPI    string              `json:"openapi"` // always "3.0.3"
 	Info       Info                `json:"info"`
 	Paths      map[string]PathItem `json:"paths"`
 	Components *Components         `json:"components,omitempty"`

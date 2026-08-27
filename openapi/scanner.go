@@ -24,10 +24,11 @@ import (
 //	func handleExample(w http.ResponseWriter, r *http.Request) { … }
 //
 // @param format: @param <in> <name> <type> <required> <description...>
-//   in:       query | path | header | cookie
-//   type:     string | integer | boolean | number
-//   required: true | false
-//   description: remainder of the line (spaces allowed, no quoting needed)
+//
+//	in:       query | path | header | cookie
+//	type:     string | integer | boolean | number
+//	required: true | false
+//	description: remainder of the line (spaces allowed, no quoting needed)
 //
 // Only @openapi, @summary, @tag, @param, and @response are consumed.  Unknown
 // @-prefixed lines are silently ignored so the format can be extended
