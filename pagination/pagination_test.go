@@ -85,10 +85,10 @@ func TestDecodeCursorEmpty(t *testing.T) {
 
 func TestParseParamsWithDefaults(t *testing.T) {
 	tests := []struct {
-		url          string
-		defLimit     int
-		maxLimit     int
-		wantLimit    int
+		url       string
+		defLimit  int
+		maxLimit  int
+		wantLimit int
 	}{
 		{"/x", 100, 1000, 100},
 		{"/x?limit=50", 100, 1000, 50},
