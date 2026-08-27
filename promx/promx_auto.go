@@ -34,6 +34,7 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 		autoWorkpool = nil
 		autoLoadshed = nil
 		autoBackoffCoord = nil
+		autoWebshare = nil
 		autoBoundReg = reg
 	}
 	if autoEgress == nil {
@@ -97,6 +98,9 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 	if autoBackoffCoord == nil {
 		autoBackoffCoord = NewBackoffCoordCollectors(reg)
 		setBackoffCoordDefaultObserver(autoBackoffCoord)
+	}
+	if autoWebshare == nil {
+		autoWebshare = NewWebshareDirectCollectors(reg)
 	}
 	return autoEgress, autoHTTP, autoAuth
 }
@@ -167,6 +171,13 @@ func AutoBackoffCoord() *BackoffCoordCollectors {
 	autoMu.Lock()
 	defer autoMu.Unlock()
 	return autoBackoffCoord
+}
+
+// AutoWebshareDirect returns the singleton webshare_direct pool collector.
+func AutoWebshareDirect() *WebshareDirectCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoWebshare
 }
 
 // AutoSelftest returns the singleton SelftestCollectors created by
