@@ -4,6 +4,19 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.95.0 — 2026-08-28
+
+### Added
+
+- `proxysupplier` now publishes live `webshare_direct` pool gauges on the
+  existing Prometheus `/metrics` surface:
+  `proxysupplier_webshare_direct_pool_size`,
+  `proxysupplier_webshare_direct_pool_in_cooldown`, and
+  `proxysupplier_webshare_direct_pool_eligible`, each labelled by service.
+  The gauges take one consistent pool snapshot at scrape time, reflecting
+  natural cooldown expiry without adding work to the per-request
+  `ProxyURL` or `MarkResult` paths.
+
 ## v0.94.0 — 2026-08-26
 
 ### Fixed

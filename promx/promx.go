@@ -56,6 +56,7 @@ var (
 	autoWorkpool     *WorkpoolCollectors
 	autoLoadshed     *LoadshedCollectors
 	autoBackoffCoord *BackoffCoordCollectors
+	autoWebshare     *WebshareDirectCollectors
 	autoBoundReg     *prometheus.Registry // the registry the singletons are bound to
 )
 

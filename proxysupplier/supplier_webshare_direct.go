@@ -191,6 +191,7 @@ func (s *webshareDirectSupplier) MarkResult(addr string, ok bool) {
 // runs in the background; see refreshLoop.
 func newWebshareDirectSupplier(cfg Config) Supplier {
 	if cfg.WebshareAPIKey == "" {
+		activeWebshareDirectSupplier.Store(nil)
 		return noneSupplier{}
 	}
 	s := &webshareDirectSupplier{
@@ -201,6 +202,7 @@ func newWebshareDirectSupplier(cfg Config) Supplier {
 		rules:           parseNoProxy(cfg.NoProxy),
 		stop:            make(chan struct{}),
 	}
+	activeWebshareDirectSupplier.Store(s)
 	// The initial fetch runs in the background rather than blocking here.
 	// Traced live 2026-08-26: paginating a real account (~1800 entries,
 	// growing) sequentially against Webshare's API took long enough
