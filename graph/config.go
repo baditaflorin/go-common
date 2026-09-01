@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// graphCanonicalCollectorHost is the only non-loopback endpoint allowed to
+// receive graph credentials. A scoped key is still secret material.
+const graphCanonicalCollectorHost = "fleet-graph.0exec.com"
+
 type config struct {
 	enabled       bool
 	collectorURL  string
@@ -68,10 +72,10 @@ func (c config) eventEmissionEnabled() bool {
 }
 
 // normalizeCollectorURL accepts a root graph endpoint. Remote endpoints
-// must use HTTPS; plain HTTP is reserved for an explicit loopback endpoint
-// used by local development and tests. Query parameters, fragments, and
-// credentials are rejected so the endpoint cannot smuggle request state or
-// credentials into graph transport.
+// must be the canonical HTTPS graph host; plain HTTP and alternate HTTPS
+// hosts are reserved for explicit loopback endpoints used by local development
+// and tests. Query parameters, fragments, and credentials are rejected so the
+// endpoint cannot smuggle request state or credentials into graph transport.
 func normalizeCollectorURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -97,7 +101,17 @@ func normalizeCollectorURL(raw string) (string, error) {
 	u.Scheme = strings.ToLower(u.Scheme)
 	switch u.Scheme {
 	case "https":
-		// Required for every non-loopback collector.
+		if !isLoopbackHost(u.Hostname()) {
+			if !strings.EqualFold(u.Hostname(), graphCanonicalCollectorHost) {
+				return "", fmt.Errorf("graph collector URL: remote collector must be https://%s", graphCanonicalCollectorHost)
+			}
+			if port := u.Port(); port != "" && port != "443" {
+				return "", fmt.Errorf("graph collector URL: remote collector must use the default HTTPS port")
+			}
+			// Canonicalize case and an explicit :443 so the configured endpoint
+			// and the credential's service scope remain one stable authority.
+			u.Host = graphCanonicalCollectorHost
+		}
 	case "http":
 		if !isLoopbackHost(u.Hostname()) {
 			return "", fmt.Errorf("graph collector URL: HTTPS is required for non-loopback collectors")

@@ -34,20 +34,27 @@ func TestGraphEventEmissionIsExplicitAndCredentialScoped(t *testing.T) {
 		{
 			name:         "fleet key is never a writer fallback",
 			enabled:      "true",
-			collectorURL: "https://fleet-graph.example.test",
+			collectorURL: "https://fleet-graph.0exec.com",
 			fleetAPIKey:  "broad-fleet-key",
 		},
 		{
 			name:         "complete explicit writer configuration",
 			enabled:      "true",
-			collectorURL: "https://fleet-graph.example.test/",
+			collectorURL: "https://fleet-graph.0exec.com/",
 			writerAPIKey: "writer-key",
 			wantEmitting: true,
 		},
 		{
+			name:          "noncanonical HTTPS host is rejected",
+			enabled:       "true",
+			collectorURL:  "https://collector.example.test",
+			writerAPIKey:  "writer-key",
+			wantConfigErr: true,
+		},
+		{
 			name:          "non-loopback HTTP is rejected",
 			enabled:       "true",
-			collectorURL:  "http://fleet-graph.example.test",
+			collectorURL:  "http://collector.example.test",
 			writerAPIKey:  "writer-key",
 			wantConfigErr: true,
 		},
@@ -80,13 +87,16 @@ func TestNormalizeCollectorURLTransportPolicy(t *testing.T) {
 		ok   bool
 	}{
 		{name: "empty", raw: "", want: "", ok: true},
-		{name: "remote HTTPS", raw: "https://fleet-graph.example.test/", want: "https://fleet-graph.example.test", ok: true},
+		{name: "canonical remote HTTPS", raw: "https://fleet-graph.0exec.com/", want: "https://fleet-graph.0exec.com", ok: true},
+		{name: "canonical remote default port", raw: "https://FLEET-GRAPH.0EXEC.COM:443", want: "https://fleet-graph.0exec.com", ok: true},
 		{name: "loopback IPv4 HTTP", raw: "http://127.0.0.1:8090", want: "http://127.0.0.1:8090", ok: true},
 		{name: "loopback IPv6 HTTP", raw: "http://[::1]:8090", want: "http://[::1]:8090", ok: true},
 		{name: "localhost HTTP", raw: "http://localhost:8090", want: "http://localhost:8090", ok: true},
-		{name: "remote HTTP", raw: "http://fleet-graph.example.test", ok: false},
-		{name: "path", raw: "https://fleet-graph.example.test/v1", ok: false},
-		{name: "query", raw: "https://fleet-graph.example.test/?trace=1", ok: false},
+		{name: "remote HTTP", raw: "http://fleet-graph.0exec.com", ok: false},
+		{name: "noncanonical HTTPS host", raw: "https://collector.example.test", ok: false},
+		{name: "nondefault remote HTTPS port", raw: "https://fleet-graph.0exec.com:8443", ok: false},
+		{name: "path", raw: "https://fleet-graph.0exec.com/v1", ok: false},
+		{name: "query", raw: "https://fleet-graph.0exec.com/?trace=1", ok: false},
 		{name: "userinfo", raw: "https://user@example.test", ok: false},
 	}
 

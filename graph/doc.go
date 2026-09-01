@@ -18,8 +18,9 @@
 // Configuration is env-driven, read once at first use:
 //
 //	GRAPH_ENABLED        — default "false". Event emission is opt-in.
-//	GRAPH_COLLECTOR_URL  — e.g. "https://fleet-graph.0exec.com". Remote
-//	                       endpoints must use HTTPS; HTTP is loopback-only.
+//	GRAPH_COLLECTOR_URL  — exactly "https://fleet-graph.0exec.com" for a
+//	                       remote collector. HTTP/HTTPS loopback endpoints
+//	                       are allowed only for local development and tests.
 //	GRAPH_SAMPLE_RATE    — float 0..1, default 1.0.
 //	GRAPH_API_KEY        — dedicated event-writer key sent as X-API-Key to
 //	                       POST /events. Never falls back to FLEET_API_KEY.
@@ -41,8 +42,9 @@
 //     oldest ring events drop first when the buffer is full.
 //   - Scoped: writers and readers use separate keys; a broad FLEET_API_KEY is
 //     never considered for graph transport.
-//   - Endpoint-bound: remote graph requests require HTTPS and do not follow
-//     redirects, so a collector cannot forward a graph credential elsewhere.
+//   - Endpoint-bound: remote graph requests target only the canonical HTTPS
+//     graph host and do not follow redirects, so an environment override or
+//     collector response cannot forward a graph credential elsewhere.
 //   - Self-describing: every batch carries schema_version so the
 //     collector can tolerate +1 evolution without coordinated deploys.
 //   - No PII: path templating strips IDs/UUIDs/tokens before recording.
