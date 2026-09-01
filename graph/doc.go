@@ -17,19 +17,34 @@
 //
 // Configuration is env-driven, read once at first use:
 //
-//	GRAPH_ENABLED        — default "true". "false" disables entirely.
-//	GRAPH_COLLECTOR_URL  — e.g. "https://go-fleet-graph.0exec.com".
+//	GRAPH_ENABLED        — default "false". Event emission is opt-in.
+//	GRAPH_COLLECTOR_URL  — exactly "https://fleet-graph.0exec.com" for a
+//	                       remote collector. HTTP/HTTPS loopback endpoints
+//	                       are allowed only for local development and tests.
 //	GRAPH_SAMPLE_RATE    — float 0..1, default 1.0.
-//	GRAPH_API_KEY        — fleet key sent as X-API-Key to the collector.
+//	GRAPH_API_KEY        — dedicated event-writer key sent as X-API-Key to
+//	                       POST /events. Never falls back to FLEET_API_KEY.
+//	GRAPH_READER_API_KEY — dedicated read key for Lookup only. It is never
+//	                       used to write events.
 //	GRAPH_BUFFER_SIZE    — ring capacity (default 10000 events).
 //	GRAPH_FLUSH_INTERVAL — flush cadence in seconds (default 10).
 //	GRAPH_FLUSH_BATCH    — max events per flush (default 500).
 //
 // Design rules:
 //
-//   - Fail-open: if the collector is unreachable, drop events silently.
+//   - Opt-in: event recording and emission require GRAPH_ENABLED=true, a
+//     valid collector URL, and GRAPH_API_KEY. Missing configuration makes no
+//     request and records no event.
+//   - Fail-open: collector failures never block callers. One failed batch is
+//     retained for the next scheduled retry; later batches remain queued.
 //   - Async: Record never blocks the calling request.
-//   - Bounded: ring buffer caps memory; oldest events drop first.
+//   - Bounded: the ring buffer plus at most one failed batch caps memory;
+//     oldest ring events drop first when the buffer is full.
+//   - Scoped: writers and readers use separate keys; a broad FLEET_API_KEY is
+//     never considered for graph transport.
+//   - Endpoint-bound: remote graph requests target only the canonical HTTPS
+//     graph host and do not follow redirects, so an environment override or
+//     collector response cannot forward a graph credential elsewhere.
 //   - Self-describing: every batch carries schema_version so the
 //     collector can tolerate +1 evolution without coordinated deploys.
 //   - No PII: path templating strips IDs/UUIDs/tokens before recording.
