@@ -92,7 +92,7 @@ func bootstrap(serviceID, version string) *pkgState {
 // the oldest event is dropped to make room.
 func Record(e Event) {
 	s := ensureInit()
-	if !s.cfg.enabled {
+	if !s.cfg.eventEmissionEnabled() {
 		return
 	}
 	// Sampling: roll once per event. EventsSampled counts the *kept*
@@ -144,7 +144,7 @@ func ServiceID() string {
 // in hot paths that want to skip Event allocation.
 func Enabled() bool {
 	s := ensureInit()
-	return s.cfg.enabled
+	return s.cfg.eventEmissionEnabled()
 }
 
 // Shutdown stops the background sender and flushes pending events.

@@ -104,15 +104,21 @@ func TestRingDropOldest(t *testing.T) {
 	}
 }
 
-func TestRecordWithoutCollectorIsNoOpForNetwork(t *testing.T) {
+func TestRecordRequiresExplicitCompleteWriterConfiguration(t *testing.T) {
 	resetState(t)
-	t.Setenv("GRAPH_COLLECTOR_URL", "")
+	// GRAPH_ENABLED defaults to false; even an event record must stay
+	// entirely inert until a valid endpoint and writer credential exist.
+	t.Setenv("GRAPH_ENABLED", "")
+	t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.example.test")
+	t.Setenv("GRAPH_API_KEY", "")
 	Init("test_service", "0.0.0")
 	Record(Event{Direction: "out", Target: "x", Path: "/y", Method: "GET", Status: 200})
-	// Counter still increments — we keep observability for /metrics.
 	s := Stats()
-	if s.EventsRecorded < 1 {
-		t.Errorf("expected EventsRecorded >= 1, got %d", s.EventsRecorded)
+	if s.EventsRecorded != 0 {
+		t.Errorf("expected no event without complete opt-in configuration, got %d", s.EventsRecorded)
+	}
+	if Enabled() {
+		t.Error("graph must be disabled without explicit complete writer configuration")
 	}
 }
 
@@ -137,6 +143,7 @@ func TestEndToEndFlush(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
+	t.Setenv("GRAPH_ENABLED", "true")
 	t.Setenv("GRAPH_COLLECTOR_URL", srv.URL)
 	t.Setenv("GRAPH_FLUSH_INTERVAL", "1")
 	t.Setenv("GRAPH_API_KEY", "test-key")
@@ -167,11 +174,21 @@ func TestLookupCachesPositive(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		if got := r.Header.Get("X-API-Key"); got != "reader-test-key" {
+			t.Errorf("lookup used wrong credential: got %q", got)
+			http.Error(w, "wrong credential", http.StatusForbidden)
+			return
+		}
 		slug := strings.TrimPrefix(r.URL.Path, "/lookup/")
-		_ = json.NewEncoder(w).Encode(Service{ID: slug, URL: "https://" + slug + ".0exec.com", Healthy: true})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "success",
+			"data":   Service{ID: slug, URL: "https://" + slug + ".0exec.com", Healthy: true},
+		})
 	}))
 	defer srv.Close()
 	t.Setenv("GRAPH_COLLECTOR_URL", srv.URL)
+	t.Setenv("GRAPH_API_KEY", "writer-test-key")
+	t.Setenv("GRAPH_READER_API_KEY", "reader-test-key")
 	Init("caller", "0.0.0")
 	defer Shutdown()
 	for i := 0; i < 4; i++ {
@@ -203,8 +220,10 @@ func TestRoundTripperRecordsOutbound(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer col.Close()
+	t.Setenv("GRAPH_ENABLED", "true")
 	t.Setenv("GRAPH_COLLECTOR_URL", col.URL)
 	t.Setenv("GRAPH_FLUSH_INTERVAL", "1")
+	t.Setenv("GRAPH_API_KEY", "test-key")
 	Init("caller_svc", "0.1.0")
 	defer Shutdown()
 	// Target is some other test server, masquerading as a fleet host
@@ -254,8 +273,10 @@ func TestMiddlewareRecordsInbound(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer col.Close()
+	t.Setenv("GRAPH_ENABLED", "true")
 	t.Setenv("GRAPH_COLLECTOR_URL", col.URL)
 	t.Setenv("GRAPH_FLUSH_INTERVAL", "1")
+	t.Setenv("GRAPH_API_KEY", "test-key")
 	Init("target_svc", "0.1.0")
 	defer Shutdown()
 
