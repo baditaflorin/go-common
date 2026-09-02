@@ -82,6 +82,15 @@ type KeyMeta struct {
 	Tier       string `json:"tier,omitempty"`
 }
 
+// ExactListResult is the result of an exact user + scope + tier /list query.
+// Truncated is true only when the server found more than the bounded result
+// set, so security-sensitive callers must fail closed rather than treating a
+// partial result as an exhaustive credential inventory.
+type ExactListResult struct {
+	Keys      []KeyMeta `json:"keys"`
+	Truncated bool      `json:"truncated"`
+}
+
 // adminOpFromPath maps the admin URL path to a stable, low-cardinality
 // op label. Unknown paths fold to "_other" so a future endpoint
 // doesn't blow up cardinality before its own bucket is added.

@@ -9,6 +9,7 @@ import (
 	"github.com/baditaflorin/go-common/header"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -97,6 +98,29 @@ func (c *Client) List(ctx context.Context) ([]KeyMeta, error) {
 		return nil, err
 	}
 	return out.Keys, nil
+}
+
+// ListExact returns only the complete identity intersection of user, scope,
+// and tier. Every selector is required: partial filters are intentionally not
+// supported because they would make this admin endpoint a broad key-discovery
+// mechanism. Callers must treat Truncated as a fail-closed condition.
+func (c *Client) ListExact(ctx context.Context, user, scope, tier string) (ExactListResult, error) {
+	user, scope, tier = strings.TrimSpace(user), strings.TrimSpace(scope), strings.TrimSpace(tier)
+	if user == "" || scope == "" || tier == "" {
+		return ExactListResult{}, errors.New("apikey: ListExact requires non-empty user, scope, and tier")
+	}
+	if c.AdminToken == "" {
+		return ExactListResult{}, ErrAdminTokenMissing
+	}
+	query := url.Values{}
+	query.Set("user", user)
+	query.Set("scope", scope)
+	query.Set("tier", tier)
+	var out ExactListResult
+	if err := c.adminCall(ctx, http.MethodGet, "/list?"+query.Encode(), nil, &out); err != nil {
+		return ExactListResult{}, err
+	}
+	return out, nil
 }
 
 // Purge drops expired/revoked rows. Returns how many were deleted.

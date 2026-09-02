@@ -115,3 +115,46 @@ func TestAdminCall_List_UnwrapsEnvelope(t *testing.T) {
 		t.Errorf("List[0].Key: got %q, want %q", keys[0].Key, "ak_aaa")
 	}
 }
+
+func TestAdminCall_ListExact_UnwrapsEnvelopeAndUsesAllIdentityFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/list" {
+			http.Error(w, "unexpected endpoint", http.StatusNotFound)
+			return
+		}
+		if got, want := r.URL.Query().Get("user"), "graph-writer"; got != want {
+			http.Error(w, "wrong user selector", http.StatusBadRequest)
+			return
+		}
+		if got, want := r.URL.Query().Get("scope"), "fleet-graph.0exec.com"; got != want {
+			http.Error(w, "wrong scope selector", http.StatusBadRequest)
+			return
+		}
+		if got, want := r.URL.Query().Get("tier"), "fleet-graph-writer"; got != want {
+			http.Error(w, "wrong tier selector", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(successEnvelope(map[string]any{
+			"keys":      []map[string]any{{"key": "ak_aaa", "user": "graph-writer", "scope": "fleet-graph.0exec.com", "tier": "fleet-graph-writer"}},
+			"truncated": true,
+		}))
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL, AdminToken: "tok", HTTPClient: srv.Client()}
+	result, err := c.ListExact(context.Background(), "graph-writer", "fleet-graph.0exec.com", "fleet-graph-writer")
+	if err != nil {
+		t.Fatalf("ListExact: %v", err)
+	}
+	if len(result.Keys) != 1 || result.Keys[0].Key != "ak_aaa" || !result.Truncated {
+		t.Fatalf("ListExact result = %+v", result)
+	}
+}
+
+func TestAdminCall_ListExactRejectsPartialIdentity(t *testing.T) {
+	c := &Client{AdminToken: "tok"}
+	if _, err := c.ListExact(context.Background(), "graph-writer", "", "fleet-graph-writer"); err == nil {
+		t.Fatal("ListExact accepted a partial identity")
+	}
+}
