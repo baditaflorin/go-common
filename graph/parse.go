@@ -43,6 +43,10 @@ func callerFromUA(ua string) string {
 // Internal LAN traffic (10.10.10.x) is best-resolved by the collector
 // using services.json port lookups; here we just tag it generically.
 func targetFromHost(host string) string {
+	return targetFromHostWithAliases(host, nil)
+}
+
+func targetFromHostWithAliases(host string, aliases map[string]string) string {
 	host = strings.ToLower(strings.TrimSpace(host))
 	if host == "" {
 		return "external:unknown"
@@ -50,6 +54,9 @@ func targetFromHost(host string) string {
 	// Strip port if present.
 	if colon := strings.IndexByte(host, ':'); colon >= 0 {
 		host = host[:colon]
+	}
+	if target, ok := aliases[host]; ok {
+		return target
 	}
 	for _, suffix := range []string{".0exec.com", ".0crawl.com"} {
 		if strings.HasSuffix(host, suffix) {
