@@ -4,6 +4,20 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.98.0 - 2026-09-08
+
+### Added
+
+- Graph outbound observation now supports the opt-in
+  `GRAPH_TARGET_ALIASES` mapping for explicitly configured, bare internal
+  `go-fleet-*` Docker hostnames. Entries use
+  `host=canonical-service-id` form and are strictly validated before use.
+  This preserves the caller's actual HTTP transport and turns known
+  docker-network calls such as `go-fleet-dns-sync` into the same canonical
+  graph edge (`fleet-dns-sync`) used by registry-declared dependencies.
+  Invalid or unset aliases leave the existing external-host classification
+  unchanged.
+
 ## v0.97.0 — 2026-09-02
 
 ### Added

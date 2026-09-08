@@ -86,6 +86,40 @@ func TestTargetFromHost(t *testing.T) {
 	}
 }
 
+func TestTargetAliasesAreExplicitAndBounded(t *testing.T) {
+	aliases := parseTargetAliases(" go-fleet-dns-sync = fleet-dns-sync ,GO-FLEET-SECRETS=fleet-secrets")
+	if got := aliases["go-fleet-dns-sync"]; got != "fleet-dns-sync" {
+		t.Fatalf("dns alias = %q, want fleet-dns-sync", got)
+	}
+	if got := aliases["go-fleet-secrets"]; got != "fleet-secrets" {
+		t.Fatalf("secrets alias = %q, want fleet-secrets", got)
+	}
+	if got := targetFromHostWithAliases("go-fleet-dns-sync:18141", aliases); got != "fleet-dns-sync" {
+		t.Fatalf("aliased target = %q, want fleet-dns-sync", got)
+	}
+	if got := targetFromHostWithAliases("example.com", aliases); got != "external:example.com" {
+		t.Fatalf("unmapped target = %q, want external:example.com", got)
+	}
+}
+
+func TestTargetAliasesRejectURLsAndNonFleetLabels(t *testing.T) {
+	aliases := parseTargetAliases(strings.Join([]string{
+		"https://go-fleet-dns-sync=fleet-dns-sync",
+		"go-fleet-dns-sync:18141=fleet-dns-sync",
+		"go-fleet-dns-sync=fleet-dns-sync/path",
+		"go-fleet-dns-sync=external:example.com",
+		"go-fleet-dns-sync.example.com=fleet-dns-sync",
+		"worker=fleet-dns-sync",
+		"go-fleet-dns-sync=fleet-dns-sync",
+	}, ","))
+	if len(aliases) != 1 {
+		t.Fatalf("aliases = %#v, want exactly one valid entry", aliases)
+	}
+	if got := aliases["go-fleet-dns-sync"]; got != "fleet-dns-sync" {
+		t.Fatalf("valid alias = %q, want fleet-dns-sync", got)
+	}
+}
+
 func TestRingDropOldest(t *testing.T) {
 	r := newRing(3)
 	for i := 0; i < 5; i++ {

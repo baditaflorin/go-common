@@ -20,6 +20,7 @@ type config struct {
 	collectorErr  error
 	writerAPIKey  string
 	readerAPIKey  string
+	targetAliases map[string]string
 	sampleRate    float64
 	bufferSize    int
 	flushInterval time.Duration
@@ -40,6 +41,7 @@ func loadConfig() config {
 		// Lookup is a separate read capability. It must not reuse the
 		// writer credential while graph route auth is being split.
 		readerAPIKey:  strings.TrimSpace(os.Getenv("GRAPH_READER_API_KEY")),
+		targetAliases: parseTargetAliases(os.Getenv("GRAPH_TARGET_ALIASES")),
 		sampleRate:    parseFloatEnv("GRAPH_SAMPLE_RATE", 1.0),
 		bufferSize:    parseIntEnv("GRAPH_BUFFER_SIZE", 10000),
 		flushInterval: time.Duration(parseIntEnv("GRAPH_FLUSH_INTERVAL", 10)) * time.Second,
@@ -170,4 +172,54 @@ func parseIntEnv(name string, def int) int {
 		return def
 	}
 	return n
+}
+
+// parseTargetAliases accepts a comma-separated host=canonical-service-id
+// mapping. It is intentionally narrower than a generic URL rewrite:
+// aliases apply only to bare go-fleet-* Docker hostnames, never change the
+// request destination, and only alter the bounded telemetry target label.
+// Invalid entries are ignored so graph observation remains fail-open.
+func parseTargetAliases(raw string) map[string]string {
+	var aliases map[string]string
+	for _, entry := range strings.Split(raw, ",") {
+		pair := strings.SplitN(entry, "=", 2)
+		if len(pair) != 2 {
+			continue
+		}
+		host := strings.ToLower(strings.TrimSpace(pair[0]))
+		target := strings.ToLower(strings.TrimSpace(pair[1]))
+		if !validGraphTargetAliasHost(host) || !validGraphServiceID(target) {
+			continue
+		}
+		if aliases == nil {
+			aliases = make(map[string]string)
+		}
+		aliases[host] = target
+	}
+	return aliases
+}
+
+func validGraphTargetAliasHost(host string) bool {
+	return strings.HasPrefix(host, "go-fleet-") && validGraphLabel(host)
+}
+
+func validGraphServiceID(serviceID string) bool {
+	return strings.HasPrefix(serviceID, "fleet-") && validGraphLabel(serviceID)
+}
+
+// validGraphLabel accepts the conservative lowercase DNS-label subset used by
+// fleet service IDs. Callers lowercase before validation so operator-provided
+// aliases remain canonical while punctuation, paths, ports, and domains cannot
+// turn this telemetry mapping into an alternate request target.
+func validGraphLabel(value string) bool {
+	if len(value) == 0 || len(value) > 63 || value[0] == '-' || value[len(value)-1] == '-' {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }

@@ -26,6 +26,9 @@
 //	                       POST /events. Never falls back to FLEET_API_KEY.
 //	GRAPH_READER_API_KEY — dedicated read key for Lookup only. It is never
 //	                       used to write events.
+//	GRAPH_TARGET_ALIASES - optional comma-separated
+//	                       go-fleet-*=fleet-* mappings for known bare
+//	                       Docker hostnames; it changes telemetry only.
 //	GRAPH_BUFFER_SIZE    — ring capacity (default 10000 events).
 //	GRAPH_FLUSH_INTERVAL — flush cadence in seconds (default 10).
 //	GRAPH_FLUSH_BATCH    — max events per flush (default 500).
@@ -48,4 +51,8 @@
 //   - Self-describing: every batch carries schema_version so the
 //     collector can tolerate +1 evolution without coordinated deploys.
 //   - No PII: path templating strips IDs/UUIDs/tokens before recording.
+//   - Alias-safe: GRAPH_TARGET_ALIASES is an explicit bounded mapping for
+//     internal Docker aliases. It never rewrites a request, accepts no URL,
+//     port, path, or domain, and malformed entries retain ordinary external
+//     target classification.
 package graph
