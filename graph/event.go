@@ -4,8 +4,11 @@ package graph
 // Collector accepts current and N+1; bump when adding optional fields.
 const SchemaVersion = 1
 
-// Event is one observed fleet HTTP call. Both ends of the call record
-// independently — the collector deduplicates by (caller, target, ts).
+// Event is one emitted fleet HTTP observation. An instrumented caller can
+// record an outbound Event and an instrumented target can record an inbound
+// Event for the same end-to-end request. The collector aggregates emitted
+// events; consumers must not treat their count as a de-duplicated request,
+// user, prompt, or LLM-invocation total.
 type Event struct {
 	Direction string `json:"dir"`    // "out" or "in"
 	Caller    string `json:"caller"` // service slug (or "unknown" / "external:<host>")
