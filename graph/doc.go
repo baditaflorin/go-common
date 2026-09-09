@@ -9,6 +9,11 @@
 //   - server.New prepends graph.Middleware, recording one inbound
 //     Event per served request.
 //
+// When both ends are instrumented, one end-to-end HTTP request can emit both
+// an outbound and inbound Event. go-fleet-graph aggregates those emitted
+// observations as topology evidence; its volume is not a unique-request,
+// user, prompt, or LLM-invocation count.
+//
 // Both call Record under the hood. Services do not import this
 // package directly; bumping go-common@vX.Y.Z is the entire rollout.
 //
