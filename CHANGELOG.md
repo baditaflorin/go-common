@@ -4,6 +4,15 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.98.1 - 2026-09-11
+
+### Fixed
+
+- Graph middleware now excludes only the collector's own POST /events
+  ingest batch. This pairs with the existing outbound collector guard, so the
+  collector can safely observe its normal reader surface without creating an
+  endless self-ingest feedback loop.
+
 ## v0.98.0 - 2026-09-08
 
 ### Added
