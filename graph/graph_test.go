@@ -361,3 +361,33 @@ func TestProbePathsExcluded(t *testing.T) {
 		t.Errorf("isProbe(/render) = true; want false")
 	}
 }
+
+func TestMiddlewareSkipsCollectorIngestToPreventFeedbackLoop(t *testing.T) {
+	resetState(t)
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer collector.Close()
+	t.Setenv("GRAPH_ENABLED", "true")
+	t.Setenv("GRAPH_COLLECTOR_URL", collector.URL)
+	Init("go-fleet-graph", "0.1.0")
+	defer Shutdown()
+
+	called := 0
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called++
+		w.WriteHeader(http.StatusOK)
+	})
+	req, err := http.NewRequest(http.MethodPost, collector.URL+"/events", nil)
+	if err != nil {
+		t.Fatalf("build collector ingest request: %v", err)
+	}
+	Middleware(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if called != 1 {
+		t.Fatalf("next handler calls = %d, want 1", called)
+	}
+	if got := Stats().EventsRecorded; got != 0 {
+		t.Fatalf("collector ingest recorded %d event(s), want 0 to avoid feedback", got)
+	}
+}

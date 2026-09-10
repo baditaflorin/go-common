@@ -14,7 +14,12 @@ import (
 // collector in load-balancer probe traffic.
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isProbe(r.URL.Path) || !Enabled() {
+		// The collector can observe its own public request surface, but it
+		// must never observe the authenticated batch that its sender posts
+		// back to /events. The outbound transport already bypasses collector
+		// requests; without this matching inbound guard the collector would
+		// generate a fresh inbound event for every successful flush.
+		if isProbe(r.URL.Path) || isCollectorIngest(r) || !Enabled() {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -45,6 +50,13 @@ func Middleware(next http.Handler) http.Handler {
 			LatencyMs: latency,
 		})
 	})
+}
+
+// isCollectorIngest identifies only the graph sender's event-batch request.
+// A normal reader request to the collector remains observable, which lets the
+// collector report its own use without creating an ingest feedback loop.
+func isCollectorIngest(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/events" && isCollectorURL(r)
 }
 
 // statusWriter captures the status code so the middleware can report it.
