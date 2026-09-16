@@ -446,6 +446,7 @@ auth shapes documented above.
 | apikey       | `github.com/baditaflorin/go-common/apikey`        | keystore client (`Verify`, `Cache`, admin endpoints)    |
 | middleware   | `github.com/baditaflorin/go-common/middleware`    | `TokenAuthKeystore` HTTP middleware (≥ v0.7.0)          |
 | loadshed     | `github.com/baditaflorin/go-common/loadshed`      | non-blocking concurrency gate: cap calls to a slow upstream, fast-503 the excess (`loadshed_shed_total`) (≥ v0.65.0) |
+| qrterm       | `github.com/baditaflorin/go-common/qrterm`        | render content as a scannable QR — terminal half-block art or `image/png` — behind the conventional `?qr` / `?qr=png` query param (≥ v0.99.0) |
 
 ```go
 import (

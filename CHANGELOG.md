@@ -4,6 +4,24 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.99.0 - 2026-09-15
+
+### Added
+
+- New `qrterm` package: turns short content (a URL, an id, a token) into
+  a QR code — half-block terminal art via `TextString`/`Write` with
+  `FormatText`, or `image/png` bytes via `PNG`/`Write` with `FormatPNG`.
+  `QueryFormat(r)` parses the conventional `?qr` / `?qr=1` / `?qr=png`
+  query parameter into a format string, matching the ad-hoc
+  implementation `go-fleet-pipe` had carried in its own `qr.go` since
+  its `?qr` feature shipped. Extracted so every fleet service can adopt
+  the same "push from a headless box, scan the code off your terminal"
+  pattern without re-hand-rolling it — `go-fleet-pipe` is migrated to
+  this package as of its own next release. `Write` returns an error
+  instead of writing an HTTP error response itself, so each service
+  keeps using its own `httpError` shape. Adds
+  `github.com/skip2/go-qrcode` as a new `go-common` dependency.
+
 ## v0.98.1 - 2026-09-11
 
 ### Fixed

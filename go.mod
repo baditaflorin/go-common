@@ -7,6 +7,7 @@ require golang.org/x/time v0.14.0
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/sync v0.20.0
 )
 
