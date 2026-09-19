@@ -3,10 +3,12 @@ package safehttp
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -110,8 +112,11 @@ func cloneOrEmptyHeader(h http.Header) http.Header {
 }
 
 // responseBytes returns Content-Length if set and parseable; 0 otherwise.
-// We deliberately don't drain the body — that would change request
-// semantics for the caller. Histograms record what's known; unknown is 0.
+// This is now used only as the countingBody fallback (see below) for a
+// caller that closes the body without reading it — NOT as the primary byte
+// signal. It used to be the only signal, which silently reported 0 for any
+// chunked/gzip'd response with no Content-Length header (most dynamic HTML)
+// — the actual bytes were always available, just never read.
 func responseBytes(resp *http.Response) int64 {
 	if resp == nil {
 		return 0
@@ -120,6 +125,60 @@ func responseBytes(resp *http.Response) int64 {
 		return resp.ContentLength
 	}
 	return 0
+}
+
+// countingBody wraps a response body so the EgressObserver sees actual bytes
+// read rather than a Content-Length guess, WITHOUT changing read semantics
+// for the caller (still a normal lazy io.ReadCloser; nothing is pre-drained).
+// The final count is only definitive at Close() — that's the one point in
+// the http.Response contract every well-behaved caller is guaranteed to
+// reach — so onClose (which fires the deferred EgressEvent) runs there,
+// exactly once.
+//
+// Caveat, by design: this measures bytes the CALLER actually consumed from
+// resp.Body, not bytes that crossed the wire. For a caller that reads only
+// part of the body then closes early (a size-capped reader, e.g.
+// io.LimitReader(resp.Body, N) followed by Close() without reading further),
+// this undercounts relative to true network egress — TCP may have buffered
+// more than userspace ever called Read() for. This is an inherent limit of
+// application-layer measurement; cross-check against host/cgroup-level
+// network byte counters (e.g. cAdvisor) for ground truth, same as this
+// package's own doc guidance elsewhere about trusting one signal alone.
+//
+// fallback (Content-Length) is used ONLY when zero bytes were ever read —
+// that's "the caller chose not to consume the body" (a HEAD-style
+// status/header-only check), a real and already-relied-upon case, distinct
+// from "zero bytes transferred". See safehttp/observer_test.go's
+// TestObserverFiresOnSuccess, which asserts exactly this fallback.
+type countingBody struct {
+	io.ReadCloser
+	n         int64
+	fallback  int64
+	closeOnce sync.Once
+	onClose   func(n int64)
+}
+
+func (c *countingBody) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	if n > 0 {
+		atomic.AddInt64(&c.n, int64(n))
+	}
+	return n, err
+}
+
+func (c *countingBody) Close() error {
+	err := c.ReadCloser.Close()
+	c.closeOnce.Do(func() {
+		if c.onClose == nil {
+			return
+		}
+		n := atomic.LoadInt64(&c.n)
+		if n == 0 && c.fallback > 0 {
+			n = c.fallback
+		}
+		c.onClose(n)
+	})
+	return err
 }
 
 // classifyOutcome buckets a (status, err) pair into a small label-safe set.

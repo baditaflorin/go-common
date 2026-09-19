@@ -16,7 +16,7 @@ import (
 //
 //	safehttp_egress_requests_total{service, host, scheme, via_proxy, outcome}
 //	safehttp_egress_duration_seconds{service, host, via_proxy}
-//	safehttp_egress_response_bytes_total{service, host}
+//	safehttp_egress_response_bytes_total{service, host, channel}
 //	safehttp_egress_blocked_total{service, reason}
 //
 // "host" cardinality is capped — see HostLimit option. Hosts beyond the
@@ -32,6 +32,15 @@ import (
 //
 //	sum by (service) (
 //	  rate(safehttp_egress_requests_total{via_proxy="false"}[5m])
+//	)
+//
+// "channel" (bytesTotal only — via_proxy already covers direct/proxy on the
+// other two vectors, and stacking both would double cardinality for no new
+// information) is "direct" / "proxy" / "cache_hit", from safehttp.EgressEvent.
+// Use it to separate real network spend from a fetch-cache hit:
+//
+//	sum by (service) (
+//	  rate(safehttp_egress_response_bytes_total{channel!="cache_hit"}[5m])
 //	)
 type EgressCollectors struct {
 	service string
@@ -100,8 +109,8 @@ func NewEgressCollectors(reg prometheus.Registerer, opts ...EgressOption) *Egres
 		}, []string{"service", "host", "via_proxy"}),
 		bytesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "safehttp_egress_response_bytes_total",
-			Help: "Total response Content-Length bytes received per outbound host (0 if length unknown).",
-		}, []string{"service", "host"}),
+			Help: "Total response bytes actually read per outbound host (falls back to Content-Length only when the caller closed the body unread), labeled by channel (direct/proxy/cache_hit) so a cache hit doesn't look like real network spend.",
+		}, []string{"service", "host", "channel"}),
 		blockedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "safehttp_egress_blocked_total",
 			Help: "Total outbound requests rejected by safehttp guards (SSRF, scheme, port).",
@@ -119,7 +128,18 @@ func (c *EgressCollectors) ObserveEgress(ev safehttp.EgressEvent) {
 	c.requestsTotal.WithLabelValues(c.service, host, ev.Scheme, viaProxy, string(ev.Outcome)).Inc()
 	c.duration.WithLabelValues(c.service, host, viaProxy).Observe(ev.Duration.Seconds())
 	if ev.Bytes > 0 {
-		c.bytesTotal.WithLabelValues(c.service, host).Add(float64(ev.Bytes))
+		channel := ev.Channel
+		if channel == "" {
+			// Events from before the Channel field existed, or a caller
+			// hand-building an EgressEvent — fall back to via_proxy so the
+			// label is never empty (empty would still be counted correctly,
+			// just harder to query).
+			channel = "direct"
+			if ev.ViaProxy {
+				channel = "proxy"
+			}
+		}
+		c.bytesTotal.WithLabelValues(c.service, host, channel).Add(float64(ev.Bytes))
 	}
 	if ev.Outcome == safehttp.OutcomeBlocked {
 		c.blockedTotal.WithLabelValues(c.service, blockReason(ev)).Inc()

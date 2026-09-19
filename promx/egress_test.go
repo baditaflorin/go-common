@@ -1,6 +1,7 @@
 package promx
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -46,7 +47,7 @@ func TestEgressCollectorsCountsSuccess(t *testing.T) {
 	if got := testutil.ToFloat64(coll.requestsTotal.WithLabelValues("", host, "http", "false", "success")); got != 1 {
 		t.Errorf("requests_total = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(coll.bytesTotal.WithLabelValues("", host)); got != 11 {
+	if got := testutil.ToFloat64(coll.bytesTotal.WithLabelValues("", host, "direct")); got != 11 {
 		t.Errorf("response_bytes_total = %v, want 11", got)
 	}
 	// Histogram: assert the registry has it and there's at least one
@@ -85,6 +86,41 @@ func TestEgressCollectorsCountsBlocked(t *testing.T) {
 	if got := testutil.ToFloat64(coll.blockedTotal.WithLabelValues("", "ssrf")); got != 1 {
 		t.Errorf("blocked_total{reason=ssrf} = %v, want 1", got)
 	}
+}
+
+// TestEgressCollectorsSeparatesCacheHitBytesFromDirect: a cache-hit
+// response must land under channel="cache_hit", never merged into
+// channel="direct" — that's the whole point of the label (distinguishing
+// real network spend from a served-from-cache response). Uses
+// safehttp.WithFetchDelegate directly (an exported option) since promx has
+// no access to safehttp's internal stubDelegate test helper.
+func TestEgressCollectorsSeparatesCacheHitBytesFromDirect(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	coll := NewEgressCollectors(reg)
+
+	c := safehttp.NewClient(
+		safehttp.WithFetchDelegate(fakeCacheDelegate{body: "cached body"}),
+		safehttp.WithObserver(coll),
+		safehttp.WithoutProxy(),
+	)
+	resp, err := c.Get("https://example.invalid/page")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := testutil.ToFloat64(coll.bytesTotal.WithLabelValues("", "example.invalid", "cache_hit")); got != float64(len("cached body")) {
+		t.Errorf("bytesTotal{channel=cache_hit} = %v, want %d", got, len("cached body"))
+	}
+	if got := testutil.ToFloat64(coll.bytesTotal.WithLabelValues("", "example.invalid", "direct")); got != 0 {
+		t.Errorf("bytesTotal{channel=direct} = %v, want 0 (this call never hit origin directly)", got)
+	}
+}
+
+type fakeCacheDelegate struct{ body string }
+
+func (f fakeCacheDelegate) FetchGet(_ context.Context, _ string, _ http.Header) (*safehttp.FetchResult, error) {
+	return &safehttp.FetchResult{Status: 200, Body: []byte(f.body)}, nil
 }
 
 // TestHostCardinalityCap: hosts beyond the cap fold to "_other".

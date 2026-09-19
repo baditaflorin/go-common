@@ -7,8 +7,20 @@ import (
 
 // EgressObserver receives one event per completed outbound HTTP attempt
 // (success, error, or timeout). Implementations MUST NOT block — observer
-// callbacks run inline on the request hot path. The canonical implementation
+// callbacks run inline on a request hot path. The canonical implementation
 // lives in go-common/promx and records Prometheus counters/histograms.
+//
+// Timing (since the Bytes-accuracy fix): for a request that got a response
+// body, the event fires when the caller closes resp.Body — the one point in
+// the http.Response contract every well-behaved caller is guaranteed to
+// reach — NOT synchronously when RoundTrip returns. Duration/Status/Outcome
+// reflect the round-trip itself (captured before the body is ever touched);
+// only the emission MOMENT moves to Close(), so Bytes can be the caller's
+// actual read count instead of a Content-Length guess. A caller that never
+// closes resp.Body will not get an event for that request — that was
+// already a resource leak (connection never returned to the pool)
+// independent of this package. Requests with no body (errors, SSRF blocks)
+// still emit synchronously in RoundTrip exactly as before.
 //
 // safehttp deliberately defines the contract here rather than importing a
 // metrics library directly: go-common/safehttp keeps zero metric-stack deps,
@@ -25,7 +37,9 @@ type EgressObserver interface {
 //
 // Outcome is a coarse bucket safe to use as a Prometheus label (bounded
 // cardinality). Host is the request URL's hostname (no port). Bytes is the
-// number of response body bytes observed if known, else 0.
+// number of response body bytes the caller actually read (see EgressObserver's
+// timing doc above), falling back to Content-Length only when the caller
+// closed the body without reading it at all.
 type EgressEvent struct {
 	Method    string
 	Host      string
@@ -33,9 +47,17 @@ type EgressEvent struct {
 	Path      string
 	Status    int // 0 if Err != nil
 	Duration  time.Duration
-	Bytes     int64         // response body bytes; 0 if unknown
+	Bytes     int64         // response body bytes actually read; see doc above
 	ViaProxy  bool          // true if the request was sent through an HTTP(S)_PROXY
 	ProxyHost string        // host of the proxy used, "" if direct
+	// Channel buckets HOW the response was obtained: "direct" (no proxy),
+	// "proxy" (via HTTPS_PROXY/egress proxy), or "cache_hit" (served from
+	// the fleet fetch-cache delegate, no live origin fetch this call).
+	// Bounded, Prometheus-safe (3 values). Empty string on events emitted
+	// before this field existed is equivalent to "direct" for ViaProxy=false
+	// events and "proxy" for ViaProxy=true — callers double-keying on both
+	// fields stay correct either way.
+	Channel   string
 	Outcome   EgressOutcome // bucketed for label cardinality safety
 	Err       error         // nil on HTTP-level responses (even 4xx/5xx)
 }
