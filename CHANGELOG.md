@@ -4,6 +4,28 @@ All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).
 
+## v0.99.1 - 2026-09-20
+
+### Fixed
+
+- `safehttp` byte-accuracy: `responseBytes()` only ever checked
+  `resp.ContentLength`, silently reporting 0 for any chunked/gzip'd
+  response with no Content-Length header (most dynamic HTML). A new
+  `countingBody` wrapper measures bytes the caller actually reads instead
+  — the `EgressObserver` event for a request with a response body now
+  fires when the body is `Close()`'d rather than synchronously in
+  `RoundTrip`, so `Bytes` reflects real consumption. Falls back to
+  Content-Length only when the caller closes without reading at all (a
+  legitimate status-only check, not "zero bytes transferred").
+
+### Added
+
+- `EgressEvent.Channel` ("direct"/"proxy"/"cache_hit"), wired into
+  `promx.EgressCollectors`' `bytesTotal` vector — a fetch-cache hit no
+  longer looks like real network spend, and (previously unobserved
+  entirely) cache-hit responses now emit an event with an exact byte
+  count.
+
 ## v0.99.0 - 2026-09-15
 
 ### Added
