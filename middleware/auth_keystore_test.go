@@ -65,6 +65,66 @@ func TestKeystore_GatewayHeaderTrust(t *testing.T) {
 	}
 }
 
+func TestKeystore_GatewayHeaderTrustRequiresConfiguredTCPPeer(t *testing.T) {
+	verified := &stubVerifier{verify: func(_ context.Context, key string) (*apikey.VerifyResult, error) {
+		if key != "ak_verified" {
+			return nil, apikey.ErrInvalidKey
+		}
+		return &apikey.VerifyResult{User: "verified-service", Scope: "secrets", Tier: "infra-privileged"}, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{
+		Verifier:            verified,
+		RequiredTier:        "infra-privileged",
+		TierEnforce:         true,
+		TrustedGatewayCIDRs: []string{"10.10.10.10/32"},
+	})
+
+	// A non-gateway peer cannot turn forged X-Auth-* headers into an ACL
+	// identity. It must verify a key, and the downstream request sees only the
+	// verified keystore principal/tier.
+	nonGateway := newReq("/secrets/credential?api_key=ak_verified")
+	nonGateway.RemoteAddr = "10.10.10.77:48123"
+	nonGateway.Header.Set(header.AuthUser, "forged-admin")
+	nonGateway.Header.Set(header.AuthScope, "*")
+	nonGateway.Header.Set(header.AuthTier, "infra-privileged")
+	var seenUser, seenTier string
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenUser = r.Header.Get(header.AuthUser)
+		seenTier = r.Header.Get(header.AuthTier)
+		w.WriteHeader(http.StatusOK)
+	}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, nonGateway)
+	if w.Code != http.StatusOK || verified.calls != 1 || seenUser != "verified-service" || seenTier != "infra-privileged" {
+		t.Fatalf("non-gateway spoof path code/calls/user/tier = %d/%d/%q/%q", w.Code, verified.calls, seenUser, seenTier)
+	}
+
+	// The known gateway retains the no-round-trip header fast path.
+	trusted := newReq("/secrets/credential")
+	trusted.RemoteAddr = "10.10.10.10:48123"
+	trusted.Header.Set(header.AuthUser, "gateway-verified")
+	trusted.Header.Set(header.AuthTier, "infra-privileged")
+	tw := httptest.NewRecorder()
+	h.ServeHTTP(tw, trusted)
+	if tw.Code != http.StatusOK || verified.calls != 1 {
+		t.Fatalf("trusted gateway path code/calls = %d/%d", tw.Code, verified.calls)
+	}
+}
+
+func TestKeystore_ConfiguredTrustedGatewayRejectsHeaderOnlySpoof(t *testing.T) {
+	verifier := &stubVerifier{verify: func(_ context.Context, _ string) (*apikey.VerifyResult, error) {
+		return nil, apikey.ErrInvalidKey
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: verifier, TrustedGatewayCIDRs: []string{"10.10.10.10/32"}})
+	r := newReq("/secrets/credential")
+	r.RemoteAddr = "10.10.10.77:48123"
+	r.Header.Set(header.AuthUser, "forged-admin")
+	r.Header.Set(header.AuthTier, "infra-privileged")
+	if code, _ := run(t, mw, r); code != http.StatusUnauthorized || verifier.calls != 0 {
+		t.Fatalf("header-only spoof code/calls = %d/%d, want 401/0", code, verifier.calls)
+	}
+}
+
 func TestKeystore_LocalTokensFastPath(t *testing.T) {
 	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
 		t.Fatal("verifier should not be called for local tokens")

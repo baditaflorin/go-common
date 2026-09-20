@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.100.0] - 2026-09-20
+
+- Add an opt-in trusted-proxy CIDR guard for keystore gateway headers, so
+  direct private-network callers cannot forge `X-Auth-User` or `X-Auth-Tier`.
+- Add `server.WithKeystoreAuthTierTrustedProxy` for security-sensitive
+  tier-gated services while preserving existing service behavior by default.
+
 All notable changes to `github.com/baditaflorin/go-common` are recorded here.
 Versioning follows semver on the git-tag axis; the package itself has no
 embedded version string (consumers pin via `go.mod`).

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 )
@@ -59,6 +60,16 @@ type KeystoreOpts struct {
 	// the keystore returned 200). Skip both keystore and local check.
 	// Default header.AuthUser.
 	TrustGatewayHeader string
+
+	// TrustedGatewayCIDRs optionally constrains the gateway header fast path
+	// to real TCP peers in these CIDRs. When empty, legacy behavior is
+	// preserved for existing fleet services. Security-sensitive services that
+	// accept direct private-network connections must set this: otherwise any
+	// direct caller able to reach their port could forge X-Auth-User.
+	//
+	// Invalid entries are ignored and never widen trust. With a non-empty but
+	// wholly invalid list, no peer is trusted and callers must present a key.
+	TrustedGatewayCIDRs []string
 
 	// TrustPrivateMesh, when true, treats a request whose actual TCP peer
 	// (r.RemoteAddr — NOT a spoofable header) is a private/loopback IP AND
@@ -212,4 +223,27 @@ func isPrivateRemoteAddr(addr string) bool {
 		return false
 	}
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+
+func trustedGatewayRemoteAddr(addr string, cidrs []string) bool {
+	// An omitted allowlist keeps the historical fleet contract. Callers that
+	// opt in receive the stricter, fail-closed behavior below.
+	if len(cidrs) == 0 {
+		return true
+	}
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	peer, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	for _, value := range cidrs {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
+		if err == nil && prefix.Contains(peer) {
+			return true
+		}
+	}
+	return false
 }
