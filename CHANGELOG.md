@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.101.0] - 2026-09-20
+
+### Added
+
+- `proxysupplier`: opt-in sticky IP selection for `webshare_direct`.
+  `KeyedSupplier.ProxyURLForKey(key)` deterministically selects the same
+  proxy entry for the same key (cooldown-aware fallback), without
+  touching `ProxyURL()`'s round-robin cursor. `HTTPClient` consults it
+  automatically via the new `StickyKeyHeader` request header — set it on
+  one outbound request to pin that request to a consistent exit IP,
+  leave it off for the existing default round-robin behavior. Does not
+  change connection reuse: `webshare_direct` still forces a fresh TCP
+  connection per request, only which exit IP a request lands on is
+  pinned.
+
 ## [0.100.1] - 2026-09-20
 
 - Restore the documented fleet probe contract: `/selftest`, like `/health`
