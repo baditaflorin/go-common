@@ -142,6 +142,24 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if fetchCacheDebug {
 				t.logFetchCacheDebug("routed via cache host=%s status=%d bytes=%d", host, res.Status, len(res.Body))
 			}
+			// Cache-hit responses were never observed at all before — the
+			// RoundTrip code below (where the observer normally fires) is
+			// unreachable on this return path. The body is already fully
+			// materialized (delegate.FetchGet did the real fetch
+			// server-side), so bytes are exact with no counting wrapper
+			// needed here, unlike the live-network path below.
+			if obs := t.resolveObserver(); obs != nil {
+				obs.ObserveEgress(EgressEvent{
+					Method:  req.Method,
+					Host:    host,
+					Scheme:  req.URL.Scheme,
+					Path:    req.URL.Path,
+					Status:  res.Status,
+					Bytes:   int64(len(res.Body)),
+					Channel: "cache_hit",
+					Outcome: classifyOutcome(res.Status, nil),
+				})
+			}
 			return &http.Response{
 				StatusCode:    res.Status,
 				Status:        http.StatusText(res.Status),
@@ -213,36 +231,54 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		t.clearFailure(host)
 	}
 
-	// Observer emit — inline, on the hot path. Implementations are
-	// contracted to be cheap and non-blocking (counter/histogram
-	// observations only). We deliberately call this BEFORE the async
-	// trace emit so failures in trace emission can't reorder the
-	// observation.
+	// Observer emit. Implementations are contracted to be cheap and
+	// non-blocking (counter/histogram observations only).
 	//
 	// Per-client observer takes precedence; otherwise fall back to the
 	// process-wide DefaultObserver resolved AT CALL TIME so that
 	// observers installed AFTER NewClient (the common server.New →
 	// safehttp.SetDefaultObserver flow, vs. package-level var clients
 	// constructed at init) are still seen.
-	obs := t.observer
-	if obs == nil {
-		obs = DefaultObserver()
-	}
-	if obs != nil {
+	if obs := t.resolveObserver(); obs != nil {
 		viaProxy, proxyHost := t.resolveProxy(req)
-		obs.ObserveEgress(EgressEvent{
+		channel := "direct"
+		if viaProxy {
+			channel = "proxy"
+		}
+		ev := EgressEvent{
 			Method:    req.Method,
 			Host:      host,
 			Scheme:    req.URL.Scheme,
 			Path:      req.URL.Path,
 			Status:    status,
 			Duration:  dur,
-			Bytes:     responseBytes(resp),
 			ViaProxy:  viaProxy,
 			ProxyHost: proxyHost,
+			Channel:   channel,
 			Outcome:   classifyOutcome(status, err),
 			Err:       err,
-		})
+		}
+		if resp != nil && resp.Body != nil {
+			// Bytes aren't known yet — wrap the body so the real count
+			// (the caller's actual Read()s, not a Content-Length guess) is
+			// available when it's closed, and emit there instead of here.
+			// See countingBody's doc comment (extras.go) and
+			// EgressObserver's timing doc (observer.go) for the full
+			// rationale and caveats.
+			resp.Body = &countingBody{
+				ReadCloser: resp.Body,
+				fallback:   responseBytes(resp),
+				onClose: func(n int64) {
+					ev.Bytes = n
+					obs.ObserveEgress(ev)
+				},
+			}
+		} else {
+			// No body to wrap (error path, SSRF block, etc.) — emit now,
+			// exactly as before this change.
+			ev.Bytes = responseBytes(resp)
+			obs.ObserveEgress(ev)
+		}
 	}
 
 	// Async trace emit — never blocks the response. Snapshot the
@@ -449,6 +485,19 @@ func (t *extrasTransport) maybeLogTraceErr(format string, args ...any) {
 		return
 	}
 	log.Printf("safehttp: trace emit failed: "+format, args...)
+}
+
+// resolveObserver returns the effective EgressObserver for this transport:
+// the per-client one if set, else the process-wide DefaultObserver resolved
+// AT CALL TIME (so an observer installed after NewClient — the common
+// server.New → SetDefaultObserver flow, vs. a package-level var client built
+// at init — is still seen). Shared by both the cache-hit and live-network
+// RoundTrip paths so they resolve identically.
+func (t *extrasTransport) resolveObserver() EgressObserver {
+	if t.observer != nil {
+		return t.observer
+	}
+	return DefaultObserver()
 }
 
 // resolveProxy mirrors what http.Transport will do internally: invoke the

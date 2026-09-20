@@ -3,9 +3,11 @@ package safehttp
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -155,6 +157,123 @@ func TestResolveProxy(t *testing.T) {
 	}}
 	if via, h := tErr.resolveProxy(mkReq()); via || h != "" {
 		t.Errorf("err path: via=%v host=%q, want false/\"\"", via, h)
+	}
+}
+
+// TestObserverBytesReflectsActualReadForChunkedResponse is the case
+// responseBytes() alone got wrong: a response with no Content-Length header
+// (net/http auto-chunks when a handler writes without setting it) used to
+// report Bytes: 0 unconditionally. The event must now carry the real byte
+// count, but only once the body is drained and closed.
+func TestObserverBytesReflectsActualReadForChunkedResponse(t *testing.T) {
+	const want = "this response deliberately omits Content-Length"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.(http.Flusher).Flush() // forces chunked transfer-encoding, no Content-Length
+		_, _ = w.Write([]byte(want))
+	}))
+	defer srv.Close()
+
+	obs := &captureObserver{}
+	SetAllowedPrivateIPs(parseAllowedPrivateIPs("127.0.0.1"))
+	defer SetAllowedPrivateIPs(nil)
+
+	c := NewClient(WithObserver(obs), WithTimeout(2*time.Second))
+	resp, err := c.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if resp.ContentLength > 0 {
+		t.Fatalf("test setup invalid: got Content-Length=%d, want unset (0 or -1) so this actually exercises the chunked path", resp.ContentLength)
+	}
+
+	// Event must not have fired yet — it's deferred to Close().
+	if got := len(obs.snapshot()); got != 0 {
+		t.Fatalf("events before Close() = %d, want 0 (emission should be deferred)", got)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+	resp.Body.Close()
+
+	evs := obs.snapshot()
+	if len(evs) != 1 {
+		t.Fatalf("events after Close() = %d, want 1", len(evs))
+	}
+	if got := evs[0].Bytes; got != int64(len(want)) {
+		t.Errorf("bytes = %d, want %d (actual bytes read, not a Content-Length guess)", got, len(want))
+	}
+	if evs[0].Channel != "direct" {
+		t.Errorf("channel = %q, want %q", evs[0].Channel, "direct")
+	}
+}
+
+// TestObserverBytesReflectsPartialReadOnEarlyClose documents the one known
+// limitation of application-layer byte counting (see countingBody's doc
+// comment): a caller that reads only part of the body before closing sees
+// only what it actually consumed, not the full origin response size.
+func TestObserverBytesReflectsPartialReadOnEarlyClose(t *testing.T) {
+	full := strings.Repeat("a", 10_000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.(http.Flusher).Flush()
+		_, _ = w.Write([]byte(full))
+	}))
+	defer srv.Close()
+
+	obs := &captureObserver{}
+	SetAllowedPrivateIPs(parseAllowedPrivateIPs("127.0.0.1"))
+	defer SetAllowedPrivateIPs(nil)
+
+	c := NewClient(WithObserver(obs), WithTimeout(2*time.Second))
+	resp, err := c.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	const capBytes = 100
+	partial := make([]byte, capBytes)
+	if _, err := io.ReadFull(resp.Body, partial); err != nil {
+		t.Fatalf("partial read: %v", err)
+	}
+	resp.Body.Close()
+
+	evs := obs.snapshot()
+	if len(evs) != 1 {
+		t.Fatalf("events = %d, want 1", len(evs))
+	}
+	if got := evs[0].Bytes; got != capBytes {
+		t.Errorf("bytes = %d, want %d (only what was actually read before closing)", got, capBytes)
+	}
+}
+
+// TestObserverEmitsCacheHitChannel covers the fetch-cache delegate path,
+// which previously never emitted an EgressEvent at all (it returns before
+// reaching the RoundTrip code where the observer normally fires). Bytes must
+// be exact — the delegate's response is already fully materialized, no live
+// stream to under/over-count.
+func TestObserverEmitsCacheHitChannel(t *testing.T) {
+	obs := &captureObserver{}
+	d := &stubDelegate{status: 200, body: "cached response body"}
+	c := NewClient(WithFetchDelegate(d), WithObserver(obs), WithoutProxy())
+
+	resp, err := c.Get("https://example.invalid/page")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+
+	evs := obs.snapshot()
+	if len(evs) != 1 {
+		t.Fatalf("events = %d, want 1", len(evs))
+	}
+	if evs[0].Channel != "cache_hit" {
+		t.Errorf("channel = %q, want %q", evs[0].Channel, "cache_hit")
+	}
+	if got := evs[0].Bytes; got != int64(len("cached response body")) {
+		t.Errorf("bytes = %d, want %d", got, len("cached response body"))
 	}
 }
 
