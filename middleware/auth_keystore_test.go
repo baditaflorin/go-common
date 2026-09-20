@@ -39,15 +39,17 @@ func run(t *testing.T, mw Middleware, r *http.Request) (int, string) {
 	return rr.Code, rr.Body.String()
 }
 
-func TestKeystore_HealthBypass(t *testing.T) {
+func TestKeystore_FleetProbeBypass(t *testing.T) {
 	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
 		t.Fatal("verifier should not be called for /health")
 		return nil, nil
 	}}
 	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v})
-	code, _ := run(t, mw, newReq("/health"))
-	if code != http.StatusOK {
-		t.Fatalf("/health: want 200 got %d", code)
+	for _, path := range []string{"/health", "/version", "/selftest"} {
+		code, _ := run(t, mw, newReq(path))
+		if code != http.StatusOK {
+			t.Fatalf("%s: want 200 got %d", path, code)
+		}
 	}
 }
 

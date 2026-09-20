@@ -13,7 +13,7 @@ import (
 //  2. URL path /t/{token}/...     (legacy support)
 //  3. ?api_key=<token> query param (browser-friendly)
 //
-// The /health, /version, /capabilities, /openapi.json, and /agent.json
+// The /health, /version, /selftest, /capabilities, /openapi.json, and /agent.json
 // paths bypass auth regardless of token. /capabilities and /openapi.json
 // are scraped unauthenticated by the catalog and hub so users can
 // discover query flags and the API surface; /agent.json is the agent
@@ -27,10 +27,10 @@ func TokenAuth(validTokens []string) Middleware {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Health/version always pass through. Check first so we don't
+			// Fleet probes always pass through. Check first so we don't
 			// need a token for these no matter how the middleware is
 			// wired up.
-			if r.URL.Path == "/health" || r.URL.Path == "/version" || r.URL.Path == "/capabilities" || r.URL.Path == "/openapi.json" {
+			if r.URL.Path == "/health" || r.URL.Path == "/version" || r.URL.Path == "/selftest" || r.URL.Path == "/capabilities" || r.URL.Path == "/openapi.json" || r.URL.Path == "/agent.json" {
 				next.ServeHTTP(w, r)
 				return
 			}

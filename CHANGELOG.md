@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.100.1] - 2026-09-20
+
+- Restore the documented fleet probe contract: `/selftest`, like `/health`
+  and `/version`, bypasses API-key middleware. This keeps deploy smoke probes
+  available without reintroducing a shared local-token bypass for application
+  routes.
+
 ## [0.100.0] - 2026-09-20
 
 - Add an opt-in trusted-proxy CIDR guard for keystore gateway headers, so
