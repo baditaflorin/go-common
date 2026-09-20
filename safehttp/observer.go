@@ -47,9 +47,9 @@ type EgressEvent struct {
 	Path      string
 	Status    int // 0 if Err != nil
 	Duration  time.Duration
-	Bytes     int64         // response body bytes actually read; see doc above
-	ViaProxy  bool          // true if the request was sent through an HTTP(S)_PROXY
-	ProxyHost string        // host of the proxy used, "" if direct
+	Bytes     int64  // response body bytes actually read; see doc above
+	ViaProxy  bool   // true if the request was sent through an HTTP(S)_PROXY
+	ProxyHost string // host of the proxy used, "" if direct
 	// Channel buckets HOW the response was obtained: "direct" (no proxy),
 	// "proxy" (via HTTPS_PROXY/egress proxy), or "cache_hit" (served from
 	// the fleet fetch-cache delegate, no live origin fetch this call).
@@ -57,9 +57,9 @@ type EgressEvent struct {
 	// before this field existed is equivalent to "direct" for ViaProxy=false
 	// events and "proxy" for ViaProxy=true — callers double-keying on both
 	// fields stay correct either way.
-	Channel   string
-	Outcome   EgressOutcome // bucketed for label cardinality safety
-	Err       error         // nil on HTTP-level responses (even 4xx/5xx)
+	Channel string
+	Outcome EgressOutcome // bucketed for label cardinality safety
+	Err     error         // nil on HTTP-level responses (even 4xx/5xx)
 }
 
 // EgressOutcome buckets request results into a small, label-safe set.
