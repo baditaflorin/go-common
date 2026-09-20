@@ -182,6 +182,31 @@ func WithKeystoreAuthTier(requiredTier string, enforce bool, localTokens ...stri
 	}
 }
 
+// WithKeystoreAuthTierTrustedProxy is WithKeystoreAuthTier with an explicit
+// source-IP allowlist for gateway-injected identity headers. Use it for
+// security-sensitive services that expose a direct private-network listener:
+// callers outside the supplied CIDRs must present a real API key and cannot
+// impersonate a principal by supplying X-Auth-User/X-Auth-Tier themselves.
+//
+// Passing a non-empty but invalid CIDR list fails closed for the header path.
+// Existing WithKeystoreAuthTier behavior is intentionally unchanged.
+func WithKeystoreAuthTierTrustedProxy(requiredTier string, enforce bool, trustedGatewayCIDRs []string, localTokens ...string) Option {
+	return func(s *Server) {
+		ks := apikey.NewCache(apikey.New())
+		if s.PromAuthCollectors != nil {
+			ks.Observer = s.PromAuthCollectors
+		}
+		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
+			Verifier:            ks,
+			LocalTokens:         localTokens,
+			Observer:            s.PromAuthCollectors,
+			RequiredTier:        requiredTier,
+			TierEnforce:         enforce,
+			TrustedGatewayCIDRs: append([]string(nil), trustedGatewayCIDRs...),
+		}))
+	}
+}
+
 // WithDependencies attaches a dep registry whose probes are run on every
 // /health request. Health JSON gains a "dependencies":[…] array and the
 // top-level "status" flips to "degraded" if any probe fails (HTTP stays

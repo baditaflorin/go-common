@@ -78,10 +78,20 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				return
 			}
 
-			// 2. Gateway already validated? Trust the upstream auth signal.
+			// 2. Gateway already validated? Trust the upstream auth signal only
+			//    when it arrived from a configured gateway TCP peer. A direct
+			//    caller with spoofed X-Auth-* fields must go through ordinary
+			//    key verification and cannot leak its claimed identity downstream.
 			//    nginx's auth_request_set captures X-Auth-User from the
 			//    keystore's /verify response. Presence ≈ keystore said yes.
-			if opts.TrustGatewayHeader != "" && r.Header.Get(opts.TrustGatewayHeader) != "" {
+			gatewayHeaderPresent := opts.TrustGatewayHeader != "" && r.Header.Get(opts.TrustGatewayHeader) != ""
+			gatewayTrusted := gatewayHeaderPresent && trustedGatewayRemoteAddr(r.RemoteAddr, opts.TrustedGatewayCIDRs)
+			if gatewayHeaderPresent && !gatewayTrusted {
+				r.Header.Del(header.AuthUser)
+				r.Header.Del(header.AuthScope)
+				r.Header.Del(header.AuthTier)
+			}
+			if gatewayTrusted {
 				// 2a. Optional defense-in-depth: re-verify the scope
 				//     out-of-band so a forged X-Auth-Scope (gateway
 				//     compromise or non-gateway path injection) can't
