@@ -74,9 +74,9 @@ func TestTokenAuth_NoToken(t *testing.T) {
 	}
 }
 
-func TestTokenAuth_HealthBypassesAuth(t *testing.T) {
+func TestTokenAuth_FleetProbeBypassesAuth(t *testing.T) {
 	h := TokenAuth([]string{"good"})(okHandler())
-	for _, path := range []string{"/health", "/version"} {
+	for _, path := range []string{"/health", "/version", "/selftest"} {
 		req := httptest.NewRequest("GET", path, nil)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
