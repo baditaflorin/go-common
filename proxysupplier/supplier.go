@@ -103,6 +103,43 @@ type ResultReporter interface {
 	MarkResult(addr string, ok bool)
 }
 
+// KeyedSupplier is an optional capability — currently implemented only by
+// the webshare_direct supplier — for a caller that wants the SAME exit IP
+// across several separate requests (session/domain affinity) instead of
+// ProxyURL()'s per-call round-robin. Selection is deterministic: the same
+// key always maps to the same proxy entry, as long as it stays eligible
+// (see ResultReporter) and pool membership hasn't changed.
+//
+// HTTPClient consults this automatically via StickyKeyHeader — no need to
+// type-assert in the common case. Type-assert directly only when building
+// a Proxy func by hand instead of using HTTPClient:
+//
+//	if ks, ok := supplier.(proxysupplier.KeyedSupplier); ok {
+//	    proxyURL := ks.ProxyURLForKey(key)
+//	}
+//
+// This does NOT mean the same TCP connection is reused across those
+// requests — HTTPClient still forces a fresh connection per request for
+// suppliers that don't opt into KeepAliveEnabled (webshare_direct
+// deliberately never does, see TestWebshareDirect_HTTPClientKeepsFreshConnectionPerRequest).
+// Each request still pays its own connect/handshake cost; what's pinned is
+// WHICH exit IP it lands on, not the socket.
+type KeyedSupplier interface {
+	ProxyURLForKey(key string) string
+}
+
+// StickyKeyHeader is the request header HTTPClient checks to opt a single
+// outbound request into KeyedSupplier selection instead of the supplier's
+// default round-robin. Set it before calling client.Do(req):
+//
+//	req.Header.Set(proxysupplier.StickyKeyHeader, "checkout-flow-user-42")
+//	resp, err := client.Do(req)
+//
+// HTTPClient always strips the header before the request is sent — even
+// against a Supplier that doesn't implement KeyedSupplier — so it never
+// leaks to the proxy or the origin regardless of which supplier is active.
+const StickyKeyHeader = "X-Fleet-Proxy-Sticky-Key"
+
 // Config holds the raw proxy configuration values. Populate it from env vars,
 // a struct config, or a YAML file — whatever the calling service uses.
 type Config struct {
@@ -249,6 +286,7 @@ func HTTPClient(s Supplier, timeout time.Duration) *http.Client {
 	// Capture optional capabilities once — cheaper than asserting every request.
 	bp, _ := s.(bypasser)
 	ka, _ := s.(keepAliver)
+	ks, _ := s.(KeyedSupplier)
 	// Fresh TCP per request by default — required for rotating-IP endpoints
 	// to actually rotate: the proxy gateway routes each new CONNECT tunnel
 	// through a different exit IP. A Supplier built with
@@ -270,7 +308,21 @@ func HTTPClient(s Supplier, timeout time.Duration) *http.Client {
 				if bp != nil && bp.Bypass(req.URL.Hostname()) {
 					return nil, nil
 				}
-				raw := s.ProxyURL()
+				// StickyKeyHeader opts THIS request into session/domain
+				// affinity (see KeyedSupplier) instead of the default
+				// round-robin. Always stripped, even when ks is nil, so it
+				// never leaks to the proxy or origin regardless of which
+				// supplier is active.
+				var raw string
+				if key := req.Header.Get(StickyKeyHeader); key != "" {
+					req.Header.Del(StickyKeyHeader)
+					if ks != nil {
+						raw = ks.ProxyURLForKey(key)
+					}
+				}
+				if raw == "" {
+					raw = s.ProxyURL()
+				}
 				if raw == "" {
 					return nil, nil
 				}

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"net/url"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -157,6 +159,48 @@ func (s *webshareDirectSupplier) ProxyURL() string {
 	return ""
 }
 
+// ProxyURLForKey deterministically selects a proxy URL for key instead of
+// advancing the shared round-robin cursor: the same key always maps to the
+// same exit IP, for a caller that wants session/domain affinity (e.g.
+// "hold the same IP across several requests to this target") rather than a
+// fresh one on every call. Does not touch s.idx, so keyed and unkeyed
+// (ProxyURL) callers never distort each other's distribution.
+//
+// Selection is stable across a list refresh because refresh() stores s.list
+// pre-sorted by addr -- hashing key against a canonical order means an
+// entry's mapping only shifts when the pool's actual membership changes
+// (an IP added or removed), never merely because Webshare's API happened
+// to return the same set in a different order on a later fetch.
+//
+// Falls forward through the same eligible list starting at the hashed
+// index, exactly like ProxyURL()'s cooldown-skip -- a key whose preferred
+// entry is currently cooling down gets the next eligible one instead of
+// blocking. Returns "" under the same empty-pool/all-cooling-down
+// conditions ProxyURL() does.
+func (s *webshareDirectSupplier) ProxyURLForKey(key string) string {
+	s.mu.RLock()
+	list := s.list
+	s.mu.RUnlock()
+
+	n := len(list)
+	if n == 0 {
+		return ""
+	}
+
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	start := int(h.Sum32() % uint32(n))
+
+	now := time.Now().UnixNano()
+	for i := 0; i < n; i++ {
+		e := list[(start+i)%n]
+		if e.eligible(now) {
+			return e.proxyURL
+		}
+	}
+	return ""
+}
+
 // MarkResult records an application-level verdict for the exit IP that
 // handled a request, identified by its address (host:port, no
 // credentials -- this is deliberately what a caller can recover cheaply
@@ -275,6 +319,11 @@ func (s *webshareDirectSupplier) refresh(ctx context.Context) error {
 	if len(list) == 0 {
 		return errors.New("proxysupplier: webshare_direct fetched proxy list has zero valid entries")
 	}
+
+	// Canonical order (by addr) so ProxyURLForKey's hash->index mapping is
+	// stable across refreshes without re-sorting on every call — ProxyURL's
+	// round-robin is order-agnostic, so this costs it nothing.
+	sort.Slice(list, func(i, j int) bool { return list[i].addr < list[j].addr })
 
 	s.mu.Lock()
 	s.list = list
