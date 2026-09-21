@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.101.1] - 2026-09-21
+
+### Added
+
+- `server.WithKeystoreAuthTierTrustedProxyNoCache`, an opt-in direct-key
+  authentication path for consumable credentials. It preserves the existing
+  trusted-proxy and tier checks while ensuring every direct request reaches
+  the authoritative key verifier instead of a positive credential cache.
+
+### Fixed
+
+- Make the corpus-outage test explicitly bypass `HTTP_PROXY`, so it continues
+  to verify a refused loopback connection rather than a proxy-generated HTTP
+  response in CI.
+
 ## [0.101.0] - 2026-09-20
 
 ### Added
