@@ -196,15 +196,34 @@ func WithKeystoreAuthTierTrustedProxy(requiredTier string, enforce bool, trusted
 		if s.PromAuthCollectors != nil {
 			ks.Observer = s.PromAuthCollectors
 		}
-		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
-			Verifier:            ks,
-			LocalTokens:         localTokens,
-			Observer:            s.PromAuthCollectors,
-			RequiredTier:        requiredTier,
-			TierEnforce:         enforce,
-			TrustedGatewayCIDRs: append([]string(nil), trustedGatewayCIDRs...),
-		}))
+		withKeystoreAuthTierTrustedProxy(s, ks, requiredTier, enforce, trustedGatewayCIDRs, localTokens)
 	}
+}
+
+// WithKeystoreAuthTierTrustedProxyNoCache is the same narrow trusted-proxy
+// tier gate as WithKeystoreAuthTierTrustedProxy, but every direct-key request
+// is verified by go-apikey-service. Use it only for consumable credentials
+// such as one-time writers: a positive-result cache would otherwise admit a
+// replay without giving the keystore a chance to atomically claim the use.
+//
+// Gateway-injected requests from trusted CIDRs retain the established gateway
+// trust path; the gateway is responsible for its own authoritative /verify.
+// Existing cached options are deliberately unchanged.
+func WithKeystoreAuthTierTrustedProxyNoCache(requiredTier string, enforce bool, trustedGatewayCIDRs []string, localTokens ...string) Option {
+	return func(s *Server) {
+		withKeystoreAuthTierTrustedProxy(s, apikey.New(), requiredTier, enforce, trustedGatewayCIDRs, localTokens)
+	}
+}
+
+func withKeystoreAuthTierTrustedProxy(s *Server, verifier apikey.Verifier, requiredTier string, enforce bool, trustedGatewayCIDRs []string, localTokens []string) {
+	s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
+		Verifier:            verifier,
+		LocalTokens:         localTokens,
+		Observer:            s.PromAuthCollectors,
+		RequiredTier:        requiredTier,
+		TierEnforce:         enforce,
+		TrustedGatewayCIDRs: append([]string(nil), trustedGatewayCIDRs...),
+	}))
 }
 
 // WithDependencies attaches a dep registry whose probes are run on every
