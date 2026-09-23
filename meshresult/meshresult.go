@@ -141,19 +141,20 @@ func (o Outcome) HTTPCode() int {
 // Stable reason tokens returned by ClassifyFetchError. These are part of
 // the body contract; do not rename without a fleet-wide migration.
 const (
-	ReasonNone           = ""                // ok / no error
-	ReasonDNSNXDomain    = "dns_nxdomain"    // host does not resolve
-	ReasonDNSTimeout     = "dns_timeout"     // DNS lookup timed out
-	ReasonDNSError       = "dns_error"       // other DNS failure
-	ReasonConnectRefused = "connect_refused" // TCP connection refused
-	ReasonConnectTimeout = "connect_timeout" // TCP connect timed out
-	ReasonTLSError       = "tls_error"       // TLS handshake / cert failure
-	ReasonFetchTimeout   = "fetch_timeout"   // context deadline / request timeout
-	ReasonUpstream4xx    = "upstream_4xx"    // upstream returned a 4xx
-	ReasonUpstream5xx    = "upstream_5xx"    // upstream returned a 5xx
-	ReasonDecodeError    = "decode_error"    // response body failed to decode
-	ReasonBadRequest     = "bad_request"     // caller error (SSRF block, bad scheme)
-	ReasonUnknown        = "unknown_error"   // unclassifiable transport error
+	ReasonNone                  = ""                        // ok / no error
+	ReasonDNSNXDomain           = "dns_nxdomain"            // host does not resolve
+	ReasonDNSTimeout            = "dns_timeout"             // DNS lookup timed out
+	ReasonDNSError              = "dns_error"               // other DNS failure
+	ReasonConnectRefused        = "connect_refused"         // TCP connection refused
+	ReasonConnectTimeout        = "connect_timeout"         // TCP connect timed out
+	ReasonTLSError              = "tls_error"               // TLS handshake / cert failure
+	ReasonFetchTimeout          = "fetch_timeout"           // context deadline / request timeout
+	ReasonUpstream4xx           = "upstream_4xx"            // upstream returned a 4xx
+	ReasonUpstream5xx           = "upstream_5xx"            // upstream returned a 5xx
+	ReasonProxyConnectForbidden = "proxy_connect_forbidden" // proxy policy denied target CONNECT
+	ReasonDecodeError           = "decode_error"            // response body failed to decode
+	ReasonBadRequest            = "bad_request"             // caller error (SSRF block, bad scheme)
+	ReasonUnknown               = "unknown_error"           // unclassifiable transport error
 )
 
 // ClassifyFetchError maps a fetch/DNS/transport error into an Outcome and
@@ -199,6 +200,15 @@ func ClassifyFetchError(err error) (Outcome, string) {
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return OutcomeTimeout, ReasonConnectTimeout
+	}
+
+	// Typed proxy policy outcomes must be inspected before string markers:
+	// fleetfetch may otherwise wrap a proxy CONNECT 403 after a cache 502, and
+	// the generic 502 marker below would incorrectly report a service error.
+	type proxyConnectForbidden interface{ IsProxyConnectForbidden() bool }
+	var proxyPolicyErr proxyConnectForbidden
+	if errors.As(err, &proxyPolicyErr) && proxyPolicyErr.IsProxyConnectForbidden() {
+		return OutcomeUnreachable, ReasonProxyConnectForbidden
 	}
 
 	// 4. String-marker matching for shapes without typed sentinels

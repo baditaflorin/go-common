@@ -79,6 +79,8 @@ func TestClassifyFetchError(t *testing.T) {
 		{"bad_json", errors.New("unexpected end of json input"), OutcomeError, ReasonDecodeError},
 
 		// Upstream status.
+		// Generic cache 502 remains an error unless fleetfetch supplied the
+		// typed proxy-CONNECT policy marker.
 		{"upstream_5xx", errors.New("fleetfetch: cache status 502"), OutcomeError, ReasonUpstream5xx},
 		{"upstream_503", errors.New("upstream returned 503 server error"), OutcomeError, ReasonUpstream5xx},
 		{"upstream_404", errors.New("upstream returned status 404 not found"), OutcomeNoData, ReasonUpstream4xx},

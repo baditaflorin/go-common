@@ -380,6 +380,9 @@ func (c *Client) directFetch(ctx context.Context, targetURL string, headers http
 	resp, err := c.fallback.Do(req)
 	if err != nil {
 		c.errs.Add(1)
+		if isProxyConnectForbidden(err) {
+			return nil, &ProxyConnectForbiddenError{}
+		}
 		return nil, fmt.Errorf("fleetfetch: fallback transport (cache=%v): %w", cacheErr, err)
 	}
 	defer resp.Body.Close()
@@ -413,4 +416,14 @@ func (c *Client) Stats() Stats {
 		Timeouts:  c.timeouts.Load(),
 		Errors:    c.errs.Load(),
 	}
+}
+
+// isProxyConnectForbidden recognizes only the HTTP proxy CONNECT 403 shape or
+// Webshare's explicit target-policy reason. An ordinary origin 403 response is
+// returned as Response.Status and never classified through this error path.
+func isProxyConnectForbidden(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrProxyConnectForbidden)
 }

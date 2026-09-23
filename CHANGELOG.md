@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Preserve an explicit Webshare target-policy denial of an HTTPS proxy
+  CONNECT as unreachable, rather than letting a preceding fetch-cache 502
+  classify it as an upstream service failure. Generic cache 5xx responses
+  remain errors.
+
 ## [0.101.1] - 2026-09-21
 
 ### Added

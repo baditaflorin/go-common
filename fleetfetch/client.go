@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -112,7 +113,21 @@ var (
 	// cache. Callers may use errors.Is(err, ErrRenderBusy), then errors.As
 	// to inspect Retry-After without parsing an error string.
 	ErrRenderBusy = errors.New("fleetfetch: renderer at capacity")
+
+	// ErrProxyConnectForbidden means the fallback HTTP proxy rejected the
+	// CONNECT tunnel with a target-policy 403. This is not a fetch-cache
+	// failure, even when a preceding cache 502 is also present in the chain.
+	ErrProxyConnectForbidden = errors.New("fleetfetch: proxy CONNECT forbidden by target policy")
 )
+
+// ProxyConnectForbiddenError is returned when the fallback transport receives
+// a clear HTTP-proxy CONNECT 403. Its stable message deliberately omits proxy
+// endpoints, target URLs, and untrusted response text.
+type ProxyConnectForbiddenError struct{}
+
+func (*ProxyConnectForbiddenError) Error() string                 { return ErrProxyConnectForbidden.Error() }
+func (*ProxyConnectForbiddenError) Unwrap() error                 { return ErrProxyConnectForbidden }
+func (*ProxyConnectForbiddenError) IsProxyConnectForbidden() bool { return true }
 
 // CacheAuthError describes a cache-side 401/403. CircuitOpen is true on
 // calls rejected locally after an earlier authentication failure; false on
@@ -269,6 +284,9 @@ func NewClient(opts ...Option) *Client {
 		c.fallback = safehttp.NewClient(
 			safehttp.WithTimeout(c.timeout),
 			safehttp.WithoutFetchCache(),
+			safehttp.WithProxyConnectResponseHook(func(_ context.Context, _ *url.URL, _ *http.Request, resp *http.Response) error {
+				return proxyConnectResponseError(resp)
+			}),
 		)
 	}
 	return c
@@ -331,4 +349,15 @@ func mergeHeaders(base, overlay http.Header) http.Header {
 		out[http.CanonicalHeaderKey(k)] = append([]string(nil), vs...)
 	}
 	return out
+}
+
+// proxyConnectResponseError classifies only Webshare's explicit target-policy
+// denial. Status alone is insufficient because other proxies may use 403 for
+// their own authentication or policy failures.
+func proxyConnectResponseError(resp *http.Response) error {
+	if resp != nil && resp.StatusCode == http.StatusForbidden &&
+		strings.EqualFold(strings.TrimSpace(resp.Header.Get("X-Webshare-Reason")), "client_connect_forbidden_host") {
+		return ErrProxyConnectForbidden
+	}
+	return nil
 }
