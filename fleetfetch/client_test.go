@@ -7,13 +7,112 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/baditaflorin/go-common/header"
+	"github.com/baditaflorin/go-common/meshresult"
 	"github.com/baditaflorin/go-common/safehttp"
 )
+
+func TestGet_ProxyConnectForbiddenAfterCache502IsTargetUnreachable(t *testing.T) {
+	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer cacheSrv.Close()
+
+	connectSeen := false
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			t.Errorf("proxy method = %q, want CONNECT", r.Method)
+		}
+		connectSeen = true
+		w.Header().Set("X-Webshare-Reason", "client_connect_forbidden_host")
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer proxySrv.Close()
+	proxyURL, err := url.Parse(proxySrv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{
+		Proxy: http.ProxyURL(proxyURL),
+		OnProxyConnectResponse: func(_ context.Context, _ *url.URL, _ *http.Request, resp *http.Response) error {
+			return proxyConnectResponseError(resp)
+		},
+	}}
+	c := NewClient(WithCacheURL(cacheSrv.URL), WithFallbackClient(fallback))
+
+	_, err = c.Get(context.Background(), "https://target-policy.example/")
+	if !connectSeen {
+		t.Fatal("fallback did not attempt the proxy CONNECT")
+	}
+	if !errors.Is(err, ErrProxyConnectForbidden) {
+		t.Fatalf("Get error = %v (%T %#v), want ErrProxyConnectForbidden", err, err, err)
+	}
+	outcome, reason := meshresult.ClassifyFetchError(err)
+	if outcome != meshresult.OutcomeUnreachable || reason != meshresult.ReasonProxyConnectForbidden {
+		t.Fatalf("classification = (%q, %q), want (unreachable, proxy_connect_forbidden)", outcome, reason)
+	}
+}
+
+func TestGet_ProxyConnect403WithoutTargetPolicyMarkerRemainsError(t *testing.T) {
+	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer cacheSrv.Close()
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			t.Errorf("proxy method = %q, want CONNECT", r.Method)
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer proxySrv.Close()
+	proxyURL, err := url.Parse(proxySrv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{
+		Proxy: http.ProxyURL(proxyURL),
+		OnProxyConnectResponse: func(_ context.Context, _ *url.URL, _ *http.Request, resp *http.Response) error {
+			return proxyConnectResponseError(resp)
+		},
+	}}
+	c := NewClient(WithCacheURL(cacheSrv.URL), WithFallbackClient(fallback))
+
+	_, err = c.Get(context.Background(), "https://target-policy.example/")
+	if err == nil || errors.Is(err, ErrProxyConnectForbidden) {
+		t.Fatalf("Get error = %v, want an unclassified proxy failure", err)
+	}
+	outcome, reason := meshresult.ClassifyFetchError(err)
+	if outcome != meshresult.OutcomeError || reason != meshresult.ReasonUpstream5xx {
+		t.Fatalf("classification = (%q, %q), want (error, upstream_5xx)", outcome, reason)
+	}
+}
+
+func TestProxyConnectResponseErrorRequiresExplicitWebshareTargetPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		reason string
+		want   bool
+	}{
+		{name: "explicit target policy", status: http.StatusForbidden, reason: "client_connect_forbidden_host", want: true},
+		{name: "case and whitespace normalized", status: http.StatusForbidden, reason: " Client_Connect_Forbidden_Host ", want: true},
+		{name: "other 403", status: http.StatusForbidden, reason: "proxy_authentication_failed"},
+		{name: "marker on non-403", status: http.StatusBadGateway, reason: "client_connect_forbidden_host"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &http.Response{StatusCode: tc.status, Header: http.Header{"X-Webshare-Reason": []string{tc.reason}}}
+			err := proxyConnectResponseError(resp)
+			if got := errors.Is(err, ErrProxyConnectForbidden); got != tc.want {
+				t.Fatalf("classified=%t, want %t", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestNewClient_DefaultsAndEnv(t *testing.T) {
 	t.Setenv(EnvCacheURL, "https://override.example/")

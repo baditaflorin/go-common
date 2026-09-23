@@ -365,12 +365,29 @@ type options struct {
 	// "deny all" (see WithDenyAllEgress). See WithEgressAllowlist.
 	egressAllowlist map[string]struct{}
 
+	// proxyConnectResponseHook observes CONNECT responses before net/http
+	// validates the proxy's status code. nil preserves standard behavior.
+	proxyConnectResponseHook func(context.Context, *url.URL, *http.Request, *http.Response) error
+
 	// Persistent local breaker-state cache — opt-in via
 	// WithPersistentBreakerState (see breaker_state.go). Only takes
 	// effect when extrasTransport is already in the chain (i.e. at
 	// least one of traceURL/backoffURL/degradedSink is set), since
 	// the state to persist lives on that transport.
 	breakerState *breakerStateConfig
+}
+
+// ProxyConnectResponseHook observes the HTTP response to an HTTPS proxy
+// CONNECT request before net/http validates that response. Returning an error
+// aborts the request; hooks should classify only an explicit proxy response,
+// not infer outcomes from ordinary origin status codes.
+type ProxyConnectResponseHook func(context.Context, *url.URL, *http.Request, *http.Response) error
+
+// WithProxyConnectResponseHook installs a narrowly scoped observer for proxy
+// CONNECT responses. It is intended for proxy-specific policy signals that the
+// standard transport otherwise reduces to an untyped request error.
+func WithProxyConnectResponseHook(hook ProxyConnectResponseHook) Option {
+	return func(o *options) { o.proxyConnectResponseHook = hook }
 }
 
 // Option configures NewClient.
@@ -515,8 +532,9 @@ func newBaseTransport(o *options, proxyFn func(*http.Request) (*url.URL, error))
 		//
 		// Override via WithoutProxy (force direct) or RequireProxy
 		// (fail-fast if env not set). See those options above.
-		Proxy:       proxyFn,
-		DialContext: makeDialer(o.portCheck),
+		Proxy:                  proxyFn,
+		DialContext:            makeDialer(o.portCheck),
+		OnProxyConnectResponse: o.proxyConnectResponseHook,
 		// ForceAttemptHTTP2 must be set explicitly: because DialContext
 		// above is a custom dialer, net/http otherwise disables HTTP/2,
 		// suppressing "h2" in the ALPN offer. Off by default; opt in via
