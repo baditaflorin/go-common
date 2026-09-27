@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.102.2] - 2026-09-27
+
+### Fixed
+
+- Update the gRPC runtime to v1.83.2 to address the OSV-reported high-severity
+  vulnerability in v1.83.1.
+
 ## [0.102.1] - 2026-09-27
 
 ### Fixed
