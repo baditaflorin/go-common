@@ -1,19 +1,7 @@
 #!/usr/bin/env bash
-# Build + vet EVERY Go module in this repo, including nested modules.
-#
-# Why this exists: `telemetry/` is a nested module (its own go.mod) so the
-# heavy OpenTelemetry/gRPC/protobuf tree stays out of the root module's
-# dependency graph (see CHANGELOG v0.62.0). The catch is that `go build
-# ./...` / `go test ./...` / `fleet-runner build-test` at the repo root
-# DO NOT descend into a subdirectory that has its own go.mod — Go treats it
-# as a separate module. So a breaking change to a root package that the
-# nested module imports (e.g. graph/promx/safehttp, which telemetry.go uses)
-# would leave the root gate green while silently breaking telemetry, unseen
-# until some future consumer pulls go-common/telemetry.
-#
-# This script closes that gap: it finds every go.mod and builds/vets each
-# module on its own, so the nested module is a first-class part of the gate.
-# New nested modules are picked up automatically — no edit needed here.
+# Build + vet every Go module found in this repository. The current tree is a
+# single root module; discovery remains automatic if a future nested module is
+# added.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -39,8 +27,7 @@ done < <(find . -name go.mod -not -path '*/vendor/*' -print | sort)
 if [ "$fail" -ne 0 ]; then
   echo "" >&2
   echo "ERROR: one or more modules failed to build/vet (see above)." >&2
-  echo "       Nested modules (e.g. telemetry/) are NOT covered by a root" >&2
-  echo "       'go build ./...' — this script is what catches them." >&2
+  echo "       Run the failed module's build and vet commands locally." >&2
   exit 1
 fi
 echo "all modules build + vet clean"

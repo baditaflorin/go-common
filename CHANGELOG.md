@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.102.0] - 2026-09-27
+
+### Added
+
+- Add fleet-wide OpenTelemetry tracing to `server.New` and `safehttp.NewClient`,
+  with W3C trace-context propagation, HTTPS-first OTLP export, parent-based
+  sampling, graceful exporter shutdown, privacy-safe HTTP spans, and Prometheus
+  request-duration exemplars keyed by sampled trace ID.
+- Add `dbx` database primitives for instrumented `database/sql` and native
+  PostgreSQL `pgxpool` access, plus validated-identifier and parameterized CRUD
+  builders that require filters for updates and deletes. `database/sql` pools
+  have finite defaults for open/idle connections and connection lifetime.
+
 ## [0.101.3] - 2026-09-23
 
 ### Fixed
