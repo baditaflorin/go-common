@@ -272,12 +272,12 @@ func NewTransport(base http.RoundTripper) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	return roundTripper{base: base}
+	return &roundTripper{base: base}
 }
 
 type roundTripper struct{ base http.RoundTripper }
 
-func (rt roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	ctx, span := Tracer(instrumentationScope).Start(req.Context(), "HTTP "+req.Method,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attribute.String("http.request.method", req.Method)),
