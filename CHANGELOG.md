@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.102.1] - 2026-09-27
+
+### Fixed
+
+- Return the telemetry HTTP RoundTripper as a pointer so transport-chain
+  introspection can traverse it and find the underlying configured transport.
+
 ## [0.102.0] - 2026-09-27
 
 ### Added
