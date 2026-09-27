@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.102.3] - 2026-09-27
+
+### Added
+
+- Add privacy-safe pgx spans for batch, COPY, and prepare operations, plus a
+  validated `dbx.CopyFrom` helper for PostgreSQL binary COPY.
+
+### Fixed
+
+- Preserve any application-configured pgx tracer alongside Go Common telemetry.
+- Revalidate identifier parts at query-build time before composing SQL.
+
 ## [0.102.2] - 2026-09-27
 
 ### Fixed
