@@ -28,7 +28,17 @@ func Ident(name string) (Identifier, error) {
 	return Identifier{parts: parts}, nil
 }
 
-func (i Identifier) valid() bool { return len(i.parts) > 0 && len(i.parts) <= 2 }
+func (i Identifier) valid() bool {
+	if len(i.parts) == 0 || len(i.parts) > 2 {
+		return false
+	}
+	for _, part := range i.parts {
+		if !identifierPart.MatchString(part) {
+			return false
+		}
+	}
+	return true
+}
 
 func (i Identifier) sql() string {
 	quoted := make([]string, len(i.parts))

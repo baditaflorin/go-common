@@ -12,6 +12,7 @@ import (
 
 	"github.com/XSAM/otelsql"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/multitracer"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"go.opentelemetry.io/otel"
@@ -123,7 +124,7 @@ func OpenPGXPool(ctx context.Context, dataSourceName string, configure func(*pgx
 	if configure != nil {
 		configure(cfg)
 	}
-	cfg.ConnConfig.Tracer = NewPGXQueryTracer()
+	cfg.ConnConfig.Tracer = combinePGXTracers(cfg.ConnConfig.Tracer)
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("dbx: create PostgreSQL pool: %w", err)
@@ -137,7 +138,21 @@ func OpenPGXPool(ctx context.Context, dataSourceName string, configure func(*pgx
 	return pool, nil
 }
 
-type querySpanKey struct{}
+func combinePGXTracers(configured pgx.QueryTracer) pgx.QueryTracer {
+	if configured == nil {
+		return NewPGXQueryTracer()
+	}
+	return multitracer.New(configured, NewPGXQueryTracer())
+}
+
+type pgxSpanKey string
+
+const (
+	querySpanKey   pgxSpanKey = "query"
+	batchSpanKey   pgxSpanKey = "batch"
+	copySpanKey    pgxSpanKey = "copy"
+	prepareSpanKey pgxSpanKey = "prepare"
+)
 
 type pgxQueryTracer struct{ tracer trace.Tracer }
 
@@ -149,26 +164,80 @@ func NewPGXQueryTracer() pgx.QueryTracer {
 
 func (t *pgxQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
 	operation := safeOperation(data.SQL)
-	ctx, span := t.tracer.Start(ctx, "postgres "+operation,
+	ctx, span := t.start(ctx, operation)
+	return context.WithValue(ctx, querySpanKey, span)
+}
+
+func (t *pgxQueryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	t.finish(ctx, querySpanKey, data.Err)
+}
+
+// TraceBatchStart records a single span for a pgx batch. Query text and
+// parameter values are intentionally omitted.
+func (t *pgxQueryTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
+	ctx, span := t.start(ctx, "batch")
+	return context.WithValue(ctx, batchSpanKey, span)
+}
+
+func (t *pgxQueryTracer) TraceBatchQuery(ctx context.Context, _ *pgx.Conn, data pgx.TraceBatchQueryData) {
+	if data.Err == nil {
+		return
+	}
+	if span, ok := ctx.Value(batchSpanKey).(trace.Span); ok {
+		t.recordError(span, data.Err)
+	}
+}
+
+func (t *pgxQueryTracer) TraceBatchEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceBatchEndData) {
+	t.finish(ctx, batchSpanKey, data.Err)
+}
+
+// TraceCopyFrom records pgx binary COPY operations without table, column, or
+// row data. The span remains attached to the request trace context.
+func (t *pgxQueryTracer) TraceCopyFromStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceCopyFromStartData) context.Context {
+	ctx, span := t.start(ctx, "copy")
+	return context.WithValue(ctx, copySpanKey, span)
+}
+
+func (t *pgxQueryTracer) TraceCopyFromEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceCopyFromEndData) {
+	t.finish(ctx, copySpanKey, data.Err)
+}
+
+// TracePrepare records the prepare operation kind only; statement names and
+// SQL text are omitted from trace data.
+func (t *pgxQueryTracer) TracePrepareStart(ctx context.Context, _ *pgx.Conn, _ pgx.TracePrepareStartData) context.Context {
+	ctx, span := t.start(ctx, "prepare")
+	return context.WithValue(ctx, prepareSpanKey, span)
+}
+
+func (t *pgxQueryTracer) TracePrepareEnd(ctx context.Context, _ *pgx.Conn, data pgx.TracePrepareEndData) {
+	t.finish(ctx, prepareSpanKey, data.Err)
+}
+
+func (t *pgxQueryTracer) start(ctx context.Context, operation string) (context.Context, trace.Span) {
+	return t.tracer.Start(ctx, "postgres "+operation,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
 			attribute.String("db.system.name", "postgresql"),
 			attribute.String("db.operation.name", operation),
 		),
 	)
-	return context.WithValue(ctx, querySpanKey{}, span)
 }
 
-func (t *pgxQueryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
-	span, ok := ctx.Value(querySpanKey{}).(trace.Span)
+func (t *pgxQueryTracer) finish(ctx context.Context, key pgxSpanKey, err error) {
+	span, ok := ctx.Value(key).(trace.Span)
 	if !ok {
 		return
 	}
-	if data.Err != nil {
-		span.SetStatus(codes.Error, "database error")
-		span.SetAttributes(attribute.String("error.type", fmt.Sprintf("%T", data.Err)))
+	if err != nil {
+		t.recordError(span, err)
 	}
 	span.End()
+}
+
+func (t *pgxQueryTracer) recordError(span trace.Span, err error) {
+	span.SetStatus(codes.Error, "database error")
+	span.SetAttributes(attribute.String("error.type", fmt.Sprintf("%T", err)))
 }
 
 func safeOperation(query string) string {

@@ -8,7 +8,8 @@
 // values, connection strings, and raw driver error messages.
 //
 // BuildSelect, BuildInsert, BuildUpdate, and BuildDelete generate PostgreSQL
-// CRUD statements with bound values and validated/quoted identifiers. Resolve
+// CRUD statements with bound values and validated/quoted identifiers. CopyFrom
+// provides typed pgx binary COPY with the same identifier validation. Resolve
 // external names through a fixed application allowlist before calling Ident;
 // syntactic validation alone is not an authorization policy. For complex
 // queries, prefer generated sqlc methods and context-aware database/sql APIs.
