@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"github.com/baditaflorin/go-common/graph"
+	"github.com/baditaflorin/go-common/telemetry"
 	"net/http"
 	"net/url"
 	"os"
@@ -56,6 +57,11 @@ func NewClient(opts ...Option) *http.Client {
 	// call from any fleet service flows through this transport, so this
 	// single line gives us fleet-wide outbound observation.
 	var rt http.RoundTripper = graph.RoundTripper(&tls12FallbackTransport{primary: t, fallback: t12})
+	// Add a privacy-conscious client span around actual outbound transports.
+	// Keeping it inside extrasTransport preserves the transport's public
+	// wrapping contract while propagating context on real network/cache-client
+	// requests. Cache hits do not create a network span.
+	rt = telemetry.NewTransport(rt)
 
 	// If any of the auto-trace / auto-backoff / degraded-sink opt-ins
 	// were set, wrap the transport once more so those hooks run on

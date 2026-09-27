@@ -13,6 +13,7 @@ import (
 	"github.com/baditaflorin/go-common/reqstats"
 	"github.com/baditaflorin/go-common/runtimetune"
 	"github.com/baditaflorin/go-common/safehttp"
+	"github.com/baditaflorin/go-common/telemetry"
 	"net/http"
 	"os"
 	"time"
@@ -53,6 +54,7 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// All outbound (safehttp) + inbound (graph.Middleware below) events
 	// are tagged with cfg.AppName from here on.
 	graph.Init(cfg.AppName, cfg.Version)
+	tracing := telemetry.Init(cfg.AppName, cfg.Version)
 
 	// Identify this service to the fetch cache so it can forward
 	// X-Fleet-Caller to go-js-proxy / go-html-proxy for per-enricher render
@@ -100,6 +102,7 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		PromAuthCollectors: authColl,
 		maxBodyBytes:       DefaultMaxBodyBytes,
 		drainTimeout:       DefaultDrainTimeout,
+		tracing:            tracing,
 	}
 
 	// Apply options after promx collectors are wired so option handlers

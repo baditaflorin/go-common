@@ -13,6 +13,7 @@ import (
 	"github.com/baditaflorin/go-common/middleware"
 	"github.com/baditaflorin/go-common/promx"
 	"github.com/baditaflorin/go-common/safehttp"
+	"github.com/baditaflorin/go-common/telemetry"
 	"log"
 	"net/http"
 	"os"
@@ -43,6 +44,10 @@ type Server struct {
 	// WithKeystoreAuth automatically so apikey_auth_total and friends
 	// populate without per-service wiring.
 	PromAuthCollectors *promx.AuthCollectors
+	// tracing is the process-wide OpenTelemetry provider. Init is opt-in via
+	// OTEL_EXPORTER_OTLP_ENDPOINT; the HTTP middleware remains a no-op when
+	// tracing is disabled or no endpoint is configured.
+	tracing *telemetry.Config
 
 	// promMetricsHandler is the default Prometheus /metrics handler.
 	// Start() wraps the final handler so it serves this only when the
@@ -106,7 +111,7 @@ type Server struct {
 // for callers that want to embed the server in a non-stdlib
 // listener. Start() uses this internally.
 func (s *Server) Handler() http.Handler {
-	return s.wrapDefaults(middleware.Chain(s.Mux, s.Middlewares...))
+	return telemetry.HTTPMiddleware(s.wrapDefaults(middleware.Chain(s.Mux, s.Middlewares...)))
 }
 
 // buildHTTPServer constructs the *http.Server with the resolved
@@ -136,10 +141,11 @@ func (s *Server) buildHTTPServer(addr string, h http.Handler) *http.Server {
 //	    log.Fatal(err)
 //	}
 func (s *Server) Start() error {
+	defer s.shutdownTelemetry()
 	addr := ":" + s.Config.Port
 	fmt.Printf("Starting %s v%s on %s\n", s.Config.AppName, s.Config.Version, addr)
 
-	finalHandler := s.wrapDefaults(middleware.Chain(s.Mux, s.Middlewares...))
+	finalHandler := s.Handler()
 
 	httpSrv := s.buildHTTPServer(addr, finalHandler)
 
@@ -190,6 +196,17 @@ func (s *Server) Start() error {
 	}
 	log.Printf("server: stopped cleanly")
 	return nil
+}
+
+func (s *Server) shutdownTelemetry() {
+	if s.tracing == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), telemetry.ExporterTimeout)
+	defer cancel()
+	if err := s.tracing.Shutdown(ctx); err != nil {
+		log.Printf("server: telemetry shutdown error: %v", err)
+	}
 }
 
 // wrapDefaults serves fleet-canonical defaults for /metrics and

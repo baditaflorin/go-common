@@ -8,6 +8,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // TestHTTPMiddlewareRecordsRequest: a basic GET returning 200 increments
@@ -113,4 +114,52 @@ func TestHTTPRouteLimitDefaultAndOverride(t *testing.T) {
 			t.Errorf("WithRouteLimit(%d) limit = %d, want default 512", n, coll.routeCap.limit)
 		}
 	}
+}
+
+func TestHTTPMiddlewareAttachesTraceExemplar(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	coll := NewHTTPCollectors(reg)
+	traceID, err := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spanID, err := trace.SpanIDFromHex("0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spanContext := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     spanID,
+		TraceFlags: trace.FlagsSampled,
+	})
+	ctx := trace.ContextWithSpanContext(t.Context(), spanContext)
+	handler := coll.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/traceable", nil).WithContext(ctx)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "http_request_duration_seconds" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, bucket := range metric.GetHistogram().GetBucket() {
+				exemplar := bucket.GetExemplar()
+				if exemplar == nil {
+					continue
+				}
+				for _, label := range exemplar.GetLabel() {
+					if label.GetName() == "trace_id" && label.GetValue() == traceID.String() {
+						return
+					}
+				}
+			}
+		}
+	}
+	t.Fatal("HTTP duration metric did not contain the sampled trace ID exemplar")
 }

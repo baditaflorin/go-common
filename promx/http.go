@@ -7,6 +7,7 @@ import (
 
 	"github.com/baditaflorin/go-common/middleware"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // HTTPCollectors records inbound HTTP server traffic. Replaces the
@@ -165,7 +166,16 @@ func (c *HTTPCollectors) Middleware() middleware.Middleware {
 
 			status := strconv.Itoa(rw.status)
 			c.requestsTotal.WithLabelValues(c.service, r.Method, route, status).Inc()
-			c.duration.WithLabelValues(c.service, r.Method, route).Observe(dur.Seconds())
+			durationObserver := c.duration.WithLabelValues(c.service, r.Method, route)
+			if spanContext := trace.SpanContextFromContext(r.Context()); spanContext.IsSampled() {
+				if exemplarObserver, ok := durationObserver.(prometheus.ExemplarObserver); ok {
+					exemplarObserver.ObserveWithExemplar(dur.Seconds(), prometheus.Labels{"trace_id": spanContext.TraceID().String()})
+				} else {
+					durationObserver.Observe(dur.Seconds())
+				}
+			} else {
+				durationObserver.Observe(dur.Seconds())
+			}
 			if rw.bytes > 0 {
 				c.responseSize.WithLabelValues(c.service, r.Method, route).Observe(float64(rw.bytes))
 			}
