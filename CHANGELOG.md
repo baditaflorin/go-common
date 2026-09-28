@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.102.5] - 2026-09-28
+
+### Added
+
+- Enable direct OpenObserve OTLP trace export for services with a scoped
+  `FLEET_API_KEY`, loading an ingestion-only token from Go Fleet Secrets over
+  verified HTTPS. Export stays disabled when the key or allowlisted secret is
+  unavailable; W3C propagation continues without blocking service startup.
+
 ## [0.102.4] - 2026-09-28
 
 ### Fixed
