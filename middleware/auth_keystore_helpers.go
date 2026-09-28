@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/baditaflorin/go-common/apikey"
-	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/header"
+	"github.com/baditaflorin/go-common/internal/graphidentity"
 	"log"
 	"net/http"
 	"strings"
@@ -53,7 +53,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 	// not because each call site remembered to special-case it.
 	admit := func(w http.ResponseWriter, r *http.Request, next http.Handler, src AuthSource, principal, callerTier string, d time.Duration) {
 		withCaller := func() *http.Request {
-			return r.WithContext(graph.WithAuthenticatedCaller(r.Context(), principal))
+			return r.WithContext(graphidentity.WithVerifiedPrincipal(r.Context(), principal))
 		}
 		if opts.RequiredTier == "" || apikey.TierSatisfies(callerTier, opts.RequiredTier) {
 			observe(src, AuthResultAllow, d)

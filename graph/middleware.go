@@ -3,6 +3,8 @@ package graph
 import (
 	"net/http"
 	"time"
+
+	"github.com/baditaflorin/go-common/internal/graphidentity"
 )
 
 // Middleware records one inbound Event per authenticated request. server.New
@@ -31,7 +33,7 @@ func Middleware(next http.Handler) http.Handler {
 		// Request headers are claims, not proof of service identity. The
 		// keystore auth middleware marks a caller in context only after a
 		// trusted gateway or direct keystore verification accepts it.
-		caller := authenticatedCaller(r.Context())
+		caller := graphidentity.VerifiedPrincipal(r.Context())
 		if caller == "" {
 			caller = "unknown"
 		}

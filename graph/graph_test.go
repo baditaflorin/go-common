@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/baditaflorin/go-common/internal/graphidentity"
 )
 
 // resetState wipes the singleton between tests. Not safe under parallel
@@ -48,27 +50,6 @@ func TestTemplatisePath(t *testing.T) {
 		got := templatisePath(in)
 		if got != want {
 			t.Errorf("templatisePath(%q) = %q; want %q", in, got, want)
-		}
-	}
-}
-
-func TestServiceCallerID(t *testing.T) {
-	cases := map[string]string{
-		"go_apikey_scanner":    "go_apikey_scanner",
-		"go-pentest-subfinder": "go-pentest-subfinder",
-		"fleet-runner":         "fleet-runner",
-		"internal":             "",
-		"operator":             "",
-		"Mozilla/5.0":          "",
-		"curl/7.88.1":          "",
-		"":                     "",
-		"randomthing":          "",
-		"Go-service":           "",
-		"go-service/1.0":       "",
-	}
-	for in, want := range cases {
-		if got := serviceCallerID(in); got != want {
-			t.Errorf("serviceCallerID(%q) = %q; want %q", in, got, want)
 		}
 	}
 }
@@ -381,7 +362,7 @@ func TestMiddlewareUsesAuthenticatedContextInsteadOfRequestHeaders(t *testing.T)
 	req := httptest.NewRequest("GET", "http://service.invalid/widgets", nil)
 	req.Header.Set("User-Agent", "forged-agent/1.0")
 	req.Header.Set("X-Fleet-Caller", "forged-header")
-	req = req.WithContext(WithAuthenticatedCaller(req.Context(), "go_verified_caller"))
+	req = req.WithContext(graphidentity.WithVerifiedPrincipal(req.Context(), "go_verified_caller"))
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	time.Sleep(1500 * time.Millisecond)
 

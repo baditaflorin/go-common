@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/baditaflorin/go-common/apikey"
-	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/header"
+	"github.com/baditaflorin/go-common/internal/graphidentity"
 )
 
 // stubVerifier lets tests control the keystore response without an
@@ -132,7 +132,7 @@ func TestKeystoreMarksVerifiedServicePrincipalForGraph(t *testing.T) {
 	r.Header.Set("X-Fleet-Caller", "forged-caller")
 	var caller string
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		caller = graph.AuthenticatedCallerFromContext(r.Context())
+		caller = graphidentity.VerifiedPrincipal(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 	rr := httptest.NewRecorder()
@@ -159,7 +159,7 @@ func TestKeystoreMarksPrincipalFromAllowlistedGateway(t *testing.T) {
 	r.Header.Set(header.AuthUser, "go_gateway-caller")
 	var caller string
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		caller = graph.AuthenticatedCallerFromContext(r.Context())
+		caller = graphidentity.VerifiedPrincipal(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 	rr := httptest.NewRecorder()
@@ -182,7 +182,7 @@ func TestKeystoreDoesNotMarkLocalTokenAsServiceCaller(t *testing.T) {
 	r.Header.Set(header.APIKey, "default_token")
 	var caller string
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		caller = graph.AuthenticatedCallerFromContext(r.Context())
+		caller = graphidentity.VerifiedPrincipal(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 	rr := httptest.NewRecorder()
