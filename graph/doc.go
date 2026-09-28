@@ -11,10 +11,10 @@
 //     principal. Unauthenticated or generic principals are recorded as
 //     "unknown".
 //
-// Inbound identity is never inferred from User-Agent or caller-supplied
-// headers. The keystore middleware marks only a trusted gateway identity or
-// a principal returned by successful keystore verification. Outbound events
-// derive caller identity from the running service itself.
+// Inbound identity is never inferred from User-Agent. The keystore middleware
+// marks a verified principal; custom HTTP servers may opt in to X-Auth-User
+// only from exact gateway IPs configured with GRAPH_TRUSTED_CALLER_IPS.
+// Outbound events derive caller identity from the running service itself.
 //
 // When both ends are instrumented, one end-to-end HTTP request can emit both
 // an outbound and inbound Event. go-fleet-graph aggregates those emitted
@@ -41,6 +41,8 @@
 //	GRAPH_TARGET_ALIASES - optional comma-separated
 //	                       go-fleet-*=fleet-* mappings for known bare
 //	                       Docker hostnames; it changes telemetry only.
+//	GRAPH_TRUSTED_CALLER_IPS — optional comma-separated literal IP allowlist
+//	                            for custom gateways stamping X-Auth-User.
 //	GRAPH_BUFFER_SIZE    — ring capacity (default 10000 events).
 //	GRAPH_FLUSH_INTERVAL — flush cadence in seconds (default 10).
 //	GRAPH_FLUSH_BATCH    — max events per flush (default 500).

@@ -9,6 +9,8 @@
   in request context; other inbound requests are recorded as unknown.
 - Run graph observation inside authentication middleware so inbound topology
   uses only identities established by the trusted gateway or keystore.
+- For custom HTTP servers, accept `X-Auth-User` as an inbound graph caller only
+  when the TCP peer matches a literal IP in `GRAPH_TRUSTED_CALLER_IPS`.
 
 ## [0.102.3] - 2026-09-27
 

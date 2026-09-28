@@ -21,10 +21,13 @@ type config struct {
 	writerAPIKey  string
 	readerAPIKey  string
 	targetAliases map[string]string
-	sampleRate    float64
-	bufferSize    int
-	flushInterval time.Duration
-	flushBatch    int
+	// trustedCallerIPs is an exact-host allowlist for gateways that stamp
+	// X-Auth-User after keystore verification in custom HTTP servers.
+	trustedCallerIPs []netip.Addr
+	sampleRate       float64
+	bufferSize       int
+	flushInterval    time.Duration
+	flushBatch       int
 }
 
 // loadConfig reads env vars once. Called from initOnce.
@@ -40,12 +43,13 @@ func loadConfig() config {
 		writerAPIKey: strings.TrimSpace(os.Getenv("GRAPH_API_KEY")),
 		// Lookup is a separate read capability. It must not reuse the
 		// writer credential while graph route auth is being split.
-		readerAPIKey:  strings.TrimSpace(os.Getenv("GRAPH_READER_API_KEY")),
-		targetAliases: parseTargetAliases(os.Getenv("GRAPH_TARGET_ALIASES")),
-		sampleRate:    parseFloatEnv("GRAPH_SAMPLE_RATE", 1.0),
-		bufferSize:    parseIntEnv("GRAPH_BUFFER_SIZE", 10000),
-		flushInterval: time.Duration(parseIntEnv("GRAPH_FLUSH_INTERVAL", 10)) * time.Second,
-		flushBatch:    parseIntEnv("GRAPH_FLUSH_BATCH", 500),
+		readerAPIKey:     strings.TrimSpace(os.Getenv("GRAPH_READER_API_KEY")),
+		targetAliases:    parseTargetAliases(os.Getenv("GRAPH_TARGET_ALIASES")),
+		trustedCallerIPs: parseTrustedCallerIPs(os.Getenv("GRAPH_TRUSTED_CALLER_IPS")),
+		sampleRate:       parseFloatEnv("GRAPH_SAMPLE_RATE", 1.0),
+		bufferSize:       parseIntEnv("GRAPH_BUFFER_SIZE", 10000),
+		flushInterval:    time.Duration(parseIntEnv("GRAPH_FLUSH_INTERVAL", 10)) * time.Second,
+		flushBatch:       parseIntEnv("GRAPH_FLUSH_BATCH", 500),
 	}
 	// Event emission is deliberately all-or-nothing: it is opt-in and
 	// requires a valid collector URL plus a dedicated writer key. This
@@ -67,6 +71,24 @@ func loadConfig() config {
 		c.flushBatch = 1
 	}
 	return c
+}
+
+// parseTrustedCallerIPs accepts only literal IP addresses. Exact host entries
+// prevent a broad CIDR from turning a spoofable header into service identity.
+func parseTrustedCallerIPs(raw string) []netip.Addr {
+	var ips []netip.Addr
+	for _, value := range strings.Split(raw, ",") {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		ip, err := netip.ParseAddr(value)
+		if err != nil {
+			continue
+		}
+		ips = append(ips, ip.Unmap())
+	}
+	return ips
 }
 
 func (c config) eventEmissionEnabled() bool {

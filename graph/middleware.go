@@ -1,7 +1,9 @@
 package graph
 
 import (
+	"net"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/baditaflorin/go-common/internal/graphidentity"
@@ -35,6 +37,12 @@ func Middleware(next http.Handler) http.Handler {
 		// trusted gateway or direct keystore verification accepts it.
 		caller := graphidentity.VerifiedPrincipal(r.Context())
 		if caller == "" {
+			// Custom servers may not use go-common/server's auth middleware.
+			// Trust the gateway identity header only from an explicitly listed
+			// TCP peer.
+			caller = trustedGatewayCaller(r, ensureInit().cfg.trustedCallerIPs)
+		}
+		if caller == "" {
 			caller = "unknown"
 		}
 
@@ -48,6 +56,27 @@ func Middleware(next http.Handler) http.Handler {
 			LatencyMs: latency,
 		})
 	})
+}
+
+func trustedGatewayCaller(r *http.Request, trustedIPs []netip.Addr) string {
+	if len(trustedIPs) == 0 {
+		return ""
+	}
+	peer, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		peer = r.RemoteAddr
+	}
+	ip, err := netip.ParseAddr(peer)
+	if err != nil {
+		return ""
+	}
+	ip = ip.Unmap()
+	for _, trusted := range trustedIPs {
+		if ip == trusted {
+			return graphidentity.NormalizeServiceCallerID(r.Header.Get("X-Auth-User"))
+		}
+	}
+	return ""
 }
 
 // isCollectorIngest identifies only the graph sender's event-batch request.

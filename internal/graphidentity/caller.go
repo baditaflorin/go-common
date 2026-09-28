@@ -24,6 +24,12 @@ func VerifiedPrincipal(ctx context.Context) string {
 	return principal
 }
 
+// NormalizeServiceCallerID validates the shape of a service identity before
+// graph middleware accepts it as a caller label.
+func NormalizeServiceCallerID(principal string) string {
+	return serviceCallerID(principal)
+}
+
 func serviceCallerID(principal string) string {
 	id := strings.TrimSpace(principal)
 	if id == "" || id != strings.ToLower(id) || strings.ContainsAny(id, "/:@ \\?&") {
