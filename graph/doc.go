@@ -6,8 +6,15 @@
 //
 //   - safehttp.NewClient wraps the outbound *http.Transport with
 //     graph.RoundTripper, recording one outbound Event per call.
-//   - server.New prepends graph.Middleware, recording one inbound
-//     Event per served request.
+//   - server.New runs graph.Middleware inside authentication middleware,
+//     recording one inbound Event per request with a verified service
+//     principal. Unauthenticated or generic principals are recorded as
+//     "unknown".
+//
+// Inbound identity is never inferred from User-Agent or caller-supplied
+// headers. The keystore middleware marks only a trusted gateway identity or
+// a principal returned by successful keystore verification. Outbound events
+// derive caller identity from the running service itself.
 //
 // When both ends are instrumented, one end-to-end HTTP request can emit both
 // an outbound and inbound Event. go-fleet-graph aggregates those emitted

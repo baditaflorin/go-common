@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.102.4] - 2026-09-28
+
+### Fixed
+
+- Stop deriving inbound runtime-graph callers from spoofable User-Agent and
+  X-Fleet-Caller headers. Keystore-authenticated service principals are carried
+  in request context; other inbound requests are recorded as unknown.
+- Run graph observation inside authentication middleware so inbound topology
+  uses only identities established by the trusted gateway or keystore.
+
 ## [0.102.3] - 2026-09-27
 
 ### Added

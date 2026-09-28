@@ -2,13 +2,13 @@ package graph
 
 import (
 	"net/http"
-	"strings"
 	"time"
 )
 
-// Middleware records one inbound Event per served request. Mounted as
-// the first middleware in server.New so it sees the real status code
-// (subsequent middlewares like Logging and Metrics also run).
+// Middleware records one inbound Event per authenticated request. server.New
+// mounts it inside authentication middleware so it can read a verified
+// principal from context. Requests that have no verified service identity are
+// recorded with caller "unknown".
 //
 // Health/version/metrics paths are excluded to avoid drowning the
 // collector in load-balancer probe traffic.
@@ -28,16 +28,12 @@ func Middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(sw, r)
 		latency := time.Since(start).Milliseconds()
 
-		caller := callerFromUA(r.Header.Get("User-Agent"))
+		// Request headers are claims, not proof of service identity. The
+		// keystore auth middleware marks a caller in context only after a
+		// trusted gateway or direct keystore verification accepts it.
+		caller := authenticatedCaller(r.Context())
 		if caller == "" {
-			// Gateway may forward an explicit caller header for
-			// internal-mesh hops where the UA was rewritten by a proxy.
-			if h := r.Header.Get("X-Fleet-Caller"); h != "" {
-				caller = strings.TrimSpace(h)
-			}
-		}
-		if caller == "" {
-			caller = "external:client"
+			caller = "unknown"
 		}
 
 		Record(Event{

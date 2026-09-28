@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/baditaflorin/go-common/apikey"
+	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/header"
 )
 
@@ -110,6 +111,87 @@ func TestKeystore_GatewayHeaderTrustRequiresConfiguredTCPPeer(t *testing.T) {
 	h.ServeHTTP(tw, trusted)
 	if tw.Code != http.StatusOK || verified.calls != 1 {
 		t.Fatalf("trusted gateway path code/calls = %d/%d", tw.Code, verified.calls)
+	}
+}
+
+func TestKeystoreMarksVerifiedServicePrincipalForGraph(t *testing.T) {
+	verified := &stubVerifier{verify: func(_ context.Context, key string) (*apikey.VerifyResult, error) {
+		if key != "ak_verified" {
+			return nil, apikey.ErrInvalidKey
+		}
+		return &apikey.VerifyResult{User: "go_verified-caller", Scope: "target-service", Tier: "service"}, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{
+		Verifier:            verified,
+		TrustedGatewayCIDRs: []string{"10.10.10.10/32"},
+	})
+	r := newReq("/work")
+	r.RemoteAddr = "10.10.10.77:44000"
+	r.Header.Set(header.APIKey, "ak_verified")
+	r.Header.Set(header.AuthUser, "forged-header-user")
+	r.Header.Set("X-Fleet-Caller", "forged-caller")
+	var caller string
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		caller = graph.AuthenticatedCallerFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, r)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d; want 200", rr.Code)
+	}
+	if caller != "go_verified-caller" {
+		t.Fatalf("graph caller=%q; want verified principal", caller)
+	}
+}
+
+func TestKeystoreMarksPrincipalFromAllowlistedGateway(t *testing.T) {
+	verifier := &stubVerifier{verify: func(_ context.Context, _ string) (*apikey.VerifyResult, error) {
+		t.Fatal("allowlisted gateway identity should use the trusted fast path")
+		return nil, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{
+		Verifier:            verifier,
+		TrustedGatewayCIDRs: []string{"10.10.10.10/32"},
+	})
+	r := newReq("/work")
+	r.RemoteAddr = "10.10.10.10:44000"
+	r.Header.Set(header.AuthUser, "go_gateway-caller")
+	var caller string
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		caller = graph.AuthenticatedCallerFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, r)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d; want 200", rr.Code)
+	}
+	if caller != "go_gateway-caller" {
+		t.Fatalf("graph caller=%q; want allowlisted gateway principal", caller)
+	}
+}
+
+func TestKeystoreDoesNotMarkLocalTokenAsServiceCaller(t *testing.T) {
+	verifier := &stubVerifier{verify: func(_ context.Context, _ string) (*apikey.VerifyResult, error) {
+		t.Fatal("local token should not call the verifier")
+		return nil, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: verifier, LocalTokens: []string{"default_token"}})
+	r := newReq("/work")
+	r.Header.Set(header.APIKey, "default_token")
+	var caller string
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		caller = graph.AuthenticatedCallerFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, r)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d; want 200", rr.Code)
+	}
+	if caller != "" {
+		t.Fatalf("graph caller=%q; local token must not claim a service identity", caller)
 	}
 }
 

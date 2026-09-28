@@ -186,18 +186,16 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// Add Default Middlewares (executed in slice order — [0] is outermost)
 	// 0. reqstats (outermost: measures total wall-time incl. all middleware,
 	//    emits Server-Timing + X-Request-Stats on every response)
-	// 1. Graph observer (sees final status + latency, records inbound Event)
-	// 2. RequestID
-	// 3. Logging (injects per-request slog logger into context)
-	// 4. BodyLimit (rejects oversized bodies before auth / handler)
-	// 5. Metrics (Record Status) — JSON snapshot surface
-	// 6. PromHTTP (Record Status) — Prometheus surface
+	// 1. RequestID
+	// 2. Logging (injects per-request slog logger into context)
+	// 3. BodyLimit (rejects oversized bodies before auth / handler)
+	// 4. Metrics (Record Status) — JSON snapshot surface
+	// 5. PromHTTP (Record Status) — Prometheus surface
 	defaultMWs := []middleware.Middleware{}
 	if !srv.noRequestStats {
 		defaultMWs = append(defaultMWs, reqstats.Middleware(srv.Config.AppName, srv.Config.Version))
 	}
 	defaultMWs = append(defaultMWs,
-		graph.Middleware,
 		middleware.RequestID,
 		middleware.Logging,
 	)
@@ -209,6 +207,10 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		httpColl.Middleware(),
 	)
 	srv.Middlewares = append(defaultMWs, srv.Middlewares...)
+	// The graph observer runs inside authentication middleware. That lets it
+	// consume the verified service principal placed in request context; caller
+	// strings from User-Agent and X-Fleet-Caller are untrusted claims.
+	srv.Middlewares = append(srv.Middlewares, graph.Middleware)
 
 	return srv
 }
