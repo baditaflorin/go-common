@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -123,4 +124,85 @@ func TestOTLPEndpointRequiresTLSByDefault(t *testing.T) {
 	if _, err := normalizeEndpoint("https://bad host/path?token=must-not-leak"); err == nil || strings.Contains(err.Error(), "must-not-leak") {
 		t.Fatalf("invalid endpoint error leaked input: %v", err)
 	}
+}
+
+func TestAutoOpenObserveConfigurationUsesScopedFleetSecret(t *testing.T) {
+	cfg := &Config{SampleRate: 0.1}
+	values := map[string]string{
+		"FLEET_API_KEY": "service-key",
+	}
+	called := false
+	err := configureOpenObserveFromFleetSecrets(cfg, func(key string) string { return values[key] }, func(_ context.Context, baseURL, apiKey string) (string, error) {
+		called = true
+		if baseURL != defaultFleetSecretsURL || apiKey != "service-key" {
+			t.Fatalf("unexpected secret lookup configuration: baseURL=%q apiKey=%q", baseURL, apiKey)
+		}
+		return "o2oi_canary-only", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("expected the service-scoped secret lookup")
+	}
+	if cfg.OTLPEndpoint != defaultOpenObserveEndpoint {
+		t.Fatalf("endpoint=%q, want %q", cfg.OTLPEndpoint, defaultOpenObserveEndpoint)
+	}
+	gotAuth := cfg.otlpHeaders["Authorization"]
+	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("default:o2oi_canary-only"))
+	if gotAuth != wantAuth {
+		t.Fatalf("Authorization header not encoded as OpenObserve org-token Basic auth")
+	}
+	if cfg.otlpHeaders["stream-name"] != "default" {
+		t.Fatalf("stream-name=%q, want default", cfg.otlpHeaders["stream-name"])
+	}
+}
+
+func TestAutoOpenObserveConfigurationFailsClosed(t *testing.T) {
+	t.Run("no fleet key", func(t *testing.T) {
+		cfg := &Config{}
+		called := false
+		err := configureOpenObserveFromFleetSecrets(cfg, func(string) string { return "" }, func(context.Context, string, string) (string, error) {
+			called = true
+			return "unused", nil
+		})
+		if err != nil || called || cfg.OTLPEndpoint != "" {
+			t.Fatalf("unexpected auto configuration: called=%v endpoint=%q err=%v", called, cfg.OTLPEndpoint, err)
+		}
+	})
+	t.Run("manual endpoint wins", func(t *testing.T) {
+		cfg := &Config{OTLPEndpoint: "https://collector.example/v1/traces"}
+		called := false
+		err := configureOpenObserveFromFleetSecrets(cfg, func(string) string { return "service-key" }, func(context.Context, string, string) (string, error) {
+			called = true
+			return "unused", nil
+		})
+		if err != nil || called || cfg.OTLPEndpoint != "https://collector.example/v1/traces" {
+			t.Fatalf("manual endpoint was not preserved: called=%v endpoint=%q err=%v", called, cfg.OTLPEndpoint, err)
+		}
+	})
+	t.Run("insecure vault URL rejected", func(t *testing.T) {
+		cfg := &Config{}
+		values := map[string]string{"FLEET_API_KEY": "service-key", "FLEET_SECRETS_URL": "http://fleet-secrets.0exec.com"}
+		called := false
+		err := configureOpenObserveFromFleetSecrets(cfg, func(key string) string { return values[key] }, func(context.Context, string, string) (string, error) {
+			called = true
+			return "unused", nil
+		})
+		if err == nil || called || cfg.OTLPEndpoint != "" {
+			t.Fatalf("expected HTTPS validation to fail closed: called=%v endpoint=%q err=%v", called, cfg.OTLPEndpoint, err)
+		}
+	})
+	t.Run("unapproved vault host rejected", func(t *testing.T) {
+		cfg := &Config{}
+		values := map[string]string{"FLEET_API_KEY": "service-key", "FLEET_SECRETS_URL": "https://attacker.example"}
+		called := false
+		err := configureOpenObserveFromFleetSecrets(cfg, func(key string) string { return values[key] }, func(context.Context, string, string) (string, error) {
+			called = true
+			return "unused", nil
+		})
+		if err == nil || called || cfg.OTLPEndpoint != "" {
+			t.Fatalf("expected vault host validation to fail closed: called=%v endpoint=%q err=%v", called, cfg.OTLPEndpoint, err)
+		}
+	})
 }
