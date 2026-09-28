@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/baditaflorin/go-common/apikey"
 	"github.com/baditaflorin/go-common/header"
+	"github.com/baditaflorin/go-common/internal/graphidentity"
 	"log"
 	"net/http"
 	"strings"
@@ -50,17 +51,20 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 	// TrustPrivateMesh) call this with callerTier == "" — which fails
 	// TierSatisfies against any non-empty RequiredTier by construction,
 	// not because each call site remembered to special-case it.
-	admit := func(w http.ResponseWriter, r *http.Request, next http.Handler, src AuthSource, callerTier string, d time.Duration) {
+	admit := func(w http.ResponseWriter, r *http.Request, next http.Handler, src AuthSource, principal, callerTier string, d time.Duration) {
+		withCaller := func() *http.Request {
+			return r.WithContext(graphidentity.WithVerifiedPrincipal(r.Context(), principal))
+		}
 		if opts.RequiredTier == "" || apikey.TierSatisfies(callerTier, opts.RequiredTier) {
 			observe(src, AuthResultAllow, d)
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, withCaller())
 			return
 		}
 		if !opts.TierEnforce {
 			// Shadow mode: observe the would-be denial, but don't break
 			// traffic yet. See KeystoreOpts.TierEnforce.
 			observe(src, AuthResultTierShadowDenied, d)
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, withCaller())
 			return
 		}
 		observe(src, AuthResultTierDenied, d)
@@ -137,7 +141,15 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				// proxy_set_header on the auth_request response) — read
 				// whatever's there; absent means "" (fails closed against
 				// any RequiredTier until that nginx wiring exists).
-				admit(w, r, next, AuthSourceGateway, r.Header.Get(header.AuthTier), 0)
+				// The legacy empty-CIDR mode preserves gateway auth behavior,
+				// but does not prove that this request came from the gateway.
+				// Only publish a graph identity when the TCP peer was checked
+				// against an explicit trusted-gateway allowlist.
+				principal := ""
+				if len(opts.TrustedGatewayCIDRs) > 0 && trustedGatewayRemoteAddr(r.RemoteAddr, opts.TrustedGatewayCIDRs) {
+					principal = r.Header.Get(opts.TrustGatewayHeader)
+				}
+				admit(w, r, next, AuthSourceGateway, principal, r.Header.Get(header.AuthTier), 0)
 				return
 			}
 
@@ -154,7 +166,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				// If a tiered private-mesh caller is ever needed, that's a
 				// deliberate future option (e.g. a MeshTier field), not an
 				// accidental bypass of this one.
-				admit(w, r, next, AuthSourcePrivateMesh, "", 0)
+				admit(w, r, next, AuthSourcePrivateMesh, "", "", 0)
 				return
 			}
 
@@ -175,7 +187,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				// touches the keystore, so it never carries a real tier.
 				// It cannot satisfy a non-empty RequiredTier; there is no
 				// "the demo key is secretly vetted-pentest" escape hatch.
-				admit(w, r, next, AuthSourceLocal, "", 0)
+				admit(w, r, next, AuthSourceLocal, "", "", 0)
 				return
 			}
 
@@ -194,7 +206,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				r.Header.Set(header.AuthUser, res.User)
 				r.Header.Set(header.AuthScope, res.Scope)
 				r.Header.Set(header.AuthTier, res.Tier)
-				admit(w, r, next, AuthSourceKeystore, res.Tier, dur)
+				admit(w, r, next, AuthSourceKeystore, res.User, res.Tier, dur)
 				return
 			}
 			if errors.Is(err, apikey.ErrInvalidKey) {

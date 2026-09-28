@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/baditaflorin/go-common/internal/graphidentity"
 )
 
 // resetState wipes the singleton between tests. Not safe under parallel
@@ -48,23 +50,6 @@ func TestTemplatisePath(t *testing.T) {
 		got := templatisePath(in)
 		if got != want {
 			t.Errorf("templatisePath(%q) = %q; want %q", in, got, want)
-		}
-	}
-}
-
-func TestCallerFromUA(t *testing.T) {
-	cases := map[string]string{
-		"go_apikey_scanner/1.2.3 (+https://github.com/baditaflorin/go_apikey_scanner)": "go_apikey_scanner",
-		"go-pentest-subfinder/0.1.0 (+...)":                                            "go-pentest-subfinder",
-		"Mozilla/5.0 (Macintosh)":                                                      "",
-		"curl/7.88.1":                                                                  "",
-		"":                                                                             "",
-		"randomthing":                                                                  "",
-		"Go-http-client/1.1":                                                           "",
-	}
-	for in, want := range cases {
-		if got := callerFromUA(in); got != want {
-			t.Errorf("callerFromUA(%q) = %q; want %q", in, got, want)
 		}
 	}
 }
@@ -321,6 +306,7 @@ func TestMiddlewareRecordsInbound(t *testing.T) {
 	defer srv.Close()
 	req, _ := http.NewRequest("POST", srv.URL+"/widgets/42", nil)
 	req.Header.Set("User-Agent", "go_caller_svc/0.1.0 (+...)")
+	req.Header.Set("X-Fleet-Caller", "forged-caller")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("post: %v", err)
@@ -336,8 +322,8 @@ func TestMiddlewareRecordsInbound(t *testing.T) {
 	if e.Direction != "in" {
 		t.Errorf("Direction=%q; want in", e.Direction)
 	}
-	if e.Caller != "go_caller_svc" {
-		t.Errorf("Caller=%q; want go_caller_svc", e.Caller)
+	if e.Caller != "unknown" {
+		t.Errorf("Caller=%q; want unknown for unverified request headers", e.Caller)
 	}
 	if e.Target != "target_svc" {
 		t.Errorf("Target=%q; want target_svc", e.Target)
@@ -347,6 +333,46 @@ func TestMiddlewareRecordsInbound(t *testing.T) {
 	}
 	if e.Status != http.StatusCreated {
 		t.Errorf("Status=%d; want %d", e.Status, http.StatusCreated)
+	}
+}
+
+func TestMiddlewareUsesAuthenticatedContextInsteadOfRequestHeaders(t *testing.T) {
+	resetState(t)
+	var seen []Event
+	var mu sync.Mutex
+	col := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b Batch
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		mu.Lock()
+		seen = append(seen, b.Events...)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer col.Close()
+	t.Setenv("GRAPH_ENABLED", "true")
+	t.Setenv("GRAPH_COLLECTOR_URL", col.URL)
+	t.Setenv("GRAPH_FLUSH_INTERVAL", "1")
+	t.Setenv("GRAPH_API_KEY", "test-key")
+	Init("target_svc", "0.1.0")
+	defer Shutdown()
+
+	h := Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	}))
+	req := httptest.NewRequest("GET", "http://service.invalid/widgets", nil)
+	req.Header.Set("User-Agent", "forged-agent/1.0")
+	req.Header.Set("X-Fleet-Caller", "forged-header")
+	req = req.WithContext(graphidentity.WithVerifiedPrincipal(req.Context(), "go_verified_caller"))
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	time.Sleep(1500 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) == 0 {
+		t.Fatal("no inbound event seen")
+	}
+	if got := seen[0].Caller; got != "go_verified_caller" {
+		t.Errorf("Caller=%q; want authenticated principal", got)
 	}
 }
 
