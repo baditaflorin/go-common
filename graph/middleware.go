@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/baditaflorin/go-common/internal/graphidentity"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Middleware records one inbound Event per authenticated request. server.New
@@ -45,6 +47,14 @@ func Middleware(next http.Handler) http.Handler {
 		if caller == "" {
 			caller = "unknown"
 		}
+		// Put the same verified identity on the active server span so traces
+		// can be filtered by caller in OpenObserve. The value is either a
+		// validated fleet service ID or the fixed "unknown" label; never copy
+		// arbitrary user names or request headers into trace attributes.
+		trace.SpanFromContext(r.Context()).SetAttributes(
+			attribute.String("fleet.caller.id", caller),
+			attribute.Bool("fleet.caller.verified", caller != "unknown"),
+		)
 
 		Record(Event{
 			Direction: "in",
