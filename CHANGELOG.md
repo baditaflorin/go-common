@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.102.7] - 2026-09-29
+
+### Added
+
+- Add privacy-safe verified caller attributes to active inbound OpenTelemetry
+  spans so traces can be grouped by fleet service identity.
+
 ## [0.102.6] - 2026-09-29
 
 ### Fixed

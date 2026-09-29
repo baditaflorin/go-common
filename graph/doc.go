@@ -14,6 +14,10 @@
 // Inbound identity is never inferred from User-Agent. The keystore middleware
 // marks a verified principal; custom HTTP servers may opt in to X-Auth-User
 // only from exact gateway IPs configured with GRAPH_TRUSTED_CALLER_IPS.
+// When an inbound server span is active, Middleware copies that same resolved
+// identity to fleet.caller.id and records fleet.caller.verified. Unverified
+// callers use the fixed value "unknown"; arbitrary request headers and user
+// names are never copied into span attributes.
 // Outbound events derive caller identity from the running service itself.
 //
 // When both ends are instrumented, one end-to-end HTTP request can emit both
