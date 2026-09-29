@@ -25,14 +25,10 @@ func Middleware(next http.Handler) http.Handler {
 		// back to /events. The outbound transport already bypasses collector
 		// requests; without this matching inbound guard the collector would
 		// generate a fresh inbound event for every successful flush.
-		if isProbe(r.URL.Path) || isCollectorIngest(r) || !Enabled() {
+		if isProbe(r.URL.Path) || isCollectorIngest(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		start := time.Now()
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(sw, r)
-		latency := time.Since(start).Milliseconds()
 
 		// Request headers are claims, not proof of service identity. The
 		// keystore auth middleware marks a caller in context only after a
@@ -55,6 +51,15 @@ func Middleware(next http.Handler) http.Handler {
 			attribute.String("fleet.caller.id", caller),
 			attribute.Bool("fleet.caller.verified", caller != "unknown"),
 		)
+		if !Enabled() {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(sw, r)
+		latency := time.Since(start).Milliseconds()
 
 		Record(Event{
 			Direction: "in",
