@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.102.6] - 2026-09-29
+
+### Fixed
+
+- Prefer FLEET_SECRETS_API_KEY for OpenObserve token lookup so services can
+  scope vault access without widening their application API key. Retain
+  FLEET_API_KEY as a compatibility fallback.
+
+
 ## [0.102.5] - 2026-09-28
 
 ### Added

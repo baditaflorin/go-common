@@ -75,8 +75,9 @@ func WithSampleRate(rate float64) Option { return func(c *Config) { c.SampleRate
 func WithDisabled() Option { return func(c *Config) { c.Disabled = true } }
 
 // Init installs W3C Trace Context propagation and initializes the global SDK
-// if an endpoint is configured. Services with a FLEET_API_KEY automatically
-// read the ingestion-only OpenObserve token from Go Fleet Secrets and export
+// if an endpoint is configured. Services with a dedicated FLEET_SECRETS_API_KEY
+// (or legacy FLEET_API_KEY) read the ingestion-only OpenObserve token from Go
+// Fleet Secrets and export
 // directly over HTTPS. It is safe to call repeatedly from tests and from server
 // construction; one process shares one provider/exporter.
 func Init(serviceName, serviceVersion string, opts ...Option) *Config {
@@ -217,15 +218,19 @@ func newProvider(cfg *Config) (*sdktrace.TracerProvider, error) {
 }
 
 // configureOpenObserveFromFleetSecrets enables direct OTLP export when a
-// service has its own FLEET_API_KEY. The token is ingestion-only and is
-// fetched over verified HTTPS from the per-service allowlisted vault identity.
+// service has a dedicated FLEET_SECRETS_API_KEY (preferred) or a legacy
+// FLEET_API_KEY. The token is ingestion-only and is fetched over verified HTTPS
+// from the per-service allowlisted vault identity.
 // Explicit endpoints always take precedence; explicit OTLP headers are applied
 // by newProvider and override the generated Authorization header.
 func configureOpenObserveFromFleetSecrets(cfg *Config, getenv func(string) string, readToken func(context.Context, string, string) (string, error)) error {
 	if cfg == nil || cfg.Disabled || cfg.OTLPEndpoint != "" || getenv("OTEL_EXPORTER_OTLP_HEADERS") != "" {
 		return nil
 	}
-	apiKey := getenv("FLEET_API_KEY")
+	apiKey := getenv("FLEET_SECRETS_API_KEY")
+	if apiKey == "" {
+		apiKey = getenv("FLEET_API_KEY")
+	}
 	if apiKey == "" {
 		return nil
 	}
@@ -257,7 +262,7 @@ func readOpenObserveToken(ctx context.Context, baseURL, apiKey string) (string, 
 	client := &http.Client{
 		Timeout: 2 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
-			// Never forward FLEET_API_KEY across a redirect.
+			// Never forward the vault API key across a redirect.
 			return http.ErrUseLastResponse
 		},
 	}

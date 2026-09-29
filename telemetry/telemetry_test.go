@@ -129,12 +129,13 @@ func TestOTLPEndpointRequiresTLSByDefault(t *testing.T) {
 func TestAutoOpenObserveConfigurationUsesScopedFleetSecret(t *testing.T) {
 	cfg := &Config{SampleRate: 0.1}
 	values := map[string]string{
-		"FLEET_API_KEY": "service-key",
+		"FLEET_API_KEY":         "service-key",
+		"FLEET_SECRETS_API_KEY": "vault-scoped-key",
 	}
 	called := false
 	err := configureOpenObserveFromFleetSecrets(cfg, func(key string) string { return values[key] }, func(_ context.Context, baseURL, apiKey string) (string, error) {
 		called = true
-		if baseURL != defaultFleetSecretsURL || apiKey != "service-key" {
+		if baseURL != defaultFleetSecretsURL || apiKey != "vault-scoped-key" {
 			t.Fatalf("unexpected secret lookup configuration: baseURL=%q apiKey=%q", baseURL, apiKey)
 		}
 		return "o2oi_canary-only", nil
@@ -155,6 +156,22 @@ func TestAutoOpenObserveConfigurationUsesScopedFleetSecret(t *testing.T) {
 	}
 	if cfg.otlpHeaders["stream-name"] != "default" {
 		t.Fatalf("stream-name=%q, want default", cfg.otlpHeaders["stream-name"])
+	}
+}
+
+func TestAutoOpenObserveConfigurationFallsBackToFleetAPIKey(t *testing.T) {
+	cfg := &Config{SampleRate: 0.1}
+	values := map[string]string{"FLEET_API_KEY": "legacy-service-key"}
+	called := false
+	err := configureOpenObserveFromFleetSecrets(cfg, func(key string) string { return values[key] }, func(_ context.Context, baseURL, apiKey string) (string, error) {
+		called = true
+		if baseURL != defaultFleetSecretsURL || apiKey != "legacy-service-key" {
+			t.Fatalf("unexpected legacy secret lookup configuration: baseURL=%q apiKey=%q", baseURL, apiKey)
+		}
+		return "o2oi_canary-only", nil
+	})
+	if err != nil || !called || cfg.OTLPEndpoint != defaultOpenObserveEndpoint {
+		t.Fatalf("legacy fallback failed: called=%v endpoint=%q err=%v", called, cfg.OTLPEndpoint, err)
 	}
 }
 
