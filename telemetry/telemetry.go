@@ -229,9 +229,34 @@ func isApprovedOpenObserveEndpoint(raw string) bool {
 	return host == "otlp.0exec.com" || host == "openobserve.0docker.com"
 }
 
+// resolveFleetSecretsAPIKey accepts a secret file so deployments can keep the
+// bootstrap credential out of Compose env files and container environment.
+// Secret files must be regular files with no group/world permissions.
+func resolveFleetSecretsAPIKey(getenv func(string) string) (string, error) {
+	if key := getenv("FLEET_SECRETS_API_KEY"); key != "" {
+		return key, nil
+	}
+	if path := strings.TrimSpace(getenv("FLEET_SECRETS_API_KEY_FILE")); path != "" {
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+			return "", errors.New("telemetry: Fleet Secrets API key file is unavailable or has unsafe permissions")
+		}
+		value, err := os.ReadFile(path)
+		if err != nil {
+			return "", errors.New("telemetry: Fleet Secrets API key file could not be read")
+		}
+		key := strings.TrimSpace(string(value))
+		if key == "" {
+			return "", errors.New("telemetry: Fleet Secrets API key file is empty")
+		}
+		return key, nil
+	}
+	return getenv("FLEET_API_KEY"), nil
+}
+
 // configureOpenObserveFromFleetSecrets enables direct OTLP export when a
-// service has a dedicated FLEET_SECRETS_API_KEY (preferred) or a legacy
-// FLEET_API_KEY. The token is ingestion-only and is fetched over verified HTTPS
+// service has a dedicated FLEET_SECRETS_API_KEY (preferred), a protected
+// FLEET_SECRETS_API_KEY_FILE, or a legacy FLEET_API_KEY. The token is ingestion-only and is fetched over verified HTTPS
 // from the per-service allowlisted vault identity.
 // Explicit endpoints take precedence over the default URL. If a fleet secret
 // API key is present, its allowlisted ingestion token authenticates that
@@ -245,9 +270,9 @@ func configureOpenObserveFromFleetSecrets(cfg *Config, getenv func(string) strin
 		// Never send an OpenObserve ingestion credential to an arbitrary OTLP host.
 		return nil
 	}
-	apiKey := getenv("FLEET_SECRETS_API_KEY")
-	if apiKey == "" {
-		apiKey = getenv("FLEET_API_KEY")
+	apiKey, err := resolveFleetSecretsAPIKey(getenv)
+	if err != nil {
+		return err
 	}
 	if apiKey == "" {
 		return nil
