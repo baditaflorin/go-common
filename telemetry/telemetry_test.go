@@ -253,3 +253,29 @@ func TestAutoOpenObserveConfigurationFailsClosed(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveFleetSecretsAPIKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/vault-key"
+	const key = "ak_scoped-test-value"
+	if err := os.WriteFile(path, []byte(key+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{"FLEET_SECRETS_API_KEY_FILE": path}
+	got, err := resolveFleetSecretsAPIKey(func(name string) string { return values[name] })
+	if err != nil || got != key {
+		t.Fatalf("secure key file resolution failed: found=%v err=%v", got == key, err)
+	}
+}
+
+func TestResolveFleetSecretsAPIKeyFileRejectsUnsafePermissions(t *testing.T) {
+	path := t.TempDir() + "/vault-key"
+	if err := os.WriteFile(path, []byte("ak_secret-never-log"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{"FLEET_SECRETS_API_KEY_FILE": path}
+	got, err := resolveFleetSecretsAPIKey(func(name string) string { return values[name] })
+	if err == nil || got != "" || strings.Contains(err.Error(), "ak_secret-never-log") {
+		t.Fatalf("unsafe file was not rejected safely: found=%v err=%v", got != "", err)
+	}
+}

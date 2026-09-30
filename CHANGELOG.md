@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Read the scoped Fleet Secrets bootstrap API key from a protected file, allowing
+  deployments to keep it out of Docker Compose environment files.
+- Reject key files that are missing, empty, non-regular, or group/world readable.
+
+
 ## [0.102.8] - 2026-09-30
 
 ### Fixed
