@@ -36,7 +36,7 @@ import (
 const instrumentationScope = "github.com/baditaflorin/go-common/telemetry"
 
 const (
-	defaultOpenObserveEndpoint = "https://openobserve.0docker.com/api/default/v1/traces"
+	defaultOpenObserveEndpoint = "https://otlp.0exec.com/api/default/v1/traces"
 	defaultFleetSecretsURL     = "https://fleet-secrets.0exec.com"
 	openObserveTokenSecret     = "openobserve_otlp_ingestion_token"
 )
@@ -94,13 +94,11 @@ func Init(serviceName, serviceVersion string, opts ...Option) *Config {
 	if os.Getenv("OTEL_DISABLED") == "true" {
 		cfg.Disabled = true
 	}
-	if cfg.OTLPEndpoint == "" {
-		if err := configureOpenObserveFromFleetSecrets(cfg, os.Getenv, readOpenObserveToken); err != nil {
-			// Export is optional. A vault or collector outage must never prevent
-			// a service from starting; without the credential we fail closed and
-			// keep W3C propagation active without exporting spans.
-			otel.Handle(err)
-		}
+	if err := configureOpenObserveFromFleetSecrets(cfg, os.Getenv, readOpenObserveToken); err != nil {
+		// Export is optional. A vault or collector outage must never prevent
+		// a service from starting; without the credential we fail closed and
+		// keep W3C propagation active without exporting spans.
+		otel.Handle(err)
 	}
 	if raw := os.Getenv("OTEL_SAMPLE_RATE"); raw != "" {
 		if n, err := strconv.ParseFloat(raw, 64); err == nil && n >= 0 && n <= 1 {
@@ -217,14 +215,34 @@ func newProvider(cfg *Config) (*sdktrace.TracerProvider, error) {
 	return tp, nil
 }
 
+// isApprovedOpenObserveEndpoint limits vault-backed OpenObserve credentials
+// to the stable fleet hostname and the previous hostname during migration.
+func isApprovedOpenObserveEndpoint(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	if parsed.Port() != "" && parsed.Port() != "443" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "otlp.0exec.com" || host == "openobserve.0docker.com"
+}
+
 // configureOpenObserveFromFleetSecrets enables direct OTLP export when a
 // service has a dedicated FLEET_SECRETS_API_KEY (preferred) or a legacy
 // FLEET_API_KEY. The token is ingestion-only and is fetched over verified HTTPS
 // from the per-service allowlisted vault identity.
-// Explicit endpoints always take precedence; explicit OTLP headers are applied
-// by newProvider and override the generated Authorization header.
+// Explicit endpoints take precedence over the default URL. If a fleet secret
+// API key is present, its allowlisted ingestion token authenticates that
+// endpoint unless explicit OTLP headers are supplied. Explicit OTLP headers
+// are applied by newProvider and override the generated Authorization header.
 func configureOpenObserveFromFleetSecrets(cfg *Config, getenv func(string) string, readToken func(context.Context, string, string) (string, error)) error {
-	if cfg == nil || cfg.Disabled || cfg.OTLPEndpoint != "" || getenv("OTEL_EXPORTER_OTLP_HEADERS") != "" {
+	if cfg == nil || cfg.Disabled || getenv("OTEL_EXPORTER_OTLP_HEADERS") != "" {
+		return nil
+	}
+	if cfg.OTLPEndpoint != "" && !isApprovedOpenObserveEndpoint(cfg.OTLPEndpoint) {
+		// Never send an OpenObserve ingestion credential to an arbitrary OTLP host.
 		return nil
 	}
 	apiKey := getenv("FLEET_SECRETS_API_KEY")
@@ -250,7 +268,9 @@ func configureOpenObserveFromFleetSecrets(cfg *Config, getenv func(string) strin
 		return errors.New("telemetry: could not load OpenObserve ingestion credential from fleet secrets")
 	}
 	encoded := base64.StdEncoding.EncodeToString([]byte("default:" + token))
-	cfg.OTLPEndpoint = defaultOpenObserveEndpoint
+	if cfg.OTLPEndpoint == "" {
+		cfg.OTLPEndpoint = defaultOpenObserveEndpoint
+	}
 	cfg.otlpHeaders = map[string]string{
 		"Authorization": "Basic " + encoded,
 		"stream-name":   "default",

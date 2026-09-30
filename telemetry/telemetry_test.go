@@ -187,15 +187,45 @@ func TestAutoOpenObserveConfigurationFailsClosed(t *testing.T) {
 			t.Fatalf("unexpected auto configuration: called=%v endpoint=%q err=%v", called, cfg.OTLPEndpoint, err)
 		}
 	})
-	t.Run("manual endpoint wins", func(t *testing.T) {
-		cfg := &Config{OTLPEndpoint: "https://collector.example/v1/traces"}
+	t.Run("manual endpoint keeps URL and gets scoped auth", func(t *testing.T) {
+		const endpoint = "https://otlp.0exec.com/api/default/v1/traces"
+		cfg := &Config{OTLPEndpoint: endpoint}
+		values := map[string]string{"FLEET_SECRETS_API_KEY": "service-key"}
 		called := false
-		err := configureOpenObserveFromFleetSecrets(cfg, func(string) string { return "service-key" }, func(context.Context, string, string) (string, error) {
+		err := configureOpenObserveFromFleetSecrets(cfg, func(key string) string { return values[key] }, func(context.Context, string, string) (string, error) {
+			called = true
+			return "ingest-only-token", nil
+		})
+		if err != nil || !called || cfg.OTLPEndpoint != endpoint {
+			t.Fatalf("manual endpoint/auth configuration failed: called=%v endpoint=%q err=%v", called, cfg.OTLPEndpoint, err)
+		}
+		wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("default:ingest-only-token"))
+		if got := cfg.otlpHeaders["Authorization"]; got != wantAuth {
+			t.Fatalf("Authorization header=%q, want scoped OpenObserve auth", got)
+		}
+	})
+	t.Run("unapproved custom endpoint never receives vault token", func(t *testing.T) {
+		cfg := &Config{OTLPEndpoint: "https://collector.example/v1/traces"}
+		values := map[string]string{"FLEET_SECRETS_API_KEY": "service-key"}
+		called := false
+		err := configureOpenObserveFromFleetSecrets(cfg, func(key string) string { return values[key] }, func(context.Context, string, string) (string, error) {
+			called = true
+			return "unused", nil
+		})
+		if err != nil || called || cfg.OTLPEndpoint != "https://collector.example/v1/traces" || len(cfg.otlpHeaders) != 0 {
+			t.Fatalf("vault credential escaped to custom endpoint: called=%v endpoint=%q err=%v", called, cfg.OTLPEndpoint, err)
+		}
+	})
+	t.Run("explicit OTLP headers bypass vault lookup", func(t *testing.T) {
+		cfg := &Config{OTLPEndpoint: "https://collector.example/v1/traces"}
+		values := map[string]string{"FLEET_SECRETS_API_KEY": "service-key", "OTEL_EXPORTER_OTLP_HEADERS": "authorization=Bearer explicit"}
+		called := false
+		err := configureOpenObserveFromFleetSecrets(cfg, func(key string) string { return values[key] }, func(context.Context, string, string) (string, error) {
 			called = true
 			return "unused", nil
 		})
 		if err != nil || called || cfg.OTLPEndpoint != "https://collector.example/v1/traces" {
-			t.Fatalf("manual endpoint was not preserved: called=%v endpoint=%q err=%v", called, cfg.OTLPEndpoint, err)
+			t.Fatalf("explicit headers should bypass vault lookup: called=%v endpoint=%q err=%v", called, cfg.OTLPEndpoint, err)
 		}
 	})
 	t.Run("insecure vault URL rejected", func(t *testing.T) {

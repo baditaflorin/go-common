@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.102.8] - 2026-09-30
+
+### Fixed
+
+- Keep an explicit OTLP endpoint while loading the per-service OpenObserve
+  ingestion token from Fleet Secrets for approved OpenObserve hostnames. Never
+  forward the vault token to arbitrary collector hosts.
+
+### Changed
+
+- Use the stable `https://otlp.0exec.com/api/default/v1/traces` endpoint by
+  default so backend moves do not require application changes.
+
 ## [0.102.7] - 2026-09-29
 
 ### Added

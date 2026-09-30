@@ -5,12 +5,16 @@
 // using a custom server may call Init and wrap the handler with HTTPMiddleware.
 // safehttp.NewClient adds NewTransport automatically.
 //
-// For automatic OpenObserve auth, provide a service-scoped FLEET_SECRETS_API_KEY
-// (recommended) or legacy FLEET_API_KEY that can read the allowlisted ingestion
-// secret from Go Fleet Secrets. Configure export with OTEL_EXPORTER_OTLP_ENDPOINT
-// using an HTTPS collector
-// endpoint and OTEL_EXPORTER_OTLP_HEADERS for authentication. Header values
-// follow the OpenTelemetry comma-separated, URL-escaped key=value convention.
+// For automatic OpenObserve export, provide a service-scoped
+// FLEET_SECRETS_API_KEY (recommended) or legacy FLEET_API_KEY that can read the
+// allowlisted ingestion secret from Go Fleet Secrets. Without an endpoint
+// override, export uses https://otlp.0exec.com/api/default/v1/traces. The stable
+// hostname can move between backends through DNS or gateway routing. An
+// OTEL_EXPORTER_OTLP_ENDPOINT override is preserved; the vault token is attached
+// only for otlp.0exec.com or the legacy openobserve.0docker.com hostname. Other
+// collector hosts must use OTEL_EXPORTER_OTLP_HEADERS for their own credentials.
+// Header values follow the OpenTelemetry comma-separated, URL-escaped key=value
+// convention.
 // OTEL_EXPORTER_OTLP_CERTIFICATE may specify a private CA PEM; client
 // certificates can be supplied with OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE and
 // OTEL_EXPORTER_OTLP_CLIENT_KEY. OTEL_SAMPLE_RATE defaults to 0.1 and uses
