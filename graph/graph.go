@@ -28,8 +28,8 @@ type pkgState struct {
 
 // Init configures the package with the calling service's identity.
 // Called from server.Run / server.New so every fleet service is
-// automatically wired. Safe to call once; subsequent calls update
-// identity but do not restart the sender.
+// automatically wired. Safe to call once; subsequent calls update both
+// event and sender identity without restarting the sender.
 //
 // If the package was already initialised (e.g. via an earlier Record
 // from a probe) the existing ring and sender are preserved.
@@ -46,6 +46,9 @@ func Init(serviceID, version string) {
 		}
 		if version != "" {
 			state.version = version
+		}
+		if state.sender != nil {
+			state.sender.setIdentity(state.serviceID, state.version)
 		}
 	}
 	stateMu.Unlock()
@@ -95,6 +98,9 @@ func Record(e Event) {
 	if !s.cfg.eventEmissionEnabled() {
 		return
 	}
+	stateMu.RLock()
+	serviceID := s.serviceID
+	stateMu.RUnlock()
 	// Sampling: roll once per event. EventsSampled counts the *kept*
 	// after-sampling events (so it equals EventsRecorded at rate 1.0).
 	if s.cfg.sampleRate < 1.0 {
@@ -113,10 +119,10 @@ func Record(e Event) {
 	// it (the safehttp transport always knows itself; the inbound
 	// middleware infers caller from User-Agent).
 	if e.Direction == "out" && e.Caller == "" {
-		e.Caller = s.serviceID
+		e.Caller = serviceID
 	}
 	if e.Direction == "in" && e.Target == "" {
-		e.Target = s.serviceID
+		e.Target = serviceID
 	}
 	_, dropped := s.ring.push(e)
 	atomic.AddInt64(&s.counters.EventsRecorded, 1)
@@ -136,8 +142,13 @@ func Stats() Counters {
 // ServiceID returns the configured identity, useful for callers
 // that want to tag custom events.
 func ServiceID() string {
-	s := ensureInit()
-	return s.serviceID
+	_ = ensureInit()
+	stateMu.RLock()
+	defer stateMu.RUnlock()
+	if state == nil {
+		return ""
+	}
+	return state.serviceID
 }
 
 // Enabled reports whether event emission is on. Useful in tests and
