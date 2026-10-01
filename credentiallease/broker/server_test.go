@@ -176,8 +176,8 @@ func newTestServer(t *testing.T) (*Server, *testIssuer, *testStore, *testAuditor
 
 func acquireBody(taskID string, ttl int) []byte {
 	body, _ := json.Marshal(map[string]any{
-		"task_id": taskID, "audience": "catalog-api", "resource": "catalog/items/42",
-		"target_origin": "https://catalog.example", "actions": []string{"read"},
+		"task_id": taskID, "audience": "catalog-api", "resource": "/items/42",
+		"target_origin": "https://catalog.example", "actions": []string{http.MethodGet},
 		"ttl_seconds": ttl, "auth_mode": "api_key_header", "auth_header": "X-Api-Key",
 	})
 	return body
@@ -230,6 +230,14 @@ func TestAcquireIssuesPolicyBoundLeaseAndKeepsSecretsOutOfAudit(t *testing.T) {
 	}
 	if bytes.Contains(response.Body.Bytes(), []byte(testProof)) {
 		t.Fatal("workload proof appeared in response")
+	}
+}
+
+func TestValidResourcePathRejectsRepeatedDecodeAmbiguity(t *testing.T) {
+	for _, resource := range []string{"/items/%252Fadmin", "/items/%252E%252E/admin"} {
+		if ValidResourcePath(resource) {
+			t.Errorf("ambiguous resource path %q accepted", resource)
+		}
 	}
 }
 

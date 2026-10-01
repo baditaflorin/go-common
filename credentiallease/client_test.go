@@ -29,6 +29,9 @@ func TestWithLeaseAttachesAndRevokesAndRedacts(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == protocolPath:
 			acquireCalls.Add(1)
+			if r.Header.Get("X-API-Key") != "broker-access-key" {
+				t.Error("acquire did not use the gateway-scoped broker key")
+			}
 			if got := r.Header.Get("Authorization"); got != "Bearer workload-proof" {
 				t.Errorf("unexpected broker authorization header")
 			}
@@ -39,10 +42,10 @@ func TestWithLeaseAttachesAndRevokesAndRedacts(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 				t.Errorf("decode request: %v", err)
 			}
-			if got.TaskID != "task-42" || got.Audience != "catalog-api" || got.Resource != "record:7" || got.TargetOrigin != target.URL || got.AuthMode != AuthAPIKeyHeader || !strings.EqualFold(got.AuthHeader, "X-API-Key") || got.TTLSeconds != 120 {
+			if got.TaskID != "task-42" || got.Audience != "catalog-api" || got.Resource != "/resource" || got.TargetOrigin != target.URL || got.AuthMode != AuthAPIKeyHeader || !strings.EqualFold(got.AuthHeader, "X-API-Key") || got.TTLSeconds != 120 {
 				t.Errorf("unexpected lease request metadata: %#v", got)
 			}
-			if len(got.Actions) != 1 || got.Actions[0] != "read" {
+			if len(got.Actions) != 1 || got.Actions[0] != http.MethodGet {
 				t.Errorf("unexpected actions: %#v", got.Actions)
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -54,6 +57,9 @@ func TestWithLeaseAttachesAndRevokesAndRedacts(t *testing.T) {
 			})
 		case r.Method == http.MethodDelete && r.URL.Path == protocolPath+"/lease_abc123":
 			revokeCalls.Add(1)
+			if r.Header.Get("X-API-Key") != "broker-access-key" {
+				t.Error("revoke did not use the gateway-scoped broker key")
+			}
 			if got := r.Header.Get("Authorization"); got != "Bearer workload-proof" {
 				t.Errorf("unexpected revoke authorization header")
 			}
@@ -76,7 +82,7 @@ func TestWithLeaseAttachesAndRevokesAndRedacts(t *testing.T) {
 		if deadline, ok := ctx.Deadline(); !ok || !deadline.Equal(lease.ExpiresAt()) {
 			t.Error("callback context is not bounded by broker expiry")
 		}
-		outbound, _ := http.NewRequestWithContext(ctx, http.MethodGet, target.URL+"/item", nil)
+		outbound, _ := http.NewRequestWithContext(ctx, http.MethodGet, target.URL+"/resource", nil)
 		response, err := lease.Do(target.Client(), outbound)
 		if err != nil {
 			return err
@@ -105,7 +111,7 @@ func TestWithLeaseAttachesAndRevokesAndRedacts(t *testing.T) {
 	if acquireCalls.Load() != 1 || revokeCalls.Load() != 1 {
 		t.Fatalf("acquire/revoke calls = %d/%d, want 1/1", acquireCalls.Load(), revokeCalls.Load())
 	}
-	expiredRequest, _ := http.NewRequest(http.MethodGet, target.URL+"/item", nil)
+	expiredRequest, _ := http.NewRequest(http.MethodGet, target.URL+"/resource", nil)
 	if _, err := retained.Do(target.Client(), expiredRequest); !errors.Is(err, ErrLeaseClosed) {
 		t.Fatalf("Do after callback = %v, want ErrLeaseClosed", err)
 	}
@@ -300,6 +306,7 @@ func TestClientRejectsInsecureConfigAndAuthHeaders(t *testing.T) {
 		Endpoint:       "https://broker.invalid",
 		BrokerAudience: "broker",
 		Identity:       storedIdentity{value: fixtureCredential},
+		BrokerAccess:   BootstrapCredentialFunc(func(context.Context) (string, error) { return "broker-key", nil }),
 	}
 	for _, rendered := range []string{fmt.Sprintf("%v", config), fmt.Sprintf("%+v", config), fmt.Sprintf("%#v", config)} {
 		if strings.Contains(rendered, fixtureCredential) {
@@ -365,9 +372,26 @@ func TestLeaseBindsTargetOriginAndStopsTargetRedirect(t *testing.T) {
 	request := testRequest()
 	request.TargetOrigin = target.URL
 	err := client.WithLease(context.Background(), request, func(ctx context.Context, lease *Lease) error {
-		wrong, _ := http.NewRequestWithContext(ctx, http.MethodGet, redirectTarget.URL+"/other", nil)
+		wrong, _ := http.NewRequestWithContext(ctx, http.MethodGet, redirectTarget.URL+"/resource", nil)
 		if _, err := lease.Do(redirectTarget.Client(), wrong); !errors.Is(err, ErrTargetMismatch) {
 			return fmt.Errorf("wrong origin error = %v", err)
+		}
+		wrongPath, _ := http.NewRequestWithContext(ctx, http.MethodGet, target.URL+"/other", nil)
+		if _, err := lease.Do(target.Client(), wrongPath); !errors.Is(err, ErrResourceMismatch) {
+			return fmt.Errorf("wrong path error = %v", err)
+		}
+		wrongMethod, _ := http.NewRequestWithContext(ctx, http.MethodPost, target.URL+"/resource", nil)
+		if _, err := lease.Do(target.Client(), wrongMethod); !errors.Is(err, ErrResourceMismatch) {
+			return fmt.Errorf("wrong method error = %v", err)
+		}
+		withQuery, _ := http.NewRequestWithContext(ctx, http.MethodGet, target.URL+"/resource?next=other", nil)
+		if _, err := lease.Do(target.Client(), withQuery); !errors.Is(err, ErrResourceMismatch) {
+			return fmt.Errorf("query escape error = %v", err)
+		}
+		hostOverride, _ := http.NewRequestWithContext(ctx, http.MethodGet, target.URL+"/resource", nil)
+		hostOverride.Host = "attacker.example"
+		if _, err := lease.Do(target.Client(), hostOverride); !errors.Is(err, ErrTargetMismatch) {
+			return fmt.Errorf("host override error = %v", err)
 		}
 		right, _ := http.NewRequestWithContext(ctx, http.MethodGet, target.URL+"/resource", nil)
 		response, err := lease.Do(target.Client(), right)
@@ -382,6 +406,29 @@ func TestLeaseBindsTargetOriginAndStopsTargetRedirect(t *testing.T) {
 	})
 	if err != nil || redirected.Load() != 0 {
 		t.Fatalf("error=%v redirect target calls=%d", err, redirected.Load())
+	}
+}
+
+func TestResourcePathAndActionMustBeExactAndCanonical(t *testing.T) {
+	for _, resource := range []string{"/v1/items/42", "/v1/a%20b"} {
+		if !validResourcePath(resource) {
+			t.Errorf("canonical resource path %q rejected", resource)
+		}
+	}
+	for _, resource := range []string{"", "record:7", "*", "/v1/items?next=42", "/v1/items#part", "/v1/../admin", "/v1//items", "/v1/items%2Fadmin", "/v1/items%5cadmin", "/v1/items%252Fadmin", "/v1/items*"} {
+		if validResourcePath(resource) {
+			t.Errorf("unsafe resource path %q accepted", resource)
+		}
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+		if !validHTTPMethod(method) {
+			t.Errorf("valid HTTP method %q rejected", method)
+		}
+	}
+	for _, method := range []string{"read", "get", http.MethodConnect, http.MethodTrace, "*"} {
+		if validHTTPMethod(method) {
+			t.Errorf("invalid HTTP method %q accepted", method)
+		}
 	}
 }
 
@@ -411,6 +458,7 @@ func testClient(t *testing.T, server *httptest.Server, identity IdentityTokenSou
 		Endpoint:       server.URL,
 		BrokerAudience: "credential-broker",
 		Identity:       identity,
+		BrokerAccess:   BootstrapCredentialFunc(func(context.Context) (string, error) { return "broker-access-key", nil }),
 		TLSConfig:      tlsConfig,
 		Observer:       observer,
 	})
@@ -424,9 +472,9 @@ func testRequest() Request {
 	return Request{
 		TaskID:       "task-42",
 		Audience:     "catalog-api",
-		Resource:     "record:7",
+		Resource:     "/resource",
 		TargetOrigin: "https://catalog-api.invalid",
-		Actions:      []string{"read"},
+		Actions:      []string{http.MethodGet},
 		TTL:          2 * time.Minute,
 		Auth:         APIKeyHeader("X-API-Key"),
 	}
