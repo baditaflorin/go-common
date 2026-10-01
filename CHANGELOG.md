@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.11] - 2026-10-01
+
+### Added
+
+- Add the callback-scoped credential lease client and fail-closed broker HTTP
+  core with task-bound authorization, policy checks, atomic idempotency hooks,
+  protected audit events, and provider issue/revoke interfaces.
+
 ## [0.102.10] - 2026-10-01
 
 ### Fixed
