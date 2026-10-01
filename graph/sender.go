@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,10 +18,11 @@ const graphAuthFailureCooldown = time.Minute
 // and POSTs batches to the collector. Owns its own *http.Client — we
 // cannot use safehttp here because it would import graph itself.
 type sender struct {
-	cfg       config
-	serviceID string
-	version   string
-	ring      *ring
+	cfg        config
+	identityMu sync.RWMutex
+	serviceID  string
+	version    string
+	ring       *ring
 	// pending holds at most one failed batch outside the ring. This
 	// preserves the batch for a later retry without draining additional
 	// observations during the same failing flush.
@@ -43,6 +45,23 @@ func newSender(cfg config, serviceID, version string, r *ring, c *atomicCounters
 		stop:      make(chan struct{}),
 		stopped:   make(chan struct{}),
 	}
+}
+
+func (s *sender) setIdentity(serviceID, version string) {
+	s.identityMu.Lock()
+	defer s.identityMu.Unlock()
+	if serviceID != "" {
+		s.serviceID = serviceID
+	}
+	if version != "" {
+		s.version = version
+	}
+}
+
+func (s *sender) identity() (string, string) {
+	s.identityMu.RLock()
+	defer s.identityMu.RUnlock()
+	return s.serviceID, s.version
 }
 
 func (s *sender) run() {
@@ -99,9 +118,10 @@ func (s *sender) send(events []Event) bool {
 	if !s.canWriteAt(time.Now()) {
 		return false
 	}
+	serviceID, version := s.identity()
 	batch := Batch{
-		Service:       s.serviceID,
-		Version:       s.version,
+		Service:       serviceID,
+		Version:       version,
 		SchemaVersion: SchemaVersion,
 		Events:        events,
 	}
@@ -118,7 +138,7 @@ func (s *sender) send(events []Event) bool {
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "go-common-graph/"+s.version+" ("+s.serviceID+")")
+	req.Header.Set("User-Agent", "go-common-graph/"+version+" ("+serviceID+")")
 	req.Header.Set(header.APIKey, s.cfg.writerAPIKey)
 	resp, err := s.client.Do(req)
 	if err != nil {

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.102.10] - 2026-10-01
+
+### Fixed
+
+- Keep the graph sender batch identity synchronized when `Init` changes a
+  service from its package name to its canonical fleet identity. Protect the
+  sender identity snapshot and package identity reads against concurrent
+  updates.
+
 ## [0.102.9] - 2026-09-30
 
 ### Added

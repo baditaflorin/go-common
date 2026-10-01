@@ -184,6 +184,48 @@ func TestEndToEndFlush(t *testing.T) {
 	}
 }
 
+func TestInitUpdatesSenderIdentity(t *testing.T) {
+	resetState(t)
+	var got Batch
+	var gotMu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/events" {
+			http.NotFound(w, r)
+			return
+		}
+		var batch Batch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			t.Errorf("decode batch: %v", err)
+		}
+		gotMu.Lock()
+		got = batch
+		gotMu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("GRAPH_ENABLED", "true")
+	t.Setenv("GRAPH_COLLECTOR_URL", srv.URL)
+	t.Setenv("GRAPH_API_KEY", "writer-test-key")
+	Init("go_infrastructure_fetch_cache", "0.3.27")
+	Init("infrastructure-fetch-cache", "0.3.27")
+	defer Shutdown()
+	Record(Event{Direction: "out", Target: "html-proxy", Method: http.MethodGet, Status: http.StatusOK})
+
+	s := ensureInit()
+	s.sender.flush()
+	gotMu.Lock()
+	defer gotMu.Unlock()
+	if got.Service != "infrastructure-fetch-cache" {
+		t.Fatalf("batch service = %q, want canonical identity", got.Service)
+	}
+	if len(got.Events) != 1 {
+		t.Fatalf("batch events = %d, want 1", len(got.Events))
+	}
+	if got.Events[0].Caller != "infrastructure-fetch-cache" {
+		t.Fatalf("event caller = %q, want canonical identity", got.Events[0].Caller)
+	}
+}
+
 func TestLookupCachesPositive(t *testing.T) {
 	resetState(t)
 	var hits int64
