@@ -105,11 +105,11 @@ func TestWebshareDirect_ProxyURLEmptyBeforeFirstFetchCompletes(t *testing.T) {
 	// that calls ProxyURL() early -- it just gets "" (no proxy), the same
 	// safe fallback every other misconfigured supplier already produces.
 	block := make(chan struct{})
-	defer close(block)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-block
 	}))
 	defer srv.Close()
+	defer close(block)
 	withWebshareDirectBaseURL(t, srv.URL)
 
 	s := NewFromConfig(Config{Supplier: "webshare_direct", WebshareAPIKey: "test-key"})
