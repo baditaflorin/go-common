@@ -487,7 +487,7 @@ func decodeRequest(w http.ResponseWriter, r *http.Request) (LeaseRequest, bool) 
 }
 
 func validateRequest(req LeaseRequest, maxTTL time.Duration) error {
-	if !validClaim(req.TaskID, 256) || !validClaim(req.Audience, 512) || !validClaim(req.Resource, 2048) || req.Resource == "*" || req.TTL < time.Second || req.TTL%time.Second != 0 || req.TTL > maxTTL || len(req.Actions) == 0 || len(req.Actions) > 32 {
+	if !validClaim(req.TaskID, 256) || !validClaim(req.Audience, 512) || !ValidResourcePath(req.Resource) || req.TTL < time.Second || req.TTL%time.Second != 0 || req.TTL > maxTTL || len(req.Actions) == 0 || len(req.Actions) > 32 {
 		return ErrDenied
 	}
 	canonical, err := canonicalOrigin(req.TargetOrigin)
@@ -496,13 +496,8 @@ func validateRequest(req LeaseRequest, maxTTL time.Duration) error {
 	}
 	seen := make(map[string]struct{}, len(req.Actions))
 	for _, action := range req.Actions {
-		if !nonBlank(action) || action == "*" || len(action) > 128 {
+		if !ValidHTTPMethod(action) {
 			return ErrDenied
-		}
-		for _, c := range action {
-			if c < 0x21 || c > 0x7e {
-				return ErrDenied
-			}
 		}
 		if _, ok := seen[action]; ok {
 			return ErrDenied
@@ -521,6 +516,37 @@ func validateRequest(req LeaseRequest, maxTTL time.Duration) error {
 		return ErrDenied
 	}
 	return nil
+}
+
+// ValidResourcePath accepts one canonical absolute path with no query, fragment,
+// traversal segment, encoded path separator, or encoded percent byte that
+// could become ambiguous after repeated decoding.
+func ValidResourcePath(resource string) bool {
+	if resource == "" || len(resource) > 2048 || !strings.HasPrefix(resource, "/") || strings.ContainsAny(resource, "?#*\\\r\n\x00") || strings.Contains(resource, "//") {
+		return false
+	}
+	u, err := url.ParseRequestURI(resource)
+	if err != nil || u.IsAbs() || u.Host != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || u.EscapedPath() != resource {
+		return false
+	}
+	for _, segment := range strings.Split(u.Path, "/") {
+		if segment == "." || segment == ".." {
+			return false
+		}
+	}
+	lower := strings.ToLower(resource)
+	return !strings.Contains(lower, "%2f") && !strings.Contains(lower, "%5c") && !strings.Contains(lower, "%25")
+}
+
+// ValidHTTPMethod limits policy actions to methods handled by the Go Common
+// target client. CONNECT and TRACE are excluded to avoid tunnel/debug use.
+func ValidHTTPMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions:
+		return true
+	default:
+		return false
+	}
 }
 
 func validGrant(grant Grant, req LeaseRequest, maxTTL time.Duration) bool {

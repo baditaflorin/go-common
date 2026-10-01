@@ -6,6 +6,14 @@ separate broker deployment wires it to trust-domain identity, policy, durable
 storage, protected audit, and provider adapters. Provider admin credentials
 stay with the broker/adapter.
 
+All broker operations use the fleet gateway's `X-API-Key` authentication. The
+key must be scoped to the broker hostname and available only to the calling
+service. `TaskManager` uses it for task creation and cleanup; its task-bound
+lease client reuses it for acquire, revoke, and malformed-response cleanup.
+The key is never attached to requests sent to the credential target. The
+broker separately verifies the key during task creation and requires the
+broker-signed task proof for lease operations.
+
 ## Acquire
 
 `POST /v1/leases` over HTTPS. The client sends a short-lived workload proof in
@@ -16,18 +24,23 @@ shape:
 {
   "task_id": "task identity",
   "audience": "target service identity",
-  "resource": "one resource identifier",
+  "resource": "/v1/records/7",
   "target_origin": "https://target.example",
-  "actions": ["read"],
+  "actions": ["GET"],
   "ttl_seconds": 300,
   "auth_mode": "api_key_header",
   "auth_header": "X-Api-Key"
 }
 ```
 
-The broker must match `task_id` to the authenticated workload proof; allowlist
-the exact audience, resource, target origin, actions, and auth placement; apply its own TTL
-maximum; and reject broad or ambiguous requests. For a repeated key from the
+`resource` is one exact canonical escaped HTTP path with no query string,
+fragment, wildcard, traversal segment, or encoded path separator. `actions`
+contains only allowed HTTP methods such as `GET` or `POST`. `Lease.Do` rejects
+every target request whose method or path differs from the approved set. The
+broker must match `task_id` to the authenticated workload proof; allowlist the
+exact audience, path, target origin, methods, and auth placement; apply its own
+TTL maximum; and reject broad or ambiguous requests. The target service must
+still enforce body-level object permissions for write operations. For a repeated key from the
 same authenticated task, the broker must not create a second lease or reset
 the first lease's expiry. The current core rejects a repeated key with
 `409 Conflict`, including an identical replay, and rejects a reused key with a
@@ -68,6 +81,12 @@ the caller; the issuer TTL is the backstop when the broker or provider cannot
 confirm immediate revocation. A successful HTTP call is not proof that a
 provider supports immediate revoke; each adapter needs its own contract test.
 
+Use `TaskManager.WithTask` for a single application operation. It creates a
+broker-owned task ID and proof, runs the callback with a task-scoped client,
+then closes the task on success, error, panic, or cancellation. Task closure
+rejects new leases and cancels active lease callbacks; each lease cleanup
+attempt still requests provider revocation, with provider TTL as the fallback.
+
 ## Security requirements for a broker implementation
 
 - Verify issuer, signature, audience, expiry, workload identity, and task
@@ -85,9 +104,12 @@ provider supports immediate revoke; each adapter needs its own contract test.
 - Restrict broker network access and use TLS with trusted roots; use mTLS when
   the runtime identity system supports it. The client rejects cleartext URLs,
   insecure TLS verification, and redirects.
-- Bind each lease to one exact HTTPS target origin. The client rejects requests
-  to another origin and does not follow target redirects; apps still need to
-  avoid logging authenticated request headers.
+- Bind each lease to one exact HTTPS origin, path, and HTTP method set. The
+  client rejects requests to another origin/path/method or with a query string,
+  rejects a conflicting `Request.Host`, and it does not follow target redirects.
+  It rejects encoded separators and encoded percent bytes to avoid path
+  ambiguity through repeated decoding. Target services remain responsible
+  for permissions encoded in request bodies.
 - Treat a transport timeout during acquire as an uncertain result. Let the
   lease TTL clean up an issuance whose response was lost; do not infer that no
   credential was minted.

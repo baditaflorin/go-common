@@ -45,6 +45,9 @@ func TestClientAndBrokerCompleteLeaseUseAndRevoke(t *testing.T) {
 	client, err := credentiallease.NewClient(credentiallease.Config{
 		Endpoint:       broker.URL,
 		BrokerAudience: "credential-broker",
+		BrokerAccess: credentiallease.BootstrapCredentialFunc(func(context.Context) (string, error) {
+			return "broker-access-key", nil
+		}),
 		Identity: credentiallease.IdentityTokenSourceFunc(func(_ context.Context, audience string) (string, error) {
 			if audience != "credential-broker" {
 				t.Fatalf("identity requested for unexpected audience %q", audience)
@@ -66,9 +69,9 @@ func TestClientAndBrokerCompleteLeaseUseAndRevoke(t *testing.T) {
 	err = client.WithLease(context.Background(), credentiallease.Request{
 		TaskID:       testTask,
 		Audience:     "catalog-api",
-		Resource:     "catalog/items/42",
+		Resource:     "/items/42",
 		TargetOrigin: targetOrigin,
-		Actions:      []string{"read"},
+		Actions:      []string{http.MethodGet},
 		TTL:          2 * time.Minute,
 		Auth:         credentiallease.APIKeyHeader("X-API-Key"),
 	}, func(ctx context.Context, lease *credentiallease.Lease) error {

@@ -65,9 +65,10 @@ func (a AuthPlacement) validate() error {
 	return nil
 }
 
-// Request asks for one task-bound lease. The broker must compare TaskID with
-// the authenticated workload identity and enforce Audience, Resource, Actions,
-// TTL, and Auth together as one policy decision.
+// Request asks for one task-bound lease. Resource is one exact escaped HTTP
+// path without a query string; Actions is the set of allowed HTTP methods. The
+// broker must compare TaskID with the authenticated identity and enforce
+// Audience, Resource, Actions, TTL, and Auth together as one policy decision.
 type Request struct {
 	TaskID       string
 	Audience     string
@@ -86,6 +87,8 @@ type Lease struct {
 	expiresAt    time.Time
 	placement    AuthPlacement
 	targetOrigin string
+	resource     string
+	actions      []string
 	ctx          context.Context
 	state        *leaseState
 	observer     Observer
@@ -129,6 +132,12 @@ func (l *Lease) Do(client *http.Client, req *http.Request) (*http.Response, erro
 	origin, err := originForURL(req.URL)
 	if err != nil || origin != l.targetOrigin {
 		return nil, ErrTargetMismatch
+	}
+	if req.Host != "" && !strings.EqualFold(req.Host, req.URL.Host) {
+		return nil, ErrTargetMismatch
+	}
+	if req.Method == "" || req.URL.EscapedPath() != l.resource || req.URL.RawQuery != "" || req.URL.ForceQuery || req.URL.Fragment != "" || !methodAllowed(l.actions, req.Method) {
+		return nil, ErrResourceMismatch
 	}
 	if err := l.placement.validate(); err != nil {
 		return nil, err
@@ -175,6 +184,15 @@ func (l *Lease) Do(client *http.Client, req *http.Request) (*http.Response, erro
 	}
 	observeEvent(l.observer, "use", result, status, time.Since(started))
 	return resp, err
+}
+
+func methodAllowed(methods []string, method string) bool {
+	for _, allowed := range methods {
+		if allowed == method {
+			return true
+		}
+	}
+	return false
 }
 
 // String, GoString, Format, and MarshalJSON redact all lease internals so

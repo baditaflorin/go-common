@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -35,6 +36,7 @@ var (
 	ErrLeaseClosed         = errors.New("credentiallease: lease is closed or expired")
 	ErrInvalidAuth         = errors.New("credentiallease: invalid authentication placement")
 	ErrTargetMismatch      = errors.New("credentiallease: request target does not match lease target origin")
+	ErrResourceMismatch    = errors.New("credentiallease: request path or method does not match lease resource")
 	ErrRevokeFailed        = errors.New("credentiallease: lease revocation failed")
 )
 
@@ -80,6 +82,7 @@ type Config struct {
 	Endpoint       string
 	BrokerAudience string
 	Identity       IdentityTokenSource
+	BrokerAccess   BootstrapCredentialSource
 	TLSConfig      *tls.Config
 	MaxLeaseTTL    time.Duration
 	RequestTimeout time.Duration
@@ -106,6 +109,7 @@ type Client struct {
 	endpoint       string
 	brokerAudience string
 	identity       IdentityTokenSource
+	brokerAccess   BootstrapCredentialSource
 	http           *http.Client
 	maxLeaseTTL    time.Duration
 	requestTimeout time.Duration
@@ -118,7 +122,7 @@ type Client struct {
 // unintended host. The transport does not use environment proxy settings.
 func NewClient(cfg Config) (*Client, error) {
 	endpoint, err := validateEndpoint(cfg.Endpoint)
-	if err != nil || !nonBlankExact(cfg.BrokerAudience) || len(cfg.BrokerAudience) > 512 || cfg.Identity == nil {
+	if err != nil || !nonBlankExact(cfg.BrokerAudience) || len(cfg.BrokerAudience) > 512 || cfg.Identity == nil || cfg.BrokerAccess == nil {
 		return nil, ErrInvalidConfig
 	}
 
@@ -174,6 +178,7 @@ func NewClient(cfg Config) (*Client, error) {
 		endpoint:       endpoint,
 		brokerAudience: strings.TrimSpace(cfg.BrokerAudience),
 		identity:       cfg.Identity,
+		brokerAccess:   cfg.BrokerAccess,
 		http: &http.Client{
 			Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -204,10 +209,11 @@ func (c *Client) WithLease(ctx context.Context, request Request, fn func(context
 	if c == nil || ctx == nil || fn == nil {
 		return ErrInvalidRequest
 	}
-	if c.http == nil || c.identity == nil || c.maxLeaseTTL < time.Second {
+	if c.http == nil || c.identity == nil || c.brokerAccess == nil || c.maxLeaseTTL < time.Second {
 		return ErrInvalidConfig
 	}
 	request.Actions = append([]string(nil), request.Actions...)
+	sort.Strings(request.Actions)
 	if err := request.validate(c.maxLeaseTTL); err != nil {
 		return err
 	}
@@ -239,6 +245,8 @@ func (c *Client) WithLease(ctx context.Context, request Request, fn func(context
 		expiresAt:    leaseResponse.ExpiresAt,
 		placement:    request.Auth,
 		targetOrigin: targetOrigin,
+		resource:     request.Resource,
+		actions:      append([]string(nil), request.Actions...),
 		observer:     c.observer,
 		state:        &leaseState{credential: []byte(leaseResponse.Credential), revokeProof: []byte(token)},
 	}
@@ -304,8 +312,13 @@ func (c *Client) acquire(ctx context.Context, identityToken string, request Requ
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Idempotency-Key", hex.EncodeToString(idempotencyKey))
 	zero(idempotencyKey)
+	if err := setBrokerAccessHeader(requestCtx, c.brokerAccess, req); err != nil {
+		req.Header.Del("Authorization")
+		return leaseResponse{}, 0, err
+	}
 	resp, err := c.http.Do(req)
 	req.Header.Del("Authorization")
+	req.Header.Del("X-API-Key")
 	if err != nil {
 		return leaseResponse{}, 0, ErrBrokerUnavailable
 	}
@@ -386,8 +399,13 @@ func (c *Client) revokeWithToken(ctx context.Context, identityToken, leaseID str
 	}
 	req.Header.Set("Authorization", "Bearer "+identityToken)
 	req.Header.Set("Accept", "application/json")
+	if err := setBrokerAccessHeader(requestCtx, c.brokerAccess, req); err != nil {
+		req.Header.Del("Authorization")
+		return ErrRevokeFailed, 0
+	}
 	resp, err := c.http.Do(req)
 	req.Header.Del("Authorization")
+	req.Header.Del("X-API-Key")
 	if err != nil {
 		return ErrRevokeFailed, 0
 	}
@@ -449,7 +467,7 @@ func validBearerToken(token string) bool {
 }
 
 func (r Request) validate(maxTTL time.Duration) error {
-	if !nonBlankExact(r.TaskID) || !nonBlankExact(r.Audience) || !nonBlankExact(r.Resource) || r.Resource == "*" || r.TTL < time.Second || r.TTL%time.Second != 0 || r.TTL > maxTTL {
+	if !nonBlankExact(r.TaskID) || !nonBlankExact(r.Audience) || !validResourcePath(r.Resource) || r.TTL < time.Second || r.TTL%time.Second != 0 || r.TTL > maxTTL {
 		return ErrInvalidRequest
 	}
 	if len(r.TargetOrigin) > 2048 {
@@ -463,7 +481,7 @@ func (r Request) validate(maxTTL time.Duration) error {
 	}
 	seen := make(map[string]struct{}, len(r.Actions))
 	for _, action := range r.Actions {
-		if !nonBlankExact(action) || action == "*" || len(action) > 128 {
+		if !validHTTPMethod(action) {
 			return ErrInvalidRequest
 		}
 		if _, ok := seen[action]; ok {
@@ -475,6 +493,32 @@ func (r Request) validate(maxTTL time.Duration) error {
 		return err
 	}
 	return nil
+}
+
+func validResourcePath(resource string) bool {
+	if resource == "" || len(resource) > 2048 || !strings.HasPrefix(resource, "/") || strings.ContainsAny(resource, "?#*\\\r\n\x00") || strings.Contains(resource, "//") {
+		return false
+	}
+	u, err := url.ParseRequestURI(resource)
+	if err != nil || u.IsAbs() || u.Host != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || u.EscapedPath() != resource {
+		return false
+	}
+	for _, segment := range strings.Split(u.Path, "/") {
+		if segment == "." || segment == ".." {
+			return false
+		}
+	}
+	lower := strings.ToLower(resource)
+	return !strings.Contains(lower, "%2f") && !strings.Contains(lower, "%5c") && !strings.Contains(lower, "%25")
+}
+
+func validHTTPMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions:
+		return true
+	default:
+		return false
+	}
 }
 
 func nonBlankExact(s string) bool { return s != "" && strings.TrimSpace(s) == s }

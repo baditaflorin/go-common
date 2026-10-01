@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.102.13] - 2026-10-01
+
+### Fixed
+
+- Authenticate every task-bound broker request at the fleet gateway with the
+  workload's service-scoped broker key, including acquire, revoke, and task
+  cleanup. The task-bound client inherits the key from its TaskManager and
+  never sends it to the credential target.
+
+## [0.102.12] - 2026-10-01
+
+### Added
+
+- Add an HTTPS-only task manager that asks the broker to generate task IDs and
+  task proofs after validating the workload's bootstrap service credential.
+  Bind lease clients to that broker-created task and close malformed task
+  responses when enough proof is available for cleanup.
+- Bind every lease to one canonical target path and an explicit set of HTTP
+  methods; reject query strings and any use outside that exact method/path
+  scope before attaching the credential.
+- Harden task proof redaction, redirect handling, response bounds, and task
+  lifecycle coverage.
+
 ## [0.102.11] - 2026-10-01
 
 ### Added
