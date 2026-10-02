@@ -40,8 +40,11 @@
 //	                       remote collector. HTTP/HTTPS loopback endpoints
 //	                       are allowed only for local development and tests.
 //	GRAPH_SAMPLE_RATE    — float 0..1, default 1.0.
-//	GRAPH_API_KEY        — dedicated event-writer key sent as X-API-Key to
-//	                       POST /events. Never falls back to FLEET_API_KEY.
+//	GRAPH_API_KEY_FILE   — optional protected file containing the dedicated
+//	                       event-writer key. When set, it takes precedence
+//	                       and read failures fail closed without env fallback.
+//	GRAPH_API_KEY        — compatibility env source for the dedicated writer
+//	                       key. Never falls back to FLEET_API_KEY.
 //	GRAPH_READER_API_KEY — dedicated read key for Lookup only. It is never
 //	                       used to write events.
 //	GRAPH_TARGET_ALIASES - optional comma-separated
@@ -64,7 +67,8 @@
 //   - Bounded: the ring buffer plus at most one failed batch caps memory;
 //     oldest ring events drop first when the buffer is full.
 //   - Scoped: writers and readers use separate keys; a broad FLEET_API_KEY is
-//     never considered for graph transport.
+//     never considered for graph transport. File-backed writer keys take
+//     precedence over the compatibility environment source.
 //   - Endpoint-bound: remote graph requests target only the canonical HTTPS
 //     graph host and do not follow redirects, so an environment override or
 //     collector response cannot forward a graph credential elsewhere.

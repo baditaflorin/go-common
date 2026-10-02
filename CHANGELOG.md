@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.16] - 2026-10-02
+
+### Added
+
+- Read the Fleet Graph writer credential from `GRAPH_API_KEY_FILE`, with
+  fail-closed file precedence and the existing environment variable retained
+  as a migration fallback.
+
 ## [0.102.15] - 2026-10-02
 
 ### Fixed

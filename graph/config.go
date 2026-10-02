@@ -40,7 +40,7 @@ func loadConfig() config {
 		// GRAPH_API_KEY is deliberately writer-only. In particular, do
 		// not fall back to FLEET_API_KEY: a graph event writer should
 		// never inherit broad fleet credentials by accident.
-		writerAPIKey: strings.TrimSpace(os.Getenv("GRAPH_API_KEY")),
+		writerAPIKey: loadGraphWriterAPIKey(),
 		// Lookup is a separate read capability. It must not reuse the
 		// writer credential while graph route auth is being split.
 		readerAPIKey:     strings.TrimSpace(os.Getenv("GRAPH_READER_API_KEY")),
@@ -71,6 +71,21 @@ func loadConfig() config {
 		c.flushBatch = 1
 	}
 	return c
+}
+
+// loadGraphWriterAPIKey prefers the protected file mount used by fleet-runner.
+// If GRAPH_API_KEY_FILE is configured but cannot be read or is empty, fail
+// closed instead of falling back to an environment value. The env variable
+// remains a compatibility path for services that have not migrated yet.
+func loadGraphWriterAPIKey() string {
+	if path := strings.TrimSpace(os.Getenv("GRAPH_API_KEY_FILE")); path != "" {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(contents))
+	}
+	return strings.TrimSpace(os.Getenv("GRAPH_API_KEY"))
 }
 
 // parseTrustedCallerIPs accepts only literal IP addresses. Exact host entries
