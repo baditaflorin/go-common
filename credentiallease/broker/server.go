@@ -336,7 +336,8 @@ func (s *Server) acquire(w http.ResponseWriter, r *http.Request) {
 	cancelIssue()
 	defer zero(issued.Value)
 	defer zero(issued.RevokeHandle)
-	if issueErr != nil || !validIssued(issued, grant, now) {
+	issuedAt := s.now().UTC()
+	if issueErr != nil || !validIssued(issued, grant, issuedAt) {
 		if len(issued.RevokeHandle) > 0 {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), cleanupTimeout)
 			_ = s.issuers[grant.Provider].Revoke(cleanupCtx, issued.RevokeHandle)

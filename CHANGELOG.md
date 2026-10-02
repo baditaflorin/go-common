@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.14] - 2026-10-02
+
+### Fixed
+
+- Bound provider-issued credential expiry from the time the issuer returns the
+  credential, avoiding false lease failures caused by provider latency or
+  whole-second expiry timestamps while preserving the requested TTL limit.
+
 ## [0.102.13] - 2026-10-01
 
 ### Fixed

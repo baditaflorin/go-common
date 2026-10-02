@@ -53,6 +53,21 @@ type testIssuer struct {
 	panicOnIssue bool
 }
 
+type advancingTestIssuer struct {
+	now     *time.Time
+	advance time.Duration
+}
+
+func (i advancingTestIssuer) Issue(_ context.Context, grant Grant) (IssuedCredential, error) {
+	*i.now = i.now.Add(i.advance)
+	return IssuedCredential{
+		Value: []byte(testSecret), RevokeHandle: []byte("provider-revoke-handle"),
+		ExpiresAt: i.now.Add(grant.Request.TTL),
+	}, nil
+}
+
+func (advancingTestIssuer) Revoke(context.Context, []byte) error { return nil }
+
 func (i *testIssuer) Issue(_ context.Context, grant Grant) (IssuedCredential, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -230,6 +245,33 @@ func TestAcquireIssuesPolicyBoundLeaseAndKeepsSecretsOutOfAudit(t *testing.T) {
 	}
 	if bytes.Contains(response.Body.Bytes(), []byte(testProof)) {
 		t.Fatal("workload proof appeared in response")
+	}
+}
+
+func TestProviderExpiryIsBoundFromIssueCompletion(t *testing.T) {
+	now := testNow
+	issuer := advancingTestIssuer{now: &now, advance: 250 * time.Millisecond}
+	server, err := New(Config{
+		Audience: "credential-broker", MaxTTL: 5 * time.Minute,
+		Verifier: testVerifier{identity: Identity{Issuer: "https://identity.example", Subject: "worker-1", WorkloadID: "go-app", TaskID: testTask}},
+		Policy:   testPolicy{maxTTL: 3 * time.Minute}, Store: newTestStore(), Auditor: &testAuditor{},
+		Issuers: map[string]Issuer{"fake": issuer}, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	response := sendAcquire(server, acquireBody(testTask, 60), "00112233445566778899aabbccddeeff")
+	if response.Code != http.StatusCreated {
+		t.Fatalf("acquire status = %d; provider expiry measured from completion must be accepted", response.Code)
+	}
+	var lease struct {
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &lease); err != nil {
+		t.Fatal("decode lease response")
+	}
+	if !lease.ExpiresAt.Equal(now.Add(60 * time.Second)) {
+		t.Fatalf("expires_at = %s, want issue completion + 60s", lease.ExpiresAt)
 	}
 }
 
