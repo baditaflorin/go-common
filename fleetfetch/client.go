@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/safehttp"
 )
 
@@ -271,7 +272,10 @@ func NewClient(opts ...Option) *Client {
 		// Public-internet enrichment calls use a separate client (the fallback
 		// field) which correctly inherits the proxy settings.
 		c.cacheClient = &http.Client{
-			Transport: &http.Transport{Proxy: nil},
+			// Keep the cache hop off the environment proxy while recording it
+			// in Fleet Graph. This internal Docker-DNS destination must not go
+			// through Webshare, which cannot resolve it and adds needless latency.
+			Transport: graph.RoundTripper(&http.Transport{Proxy: nil}),
 			Timeout:   c.timeout,
 		}
 	}

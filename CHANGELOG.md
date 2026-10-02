@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.102.15] - 2026-10-02
+
+### Fixed
+
+- Record internal Fleet Fetch Cache requests in Fleet Graph without sending
+  Docker-DNS traffic through the environment proxy, and resolve `go_<name>`
+  container hostnames to canonical service slugs.
+- Make the findings-store outage test deterministic instead of assuming a
+  particular loopback port is unused on CI agents.
+
 ## [0.102.14] - 2026-10-02
 
 ### Fixed

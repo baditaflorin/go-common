@@ -2,10 +2,12 @@
 // emits them to go-fleet-graph. The collector aggregates edges into a
 // queryable live graph; go-fleet-visualizer renders the result.
 //
-// Two chokepoints in go-common already see every fleet call:
+// The standard outbound and inbound chokepoints in go-common observe fleet calls:
 //
 //   - safehttp.NewClient wraps the outbound *http.Transport with
 //     graph.RoundTripper, recording one outbound Event per call.
+//   - fleetfetch's internal cache client uses graph.RoundTripper while
+//     keeping its Docker-DNS request outside the environment proxy.
 //   - server.New runs graph.Middleware inside authentication middleware,
 //     recording one inbound Event per request with a verified service
 //     principal. Unauthenticated or generic principals are recorded as

@@ -79,6 +79,8 @@
 // the cache container's Docker DNS name, reachable from any other
 // container on the same Docker network without auth, TLS, or the
 // proxy_egress detour. This is what fleet producers should use.
+// The internal cache hop bypasses environment proxies and, when Fleet Graph
+// is enabled with a writer key, is recorded as a service-to-service call.
 //
 // External callers (outside the fleet network) should override with
 // the public gateway URL via env:
