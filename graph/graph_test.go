@@ -56,13 +56,15 @@ func TestTemplatisePath(t *testing.T) {
 
 func TestTargetFromHost(t *testing.T) {
 	cases := map[string]string{
-		"go-js-proxy.0exec.com":           "go-js-proxy",
-		"go-pentest-subfinder.0crawl.com": "go-pentest-subfinder",
-		"go-js-proxy.0exec.com:443":       "go-js-proxy",
-		"example.com":                     "external:example.com",
-		"10.10.10.20":                     "internal:10.10.10.20",
-		"localhost":                       "internal:localhost",
-		"":                                "external:unknown",
+		"go-js-proxy.0exec.com":               "go-js-proxy",
+		"go-pentest-subfinder.0crawl.com":     "go-pentest-subfinder",
+		"go-js-proxy.0exec.com:443":           "go-js-proxy",
+		"go_infrastructure_fetch_cache:18205": "infrastructure-fetch-cache",
+		"go_a11y_quick:8272":                  "a11y-quick",
+		"example.com":                         "external:example.com",
+		"10.10.10.20":                         "internal:10.10.10.20",
+		"localhost":                           "internal:localhost",
+		"":                                    "external:unknown",
 	}
 	for in, want := range cases {
 		if got := targetFromHost(in); got != want {

@@ -35,6 +35,16 @@ func targetFromHostWithAliases(host string, aliases map[string]string) string {
 			}
 		}
 	}
+	// Fleet services also use go_<snake_case> Docker DNS names on the
+	// private container network. Convert only that fixed form to the
+	// canonical registry slug; this changes telemetry labels, never the
+	// request destination.
+	if strings.HasPrefix(host, "go_") {
+		slug := strings.ReplaceAll(strings.TrimPrefix(host, "go_"), "_", "-")
+		if validGraphLabel(slug) {
+			return slug
+		}
+	}
 	// LAN dockerhost; collector will resolve by port if possible.
 	if strings.HasPrefix(host, "10.10.10.") || host == "localhost" || host == "127.0.0.1" {
 		return "internal:" + host

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.15] - 2026-10-02
+
+### Fixed
+
+- Record internal Fleet Fetch Cache requests in Fleet Graph without sending
+  Docker-DNS traffic through the environment proxy, and resolve `go_<name>`
+  container hostnames to canonical service slugs.
+
 ## [0.102.14] - 2026-10-02
 
 ### Fixed
