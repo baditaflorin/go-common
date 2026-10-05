@@ -188,7 +188,7 @@ func TestAutoOpenObserveConfigurationFailsClosed(t *testing.T) {
 		}
 	})
 	t.Run("manual endpoint keeps URL and gets scoped auth", func(t *testing.T) {
-		const endpoint = "https://otlp.0exec.com/api/default/v1/traces"
+		const endpoint = "https://openobserve.0own.com/api/default/v1/traces"
 		cfg := &Config{OTLPEndpoint: endpoint}
 		values := map[string]string{"FLEET_SECRETS_API_KEY": "service-key"}
 		called := false
@@ -277,5 +277,70 @@ func TestResolveFleetSecretsAPIKeyFileRejectsUnsafePermissions(t *testing.T) {
 	got, err := resolveFleetSecretsAPIKey(func(name string) string { return values[name] })
 	if err == nil || got != "" || strings.Contains(err.Error(), "ak_secret-never-log") {
 		t.Fatalf("unsafe file was not rejected safely: found=%v err=%v", got != "", err)
+	}
+}
+
+func TestOpenObserveTokenFileTakesPrecedence(t *testing.T) {
+	path := t.TempDir() + "/openobserve-token"
+	const token = "o2oi_canary-only"
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{SampleRate: 0.1}
+	values := map[string]string{
+		openObserveTokenFileEnv: path,
+		"FLEET_SECRETS_API_KEY": "unused-service-key",
+	}
+	called := false
+	err := configureOpenObserveFromFleetSecrets(cfg, func(key string) string { return values[key] }, func(context.Context, string, string) (string, error) {
+		called = true
+		return "unused", nil
+	})
+	if err != nil || called {
+		t.Fatalf("token file should avoid runtime secret lookup: called=%v err=%v", called, err)
+	}
+	if cfg.OTLPEndpoint != defaultOpenObserveEndpoint {
+		t.Fatalf("endpoint=%q, want %q", cfg.OTLPEndpoint, defaultOpenObserveEndpoint)
+	}
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("default:"+token))
+	if cfg.otlpHeaders["Authorization"] != want || cfg.otlpHeaders["stream-name"] != "default" {
+		t.Fatal("token file did not produce the expected scoped OpenObserve headers")
+	}
+}
+
+func TestOpenObserveTokenFileRejectsUnsafePermissions(t *testing.T) {
+	path := t.TempDir() + "/openobserve-token"
+	if err := os.WriteFile(path, []byte("o2oi_private-test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{
+		openObserveTokenFileEnv: path,
+		"FLEET_SECRETS_API_KEY": "unused-service-key",
+	}
+	called := false
+	cfg := &Config{}
+	err := configureOpenObserveFromFleetSecrets(cfg, func(key string) string { return values[key] }, func(context.Context, string, string) (string, error) {
+		called = true
+		return "unused", nil
+	})
+	if err == nil || called || cfg.OTLPEndpoint != "" || len(cfg.otlpHeaders) != 0 {
+		t.Fatalf("unsafe token file was not rejected: called=%v endpoint=%q err=%v", called, cfg.OTLPEndpoint, err)
+	}
+	if strings.Contains(err.Error(), "o2oi_private-test") {
+		t.Fatal("token file error leaked its contents")
+	}
+}
+
+func TestOpenObserveEndpointAllowlistUses0OwnHost(t *testing.T) {
+	if !isApprovedOpenObserveEndpoint("https://openobserve.0own.com/api/default/v1/traces") {
+		t.Fatal("current 0own OpenObserve endpoint was not approved")
+	}
+	for _, endpoint := range []string{
+		"https://otlp.0exec.com/api/default/v1/traces",
+		"https://openobserve.0docker.com/api/default/v1/traces",
+	} {
+		if isApprovedOpenObserveEndpoint(endpoint) {
+			t.Errorf("retired endpoint %q remains approved", endpoint)
+		}
 	}
 }
