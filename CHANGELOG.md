@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.17] - 2026-10-06
+
+### Fixed
+
+- Send Go Common traces to OpenObserve on 0own and support a protected,
+  file-backed ingestion token so enrolled services do not need runtime access
+  to Fleet Secrets.
+
 ## [0.102.16] - 2026-10-02
 
 ### Added
