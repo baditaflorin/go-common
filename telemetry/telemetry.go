@@ -36,9 +36,10 @@ import (
 const instrumentationScope = "github.com/baditaflorin/go-common/telemetry"
 
 const (
-	defaultOpenObserveEndpoint = "https://otlp.0exec.com/api/default/v1/traces"
+	defaultOpenObserveEndpoint = "https://openobserve.0own.com/api/default/v1/traces"
 	defaultFleetSecretsURL     = "https://fleet-secrets.0exec.com"
 	openObserveTokenSecret     = "openobserve_otlp_ingestion_token"
+	openObserveTokenFileEnv    = "OPENOBSERVE_OTLP_INGESTION_TOKEN_FILE"
 )
 
 var (
@@ -75,11 +76,10 @@ func WithSampleRate(rate float64) Option { return func(c *Config) { c.SampleRate
 func WithDisabled() Option { return func(c *Config) { c.Disabled = true } }
 
 // Init installs W3C Trace Context propagation and initializes the global SDK
-// if an endpoint is configured. Services with a dedicated FLEET_SECRETS_API_KEY
-// (or legacy FLEET_API_KEY) read the ingestion-only OpenObserve token from Go
-// Fleet Secrets and export
-// directly over HTTPS. It is safe to call repeatedly from tests and from server
-// construction; one process shares one provider/exporter.
+// if an endpoint is configured. Services can use a protected token file or a
+// dedicated Fleet Secrets API key to load the ingestion-only OpenObserve token
+// and export directly over HTTPS. It is safe to call repeatedly from tests and
+// from server construction; one process shares one provider/exporter.
 func Init(serviceName, serviceVersion string, opts ...Option) *Config {
 	propagatorOnce.Do(func() { otel.SetTextMapPropagator(propagation.TraceContext{}) })
 	cfg := &Config{ServiceName: serviceName, ServiceVersion: serviceVersion, SampleRate: 0.1}
@@ -216,7 +216,7 @@ func newProvider(cfg *Config) (*sdktrace.TracerProvider, error) {
 }
 
 // isApprovedOpenObserveEndpoint limits vault-backed OpenObserve credentials
-// to the stable fleet hostname and the previous hostname during migration.
+// to the current OpenObserve host.
 func isApprovedOpenObserveEndpoint(raw string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -226,7 +226,7 @@ func isApprovedOpenObserveEndpoint(raw string) bool {
 		return false
 	}
 	host := strings.ToLower(parsed.Hostname())
-	return host == "otlp.0exec.com" || host == "openobserve.0docker.com"
+	return host == "openobserve.0own.com"
 }
 
 // resolveFleetSecretsAPIKey accepts a secret file so deployments can keep the
@@ -254,14 +254,36 @@ func resolveFleetSecretsAPIKey(getenv func(string) string) (string, error) {
 	return getenv("FLEET_API_KEY"), nil
 }
 
+// resolveOpenObserveTokenFile accepts a protected file so deployments can
+// provide the ingestion-only token without requiring runtime access to Fleet
+// Secrets. Secret files must be regular files with no group/world permissions.
+func resolveOpenObserveTokenFile(getenv func(string) string) (string, error) {
+	path := strings.TrimSpace(getenv(openObserveTokenFileEnv))
+	if path == "" {
+		return "", nil
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return "", errors.New("telemetry: OpenObserve ingestion token file is unavailable or has unsafe permissions")
+	}
+	value, err := os.ReadFile(path)
+	if err != nil {
+		return "", errors.New("telemetry: OpenObserve ingestion token file could not be read")
+	}
+	token := strings.TrimSpace(string(value))
+	if token == "" {
+		return "", errors.New("telemetry: OpenObserve ingestion token file is empty")
+	}
+	return token, nil
+}
+
 // configureOpenObserveFromFleetSecrets enables direct OTLP export when a
-// service has a dedicated FLEET_SECRETS_API_KEY (preferred), a protected
-// FLEET_SECRETS_API_KEY_FILE, or a legacy FLEET_API_KEY. The token is ingestion-only and is fetched over verified HTTPS
-// from the per-service allowlisted vault identity.
-// Explicit endpoints take precedence over the default URL. If a fleet secret
-// API key is present, its allowlisted ingestion token authenticates that
-// endpoint unless explicit OTLP headers are supplied. Explicit OTLP headers
-// are applied by newProvider and override the generated Authorization header.
+// service has a protected OpenObserve token file, a dedicated
+// FLEET_SECRETS_API_KEY, a protected FLEET_SECRETS_API_KEY_FILE, or a legacy
+// FLEET_API_KEY. The token is ingestion-only and is fetched over verified HTTPS
+// from the per-service allowlisted vault identity when a token file is absent.
+// Explicit endpoints take precedence over the default URL. Explicit OTLP
+// headers bypass this automatic credential configuration.
 func configureOpenObserveFromFleetSecrets(cfg *Config, getenv func(string) string, readToken func(context.Context, string, string) (string, error)) error {
 	if cfg == nil || cfg.Disabled || getenv("OTEL_EXPORTER_OTLP_HEADERS") != "" {
 		return nil
@@ -270,34 +292,39 @@ func configureOpenObserveFromFleetSecrets(cfg *Config, getenv func(string) strin
 		// Never send an OpenObserve ingestion credential to an arbitrary OTLP host.
 		return nil
 	}
-	apiKey, err := resolveFleetSecretsAPIKey(getenv)
+	token, err := resolveOpenObserveTokenFile(getenv)
 	if err != nil {
 		return err
 	}
-	if apiKey == "" {
-		return nil
+	if token == "" {
+		apiKey, err := resolveFleetSecretsAPIKey(getenv)
+		if err != nil {
+			return err
+		}
+		if apiKey == "" {
+			return nil
+		}
+		secretsURL := getenv("FLEET_SECRETS_URL")
+		if secretsURL == "" {
+			secretsURL = defaultFleetSecretsURL
+		}
+		parsed, err := url.Parse(strings.TrimSpace(secretsURL))
+		if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Hostname(), "fleet-secrets.0exec.com") || (parsed.Port() != "" && parsed.Port() != "443") || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return errors.New("telemetry: fleet secrets URL must use the approved HTTPS host without credentials or query data")
+		}
+		if readToken == nil {
+			return errors.New("telemetry: fleet secrets reader is unavailable")
+		}
+		token, err = readToken(context.Background(), secretsURL, apiKey)
+		if err != nil || token == "" {
+			return errors.New("telemetry: could not load OpenObserve ingestion credential from fleet secrets")
+		}
 	}
-	secretsURL := getenv("FLEET_SECRETS_URL")
-	if secretsURL == "" {
-		secretsURL = defaultFleetSecretsURL
-	}
-	parsed, err := url.Parse(strings.TrimSpace(secretsURL))
-	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Hostname(), "fleet-secrets.0exec.com") || (parsed.Port() != "" && parsed.Port() != "443") || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return errors.New("telemetry: fleet secrets URL must use the approved HTTPS host without credentials or query data")
-	}
-	if readToken == nil {
-		return errors.New("telemetry: fleet secrets reader is unavailable")
-	}
-	token, err := readToken(context.Background(), secretsURL, apiKey)
-	if err != nil || token == "" {
-		return errors.New("telemetry: could not load OpenObserve ingestion credential from fleet secrets")
-	}
-	encoded := base64.StdEncoding.EncodeToString([]byte("default:" + token))
 	if cfg.OTLPEndpoint == "" {
 		cfg.OTLPEndpoint = defaultOpenObserveEndpoint
 	}
 	cfg.otlpHeaders = map[string]string{
-		"Authorization": "Basic " + encoded,
+		"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte("default:"+token)),
 		"stream-name":   "default",
 	}
 	return nil
