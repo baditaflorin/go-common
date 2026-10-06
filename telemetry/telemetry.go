@@ -36,7 +36,7 @@ import (
 const instrumentationScope = "github.com/baditaflorin/go-common/telemetry"
 
 const (
-	defaultOpenObserveEndpoint = "https://openobserve.0own.com/api/default/v1/traces"
+	defaultOpenObserveEndpoint = "https://otlp.0exec.com/api/default/v1/traces"
 	defaultFleetSecretsURL     = "https://fleet-secrets.0exec.com"
 	openObserveTokenSecret     = "openobserve_otlp_ingestion_token"
 	openObserveTokenFileEnv    = "OPENOBSERVE_OTLP_INGESTION_TOKEN_FILE"
@@ -216,7 +216,7 @@ func newProvider(cfg *Config) (*sdktrace.TracerProvider, error) {
 }
 
 // isApprovedOpenObserveEndpoint limits vault-backed OpenObserve credentials
-// to the current OpenObserve host.
+// to the stable OTLP ingress and current OpenObserve host.
 func isApprovedOpenObserveEndpoint(raw string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -226,7 +226,7 @@ func isApprovedOpenObserveEndpoint(raw string) bool {
 		return false
 	}
 	host := strings.ToLower(parsed.Hostname())
-	return host == "openobserve.0own.com"
+	return host == "otlp.0exec.com" || host == "openobserve.0own.com"
 }
 
 // resolveFleetSecretsAPIKey accepts a secret file so deployments can keep the
@@ -277,7 +277,7 @@ func resolveOpenObserveTokenFile(getenv func(string) string) (string, error) {
 	return token, nil
 }
 
-// configureOpenObserveFromFleetSecrets enables direct OTLP export when a
+// configureOpenObserveFromFleetSecrets enables OTLP export when a
 // service has a protected OpenObserve token file, a dedicated
 // FLEET_SECRETS_API_KEY, a protected FLEET_SECRETS_API_KEY_FILE, or a legacy
 // FLEET_API_KEY. The token is ingestion-only and is fetched over verified HTTPS

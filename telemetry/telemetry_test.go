@@ -188,7 +188,7 @@ func TestAutoOpenObserveConfigurationFailsClosed(t *testing.T) {
 		}
 	})
 	t.Run("manual endpoint keeps URL and gets scoped auth", func(t *testing.T) {
-		const endpoint = "https://openobserve.0own.com/api/default/v1/traces"
+		const endpoint = "https://otlp.0exec.com/api/default/v1/traces"
 		cfg := &Config{OTLPEndpoint: endpoint}
 		values := map[string]string{"FLEET_SECRETS_API_KEY": "service-key"}
 		called := false
@@ -331,16 +331,23 @@ func TestOpenObserveTokenFileRejectsUnsafePermissions(t *testing.T) {
 	}
 }
 
-func TestOpenObserveEndpointAllowlistUses0OwnHost(t *testing.T) {
-	if !isApprovedOpenObserveEndpoint("https://openobserve.0own.com/api/default/v1/traces") {
-		t.Fatal("current 0own OpenObserve endpoint was not approved")
-	}
+func TestOpenObserveEndpointAllowlistUsesApprovedHosts(t *testing.T) {
 	for _, endpoint := range []string{
 		"https://otlp.0exec.com/api/default/v1/traces",
+		"https://openobserve.0own.com/api/default/v1/traces",
+	} {
+		if !isApprovedOpenObserveEndpoint(endpoint) {
+			t.Errorf("approved OpenObserve endpoint %q was rejected", endpoint)
+		}
+	}
+	for _, endpoint := range []string{
 		"https://openobserve.0docker.com/api/default/v1/traces",
+		"https://collector.example/api/default/v1/traces",
+		"http://otlp.0exec.com/api/default/v1/traces",
+		"https://otlp.0exec.com:8443/api/default/v1/traces",
 	} {
 		if isApprovedOpenObserveEndpoint(endpoint) {
-			t.Errorf("retired endpoint %q remains approved", endpoint)
+			t.Errorf("unapproved endpoint %q was approved", endpoint)
 		}
 	}
 }

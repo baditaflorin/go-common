@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.102.18] - 2026-10-06
+
+### Fixed
+
+- Route default OTLP exports through `otlp.0exec.com` and attach the
+  service-scoped OpenObserve token to that approved ingress. Preserve the
+  current `openobserve.0own.com` route during migration while rejecting the
+  retired 0docker endpoint.
+
 ## [0.102.17] - 2026-10-06
 
 ### Fixed
