@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.102.23] - 2026-10-07
+
+### Added
+
+- Share the strict v1 DSSE deployment-authorization statement, Ed25519 signer,
+  and verifier between the deployment authority and fleet runner.
+
 ## [0.102.22] - 2026-10-07
 
 ### Added
