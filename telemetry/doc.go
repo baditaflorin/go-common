@@ -11,7 +11,7 @@
 // override, export uses https://otlp.0exec.com/api/default/v1/traces. The stable
 // hostname can move between backends through DNS or gateway routing. An
 // OTEL_EXPORTER_OTLP_ENDPOINT override is preserved; the vault token is attached
-// only for otlp.0exec.com or the legacy openobserve.0docker.com hostname. Other
+// only for otlp.0exec.com or the current openobserve.0own.com hostname. Other
 // collector hosts must use OTEL_EXPORTER_OTLP_HEADERS for their own credentials.
 // Header values follow the OpenTelemetry comma-separated, URL-escaped key=value
 // convention.
