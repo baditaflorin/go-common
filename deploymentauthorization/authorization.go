@@ -29,10 +29,11 @@ const (
 )
 
 var (
-	keyIDPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-	policyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
-	runIDPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,127}$`)
-	ErrDenied     = errors.New("deployment authorization denied")
+	keyIDPattern            = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	policyPattern           = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
+	runIDPattern            = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,127}$`)
+	evidenceIdentityPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@/#-]{0,254}$`)
+	ErrDenied               = errors.New("deployment authorization denied")
 )
 
 // Statement is the exact v1 authority decision payload consumed by
@@ -214,7 +215,7 @@ func validateStatement(intent deploymentintent.V1, principal string, statement S
 	if !deploymentintent.ValidActor(statement.CIProvider) || !runIDPattern.MatchString(statement.CIRunID) || statement.CIConclusion != "success" || statement.CISourceCommit != intent.SourceCommit {
 		return errors.New("authorization CI evidence is incomplete or mismatched")
 	}
-	if !deploymentintent.ValidActor(statement.ProvenanceIssuer) || !deploymentintent.ValidActor(statement.ProvenanceBuilder) ||
+	if !evidenceIdentityPattern.MatchString(statement.ProvenanceIssuer) || !evidenceIdentityPattern.MatchString(statement.ProvenanceBuilder) ||
 		statement.ProvenanceArtifact != intent.ArtifactDigest || statement.ProvenanceSourceCommit != intent.SourceCommit {
 		return errors.New("authorization artifact provenance is incomplete or mismatched")
 	}

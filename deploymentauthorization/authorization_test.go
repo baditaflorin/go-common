@@ -35,7 +35,8 @@ func testStatement(t *testing.T, intent deploymentintent.V1, now time.Time) Stat
 		IntentID: intent.IntentID, IntentDigest: digest, ServiceID: intent.ServiceID, Environment: intent.Environment,
 		ArtifactDigest: intent.ArtifactDigest, SourceCommit: intent.SourceCommit, TargetPool: intent.TargetPool,
 		RollbackDigest: intent.RollbackDigest, CIProvider: "woodpecker", CIRunID: "pipeline/73", CIConclusion: "success",
-		CISourceCommit: intent.SourceCommit, ProvenanceIssuer: "ci.0exec.com", ProvenanceBuilder: "fleet-builder",
+		CISourceCommit: intent.SourceCommit, ProvenanceIssuer: "ci.0exec.com",
+		ProvenanceBuilder:  "https://github.com/baditaflorin/go_fleet_runner#publish-image",
 		ProvenanceArtifact: intent.ArtifactDigest, ProvenanceSourceCommit: intent.SourceCommit,
 		PolicyVersion: "phase3/staging-v1", IssuedAt: now, ExpiresAt: now.Add(4 * time.Minute),
 	}
