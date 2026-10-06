@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +18,31 @@ func newTestSender(cfg config, batchSize int) (*sender, *ring, *atomicCounters) 
 		cfg.flushBatch = batchSize
 	}
 	return newSender(cfg, "go-test-sender", "test", r, counters), r, counters
+}
+
+func TestSenderUsesRotatedFileBackedWriterKeyPerBatch(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("X-API-Key"))
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+	keyPath := filepath.Join(t.TempDir(), "graph-writer-key")
+	if err := os.WriteFile(keyPath, []byte("first-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config{enabled: true, collectorURL: srv.URL, writerAPIKeyFile: keyPath, flushBatch: 1}
+	s, ring, _ := newTestSender(cfg, 1)
+	_, _ = ring.push(Event{Path: "/first"})
+	s.flush()
+	if err := os.WriteFile(keyPath, []byte("replacement-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = ring.push(Event{Path: "/second"})
+	s.flush()
+	if len(seen) != 2 || seen[0] != "first-key" || seen[1] != "replacement-key" {
+		t.Fatalf("collector received %q, want each batch authenticated with its current file key", seen)
+	}
 }
 
 func TestGraphEventEmissionIsExplicitAndCredentialScoped(t *testing.T) {
