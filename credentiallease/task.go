@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/baditaflorin/go-common/spiffe"
 )
 
 // ErrTaskMismatch reports an attempted lease request for a task other than the
@@ -60,12 +62,15 @@ func setBrokerAccessHeader(ctx context.Context, source BootstrapCredentialSource
 // sent only over the validated HTTPS endpoint and is never logged by this
 // package.
 type TaskManagerConfig struct {
-	Endpoint       string
-	BrokerAudience string
-	Bootstrap      BootstrapCredentialSource
-	TLSConfig      *tls.Config
-	RequestTimeout time.Duration
-	TaskTTL        time.Duration
+	Endpoint         string
+	BrokerAudience   string
+	Bootstrap        BootstrapCredentialSource
+	Identity         IdentityTokenSource
+	IdentityAudience string
+	SPIFFEClient     *spiffe.HTTPClient
+	TLSConfig        *tls.Config
+	RequestTimeout   time.Duration
+	TaskTTL          time.Duration
 }
 
 func (TaskManagerConfig) String() string { return "credentiallease.TaskManagerConfig([REDACTED])" }
@@ -83,13 +88,22 @@ func (c TaskManagerConfig) MarshalJSON() ([]byte, error) {
 }
 
 // TaskManager authenticates service workloads and asks the broker to create a
-// broker-owned task identity. It is safe for concurrent use if Bootstrap is
-// safe for concurrent use.
+// broker-owned task identity. It uses exactly one bootstrap API-key source or
+// SPIFFE mTLS client. It is safe for concurrent use when its selected source
+// and transport are safe for concurrent use.
 type TaskManager struct {
-	endpoint       string
-	brokerAudience string
-	bootstrap      BootstrapCredentialSource
-	http           *http.Client
+	endpoint         string
+	brokerAudience   string
+	bootstrap        BootstrapCredentialSource
+	identity         IdentityTokenSource
+	identityAudience string
+	http             interface {
+		Do(*http.Request) (*http.Response, error)
+		CloseIdleConnections()
+	}
+	spiffeClient   *spiffe.HTTPClient
+	closeOnce      sync.Once
+	closeErr       error
 	requestTimeout time.Duration
 	taskTTL        time.Duration
 	tlsConfig      *tls.Config
@@ -97,10 +111,14 @@ type TaskManager struct {
 
 // NewTaskManager validates configuration and creates an HTTPS-only client.
 // The transport does not use environment proxy settings and never follows
-// redirects, so a bootstrap key cannot be forwarded to another host.
+// redirects, so workload proofs cannot be forwarded to another host.
 func NewTaskManager(cfg TaskManagerConfig) (*TaskManager, error) {
 	endpoint, err := validateEndpoint(cfg.Endpoint)
-	if err != nil || !nonBlankExact(cfg.BrokerAudience) || len(cfg.BrokerAudience) > 512 || cfg.Bootstrap == nil {
+	if err != nil || !nonBlankExact(cfg.BrokerAudience) || len(cfg.BrokerAudience) > 512 ||
+		(cfg.SPIFFEClient == nil && cfg.Bootstrap == nil) ||
+		(cfg.SPIFFEClient != nil && (cfg.Bootstrap != nil || cfg.Identity != nil)) ||
+		(cfg.Identity != nil && (!nonBlankExact(cfg.IdentityAudience) || len(cfg.IdentityAudience) > 512)) ||
+		(cfg.Identity == nil && cfg.IdentityAudience != "") || (cfg.SPIFFEClient != nil && cfg.TLSConfig != nil) {
 		return nil, ErrInvalidConfig
 	}
 	requestTimeout := cfg.RequestTimeout
@@ -130,32 +148,51 @@ func NewTaskManager(cfg TaskManagerConfig) (*TaskManager, error) {
 			return nil, ErrInvalidConfig
 		}
 	}
-	transport := &http.Transport{
-		Proxy:                  nil,
-		TLSClientConfig:        tlsConfig,
-		TLSHandshakeTimeout:    5 * time.Second,
-		ResponseHeaderTimeout:  requestTimeout,
-		IdleConnTimeout:        30 * time.Second,
-		MaxIdleConns:           4,
-		MaxIdleConnsPerHost:    2,
-		MaxConnsPerHost:        4,
-		MaxResponseHeaderBytes: 16 << 10,
-		DisableCompression:     true,
+	if cfg.SPIFFEClient != nil {
+		tlsConfig = nil
 	}
-	return &TaskManager{
-		endpoint:       endpoint,
-		brokerAudience: strings.TrimSpace(cfg.BrokerAudience),
-		bootstrap:      cfg.Bootstrap,
-		http: &http.Client{
+	var storedTLSConfig *tls.Config
+	if tlsConfig != nil {
+		storedTLSConfig = tlsConfig.Clone()
+	}
+	var httpClient interface {
+		Do(*http.Request) (*http.Response, error)
+		CloseIdleConnections()
+	}
+	if cfg.SPIFFEClient != nil {
+		httpClient = cfg.SPIFFEClient
+	} else {
+		transport := &http.Transport{
+			Proxy:                  nil,
+			TLSClientConfig:        tlsConfig,
+			TLSHandshakeTimeout:    5 * time.Second,
+			ResponseHeaderTimeout:  requestTimeout,
+			IdleConnTimeout:        30 * time.Second,
+			MaxIdleConns:           4,
+			MaxIdleConnsPerHost:    2,
+			MaxConnsPerHost:        4,
+			MaxResponseHeaderBytes: 16 << 10,
+			DisableCompression:     true,
+		}
+		httpClient = &http.Client{
 			Transport: transport,
 			Timeout:   requestTimeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
-		},
-		requestTimeout: requestTimeout,
-		taskTTL:        taskTTL,
-		tlsConfig:      tlsConfig.Clone(),
+		}
+	}
+	return &TaskManager{
+		endpoint:         endpoint,
+		brokerAudience:   strings.TrimSpace(cfg.BrokerAudience),
+		bootstrap:        cfg.Bootstrap,
+		identity:         cfg.Identity,
+		identityAudience: cfg.IdentityAudience,
+		spiffeClient:     cfg.SPIFFEClient,
+		http:             httpClient,
+		requestTimeout:   requestTimeout,
+		taskTTL:          taskTTL,
+		tlsConfig:        storedTLSConfig,
 	}, nil
 }
 
@@ -163,29 +200,51 @@ func NewTaskManager(cfg TaskManagerConfig) (*TaskManager, error) {
 // random task ID, and return a short-lived signed proof. The caller cannot
 // choose the task ID.
 func (m *TaskManager) BeginTask(ctx context.Context) (*Task, error) {
-	if m == nil || m.http == nil || ctx == nil || m.bootstrap == nil {
+	if m == nil || m.http == nil || ctx == nil || (m.bootstrap == nil && m.spiffeClient == nil) {
 		return nil, ErrInvalidConfig
 	}
-	identityCtx, cancel := context.WithTimeout(ctx, m.requestTimeout)
-	key, err := m.bootstrap.Credential(identityCtx)
-	cancel()
-	if err != nil || !validBootstrapCredential(key) {
-		key = ""
-		return nil, ErrIdentityUnavailable
+	key := ""
+	token := ""
+	if m.spiffeClient == nil {
+		identityCtx, cancel := context.WithTimeout(ctx, m.requestTimeout)
+		var err error
+		key, err = m.bootstrap.Credential(identityCtx)
+		if err != nil || !validBootstrapCredential(key) {
+			cancel()
+			key = ""
+			return nil, ErrIdentityUnavailable
+		}
+		if m.identity != nil {
+			token, err = m.identity.Token(identityCtx, m.identityAudience)
+		}
+		cancel()
+		if err != nil || (m.identity != nil && !validBearerToken(token)) {
+			key = ""
+			token = ""
+			return nil, ErrIdentityUnavailable
+		}
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, m.requestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, m.endpoint+"/v1/tasks", bytes.NewReader(nil))
 	if err != nil {
 		key = ""
+		token = ""
 		return nil, ErrTaskCreateFailed
 	}
-	req.Header.Set("X-API-Key", key)
+	if key != "" {
+		req.Header.Set("X-API-Key", key)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Cache-Control", "no-store")
 	resp, err := m.http.Do(req)
 	req.Header.Del("X-API-Key")
+	req.Header.Del("Authorization")
 	key = ""
+	token = ""
 	if err != nil {
 		return nil, ErrTaskCreateFailed
 	}
@@ -218,6 +277,21 @@ func (m *TaskManager) BeginTask(ctx context.Context) (*Task, error) {
 	proof := []byte(out.Proof)
 	out.Proof = ""
 	return &Task{manager: m, id: out.TaskID, proof: proof, expiresAt: out.ExpiresAt, done: make(chan struct{})}, nil
+}
+
+// Close releases the rotating SPIFFE identity source, if configured.
+func (m *TaskManager) Close() error {
+	if m == nil {
+		return nil
+	}
+	m.closeOnce.Do(func() {
+		if m.spiffeClient != nil {
+			m.closeErr = m.spiffeClient.Close()
+		} else if m.http != nil {
+			m.http.CloseIdleConnections()
+		}
+	})
+	return m.closeErr
 }
 
 // WithTask creates one broker-owned task identity, runs fn with that task,
@@ -257,9 +331,11 @@ func (m *TaskManager) discardTask(ctx context.Context, id, proof string) {
 	}
 	req.Header.Set("Authorization", "Bearer "+proof)
 	req.Header.Set("Cache-Control", "no-store")
-	if err := setBrokerAccessHeader(cleanupCtx, m.bootstrap, req); err != nil {
-		req.Header.Del("Authorization")
-		return
+	if m.spiffeClient == nil {
+		if err := setBrokerAccessHeader(cleanupCtx, m.bootstrap, req); err != nil {
+			req.Header.Del("Authorization")
+			return
+		}
 	}
 	resp, err := m.http.Do(req)
 	req.Header.Del("Authorization")
@@ -339,6 +415,7 @@ func (t *Task) Client(cfg Config) (*TaskClient, error) {
 	cfg.Identity = taskTokenSource{task: t}
 	cfg.BrokerAccess = t.manager.bootstrap
 	cfg.TLSConfig = t.manager.tlsConfig
+	cfg.SPIFFEClient = t.manager.spiffeClient
 	client, err := NewClient(cfg)
 	if err != nil {
 		return nil, err
@@ -383,10 +460,12 @@ func (t *Task) Close(ctx context.Context) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+string(proof))
 	req.Header.Set("Cache-Control", "no-store")
-	if err := setBrokerAccessHeader(closeCtx, t.manager.bootstrap, req); err != nil {
-		req.Header.Del("Authorization")
-		zero(proof)
-		return ErrTaskCloseFailed
+	if t.manager.spiffeClient == nil {
+		if err := setBrokerAccessHeader(closeCtx, t.manager.bootstrap, req); err != nil {
+			req.Header.Del("Authorization")
+			zero(proof)
+			return ErrTaskCloseFailed
+		}
 	}
 	resp, err := t.manager.http.Do(req)
 	req.Header.Del("Authorization")

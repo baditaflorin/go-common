@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/baditaflorin/go-common/spiffe"
 )
 
 const taskTestProof = "header.payload.signature"
@@ -218,6 +220,50 @@ func TestTaskManagerCreatesTaskAndTaskClientRevokesLease(t *testing.T) {
 	}
 }
 
+func TestTaskManagerAddsSPIFFEProofAlongsideGatewayKey(t *testing.T) {
+	const token = "spiffe.jwt.svid"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete && r.URL.Path == "/v1/tasks/task-123" && r.Header.Get("Authorization") == "Bearer "+taskTestProof {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/tasks" || r.Header.Get("X-API-Key") != "bootstrap-service-key" || r.Header.Get("Authorization") != "Bearer "+token {
+			http.Error(w, "denied", http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(struct {
+			TaskID    string    `json:"task_id"`
+			Proof     string    `json:"proof"`
+			ExpiresAt time.Time `json:"expires_at"`
+		}{"task-123", taskTestProof, time.Now().Add(5 * time.Minute).UTC()})
+	}))
+	defer server.Close()
+	pool := x509.NewCertPool()
+	pool.AddCert(server.Certificate())
+	var gotAudience string
+	manager, err := NewTaskManager(TaskManagerConfig{
+		Endpoint: server.URL, BrokerAudience: "https://broker.example",
+		IdentityAudience: "https://broker.example",
+		Bootstrap:        BootstrapCredentialFunc(func(context.Context) (string, error) { return "bootstrap-service-key", nil }),
+		Identity: IdentityTokenSourceFunc(func(_ context.Context, audience string) (string, error) {
+			gotAudience = audience
+			return token, nil
+		}),
+		TLSConfig: &tls.Config{RootCAs: pool}, TaskTTL: 5 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := manager.BeginTask(context.Background())
+	if err != nil || task.ID() != "task-123" || gotAudience != "https://broker.example" {
+		t.Fatalf("SPIFFE-backed task creation failed: task=%v audience=%q err=%v", task, gotAudience, err)
+	}
+	if err := task.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTaskClientRejectsCallerChosenTaskID(t *testing.T) {
 	var acquired atomic.Int32
 	server := taskTestServer(t, &acquired)
@@ -301,5 +347,28 @@ func TestTaskManagerClosesTaskAfterMalformedCreateResponse(t *testing.T) {
 	}
 	if !closed.Load() {
 		t.Fatal("broker-created task was not closed after an unusable create response")
+	}
+}
+
+func TestTaskManagerSupportsSPIFFEmTLSWithoutBootstrapKey(t *testing.T) {
+	manager, err := NewTaskManager(TaskManagerConfig{
+		Endpoint: "https://broker.internal:8443", BrokerAudience: "task-credential-broker",
+		SPIFFEClient: &spiffe.HTTPClient{},
+	})
+	if err != nil {
+		t.Fatalf("SPIFFE-only manager configuration rejected: %v", err)
+	}
+	defer manager.Close()
+	if manager.bootstrap != nil || manager.identity != nil || manager.tlsConfig != nil {
+		t.Fatal("SPIFFE mTLS mode must not retain a bootstrap key, JWT source, or second TLS configuration")
+	}
+
+	task := &Task{manager: manager, id: "task-123", proof: []byte(taskTestProof), expiresAt: time.Now().Add(time.Minute)}
+	client, err := task.Client(Config{MaxLeaseTTL: time.Minute})
+	if err != nil {
+		t.Fatalf("task-bound client did not compose with SPIFFE mTLS: %v", err)
+	}
+	if client.client.brokerAccess != nil || client.client.spiffeClient != manager.spiffeClient || client.client.identity == nil {
+		t.Fatal("task-bound lease client must use its task proof plus the manager's SPIFFE transport")
 	}
 }
