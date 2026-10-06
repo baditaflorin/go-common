@@ -471,6 +471,33 @@ func TestConstructorAndAuthenticationFailClosed(t *testing.T) {
 	}
 }
 
+func TestEmptyIssuerMapSupportsDenyAllAndStillFailsClosed(t *testing.T) {
+	cfg := Config{
+		Audience: "credential-broker",
+		MaxTTL:   time.Minute,
+		Verifier: testVerifier{identity: Identity{Issuer: "https://identity.example", Subject: "worker-1", WorkloadID: "go-app", TaskID: testTask}},
+		Policy:   testPolicy{maxTTL: time.Minute},
+		Store:    newTestStore(),
+		Auditor:  &testAuditor{},
+		Issuers:  map[string]Issuer{},
+	}
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() with an explicit empty issuer map: %v", err)
+	}
+	if _, err := New(Config{
+		Audience: cfg.Audience, MaxTTL: cfg.MaxTTL, Verifier: cfg.Verifier,
+		Policy: cfg.Policy, Store: cfg.Store, Auditor: cfg.Auditor,
+	}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("New() with an absent issuer map = %v, want invalid config", err)
+	}
+
+	recorder := sendAcquire(server, acquireBody(testTask, 30), "00112233445566778899aabbccddeeff")
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("grant without a configured issuer status = %d, want 403", recorder.Code)
+	}
+}
+
 func TestDuplicateSecurityHeadersAreRejected(t *testing.T) {
 	server, issuer, _, _ := newTestServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/v1/leases", bytes.NewReader(acquireBody(testTask, 60)))

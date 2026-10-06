@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.102.21] - 2026-10-06
+
+### Fixed
+
+- Allow an explicit empty provider-issuer map for default-deny credential
+  broker policies while rejecting every grant without a configured issuer.
+
 ## [0.102.20] - 2026-10-06
 
 ### Added

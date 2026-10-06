@@ -201,8 +201,10 @@ type Server struct {
 }
 
 // New validates all mandatory dependencies and returns a broker HTTP handler.
+// A non-nil empty issuer map is valid for deny-all policies; grants without a
+// configured issuer are rejected by acquire before provider access.
 func New(cfg Config) (*Server, error) {
-	if !validClaim(cfg.Audience, 512) || cfg.Verifier == nil || cfg.Policy == nil || cfg.Store == nil || cfg.Auditor == nil || len(cfg.Issuers) == 0 {
+	if !validClaim(cfg.Audience, 512) || cfg.Verifier == nil || cfg.Policy == nil || cfg.Store == nil || cfg.Auditor == nil || cfg.Issuers == nil {
 		return nil, ErrInvalidConfig
 	}
 	maxTTL := cfg.MaxTTL
