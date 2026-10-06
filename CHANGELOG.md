@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.102.22] - 2026-10-07
+
+### Added
+
+- Add a shared, strict v1 deployment-intent codec and canonical digest for
+  control-plane services and the fleet runner.
+
 ## [0.102.21] - 2026-10-06
 
 ### Fixed
