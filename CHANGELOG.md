@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.102.24] - 2026-10-07
+
+### Fixed
+
+- Accept bounded URI-fragment characters in signed provenance identity fields,
+  preserving the exact SLSA builder identity used by `publish-image`.
+
 ## [0.102.23] - 2026-10-07
 
 ### Added
