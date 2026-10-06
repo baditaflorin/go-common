@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/baditaflorin/go-common/spiffe"
 )
 
 const (
@@ -75,14 +77,16 @@ type Observer interface {
 }
 
 // Config configures the broker client. Endpoint must be an HTTPS origin or
-// path. TLSConfig may supply private roots and a client certificate for mTLS;
-// insecure TLS settings are rejected. Identity is required and must provide a
-// short-lived proof for BrokerAudience.
+// path. Identity is required and must provide the broker-signed task proof for
+// BrokerAudience. Exactly one of BrokerAccess or SPIFFEClient supplies the
+// transport-side caller authentication. SPIFFEClient must validate the exact
+// broker SPIFFE server ID and present this workload's X.509-SVID.
 type Config struct {
 	Endpoint       string
 	BrokerAudience string
 	Identity       IdentityTokenSource
 	BrokerAccess   BootstrapCredentialSource
+	SPIFFEClient   *spiffe.HTTPClient
 	TLSConfig      *tls.Config
 	MaxLeaseTTL    time.Duration
 	RequestTimeout time.Duration
@@ -104,13 +108,17 @@ func (c Config) MarshalJSON() ([]byte, error) {
 }
 
 // Client talks to a task-bound credential broker. It is safe for concurrent
-// use when its IdentityTokenSource and Observer are safe for concurrent use.
+// use when its identity source, transport, and Observer are safe for concurrent use.
 type Client struct {
 	endpoint       string
 	brokerAudience string
 	identity       IdentityTokenSource
 	brokerAccess   BootstrapCredentialSource
-	http           *http.Client
+	http           interface {
+		Do(*http.Request) (*http.Response, error)
+		CloseIdleConnections()
+	}
+	spiffeClient   *spiffe.HTTPClient
 	maxLeaseTTL    time.Duration
 	requestTimeout time.Duration
 	revokeTimeout  time.Duration
@@ -122,7 +130,8 @@ type Client struct {
 // unintended host. The transport does not use environment proxy settings.
 func NewClient(cfg Config) (*Client, error) {
 	endpoint, err := validateEndpoint(cfg.Endpoint)
-	if err != nil || !nonBlankExact(cfg.BrokerAudience) || len(cfg.BrokerAudience) > 512 || cfg.Identity == nil || cfg.BrokerAccess == nil {
+	if err != nil || !nonBlankExact(cfg.BrokerAudience) || len(cfg.BrokerAudience) > 512 || cfg.Identity == nil ||
+		(cfg.BrokerAccess == nil) == (cfg.SPIFFEClient == nil) || (cfg.SPIFFEClient != nil && cfg.TLSConfig != nil) {
 		return nil, ErrInvalidConfig
 	}
 
@@ -148,7 +157,10 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, ErrInvalidConfig
 	}
 
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12} //nolint:gosec // TLS 1.2 is the minimum supported protocol.
+	var tlsConfig *tls.Config
+	if cfg.SPIFFEClient == nil {
+		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12} //nolint:gosec // TLS 1.2 is the minimum supported protocol.
+	}
 	if cfg.TLSConfig != nil {
 		tlsConfig = cfg.TLSConfig.Clone()
 		if tlsConfig.InsecureSkipVerify || tlsConfig.MaxVersion != 0 && tlsConfig.MaxVersion < tls.VersionTLS12 {
@@ -162,29 +174,39 @@ func NewClient(cfg Config) (*Client, error) {
 		}
 	}
 
-	transport := &http.Transport{
-		Proxy:                  nil,
-		TLSClientConfig:        tlsConfig,
-		TLSHandshakeTimeout:    5 * time.Second,
-		ResponseHeaderTimeout:  requestTimeout,
-		IdleConnTimeout:        30 * time.Second,
-		MaxIdleConns:           8,
-		MaxIdleConnsPerHost:    4,
-		MaxConnsPerHost:        8,
-		MaxResponseHeaderBytes: 32 << 10,
-		DisableCompression:     true,
+	var httpClient interface {
+		Do(*http.Request) (*http.Response, error)
+		CloseIdleConnections()
+	}
+	if cfg.SPIFFEClient != nil {
+		httpClient = cfg.SPIFFEClient
+	} else {
+		transport := &http.Transport{
+			Proxy:                  nil,
+			TLSClientConfig:        tlsConfig,
+			TLSHandshakeTimeout:    5 * time.Second,
+			ResponseHeaderTimeout:  requestTimeout,
+			IdleConnTimeout:        30 * time.Second,
+			MaxIdleConns:           8,
+			MaxIdleConnsPerHost:    4,
+			MaxConnsPerHost:        8,
+			MaxResponseHeaderBytes: 32 << 10,
+			DisableCompression:     true,
+		}
+		httpClient = &http.Client{
+			Transport: transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 	return &Client{
 		endpoint:       endpoint,
 		brokerAudience: strings.TrimSpace(cfg.BrokerAudience),
 		identity:       cfg.Identity,
 		brokerAccess:   cfg.BrokerAccess,
-		http: &http.Client{
-			Transport: transport,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
+		http:           httpClient,
+		spiffeClient:   cfg.SPIFFEClient,
 		maxLeaseTTL:    maxTTL,
 		requestTimeout: requestTimeout,
 		revokeTimeout:  revokeTimeout,
@@ -209,7 +231,7 @@ func (c *Client) WithLease(ctx context.Context, request Request, fn func(context
 	if c == nil || ctx == nil || fn == nil {
 		return ErrInvalidRequest
 	}
-	if c.http == nil || c.identity == nil || c.brokerAccess == nil || c.maxLeaseTTL < time.Second {
+	if c.http == nil || c.identity == nil || (c.brokerAccess == nil && c.spiffeClient == nil) || c.maxLeaseTTL < time.Second {
 		return ErrInvalidConfig
 	}
 	request.Actions = append([]string(nil), request.Actions...)
@@ -312,9 +334,11 @@ func (c *Client) acquire(ctx context.Context, identityToken string, request Requ
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Idempotency-Key", hex.EncodeToString(idempotencyKey))
 	zero(idempotencyKey)
-	if err := setBrokerAccessHeader(requestCtx, c.brokerAccess, req); err != nil {
-		req.Header.Del("Authorization")
-		return leaseResponse{}, 0, err
+	if c.spiffeClient == nil {
+		if err := setBrokerAccessHeader(requestCtx, c.brokerAccess, req); err != nil {
+			req.Header.Del("Authorization")
+			return leaseResponse{}, 0, err
+		}
 	}
 	resp, err := c.http.Do(req)
 	req.Header.Del("Authorization")
@@ -399,9 +423,11 @@ func (c *Client) revokeWithToken(ctx context.Context, identityToken, leaseID str
 	}
 	req.Header.Set("Authorization", "Bearer "+identityToken)
 	req.Header.Set("Accept", "application/json")
-	if err := setBrokerAccessHeader(requestCtx, c.brokerAccess, req); err != nil {
-		req.Header.Del("Authorization")
-		return ErrRevokeFailed, 0
+	if c.spiffeClient == nil {
+		if err := setBrokerAccessHeader(requestCtx, c.brokerAccess, req); err != nil {
+			req.Header.Del("Authorization")
+			return ErrRevokeFailed, 0
+		}
 	}
 	resp, err := c.http.Do(req)
 	req.Header.Del("Authorization")

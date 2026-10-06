@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.102.20] - 2026-10-06
+
+### Added
+
+- Add SPIRE Workload API adapters for single-audience JWT-SVIDs and rotating
+  X.509-SVID mTLS clients with exact peer-ID allowlists.
+- Allow credential task clients to use SPIFFE mTLS without a bootstrap API key
+  while retaining broker-signed task proofs for task close and lease requests.
+
 ## [0.102.19] - 2026-10-06
 
 ### Fixed
