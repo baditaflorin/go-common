@@ -66,12 +66,6 @@ func (s *sender) identity() (string, string) {
 
 func (s *sender) run() {
 	defer close(s.stopped)
-	if !s.cfg.eventEmissionEnabled() {
-		// Disabled, misconfigured, or missing a writer key. Record is a
-		// no-op in this state and this process makes no request.
-		<-s.stop
-		return
-	}
 	tick := time.NewTicker(s.cfg.flushInterval)
 	defer tick.Stop()
 	for {
@@ -118,6 +112,10 @@ func (s *sender) send(events []Event) bool {
 	if !s.canWriteAt(time.Now()) {
 		return false
 	}
+	writerAPIKey := s.cfg.currentWriterAPIKey()
+	if writerAPIKey == "" {
+		return false
+	}
 	serviceID, version := s.identity()
 	batch := Batch{
 		Service:       serviceID,
@@ -139,7 +137,7 @@ func (s *sender) send(events []Event) bool {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "go-common-graph/"+version+" ("+serviceID+")")
-	req.Header.Set(header.APIKey, s.cfg.writerAPIKey)
+	req.Header.Set(header.APIKey, writerAPIKey)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		atomic.AddInt64(&s.counters.BatchesFailed, 1)

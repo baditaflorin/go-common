@@ -95,7 +95,7 @@ func bootstrap(serviceID, version string) *pkgState {
 // the oldest event is dropped to make room.
 func Record(e Event) {
 	s := ensureInit()
-	if !s.cfg.eventEmissionEnabled() {
+	if !s.cfg.eventEmissionConfigured() {
 		return
 	}
 	stateMu.RLock()

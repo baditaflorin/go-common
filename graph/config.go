@@ -15,12 +15,13 @@ import (
 const graphCanonicalCollectorHost = "fleet-graph.0exec.com"
 
 type config struct {
-	enabled       bool
-	collectorURL  string
-	collectorErr  error
-	writerAPIKey  string
-	readerAPIKey  string
-	targetAliases map[string]string
+	enabled          bool
+	collectorURL     string
+	collectorErr     error
+	writerAPIKey     string
+	writerAPIKeyFile string
+	readerAPIKey     string
+	targetAliases    map[string]string
 	// trustedCallerIPs is an exact-host allowlist for gateways that stamp
 	// X-Auth-User after keystore verification in custom HTTP servers.
 	trustedCallerIPs []netip.Addr
@@ -40,7 +41,8 @@ func loadConfig() config {
 		// GRAPH_API_KEY is deliberately writer-only. In particular, do
 		// not fall back to FLEET_API_KEY: a graph event writer should
 		// never inherit broad fleet credentials by accident.
-		writerAPIKey: loadGraphWriterAPIKey(),
+		writerAPIKey:     loadGraphWriterAPIKey(),
+		writerAPIKeyFile: strings.TrimSpace(os.Getenv("GRAPH_API_KEY_FILE")),
 		// Lookup is a separate read capability. It must not reuse the
 		// writer credential while graph route auth is being split.
 		readerAPIKey:     strings.TrimSpace(os.Getenv("GRAPH_READER_API_KEY")),
@@ -79,13 +81,27 @@ func loadConfig() config {
 // remains a compatibility path for services that have not migrated yet.
 func loadGraphWriterAPIKey() string {
 	if path := strings.TrimSpace(os.Getenv("GRAPH_API_KEY_FILE")); path != "" {
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			return ""
-		}
-		return strings.TrimSpace(string(contents))
+		return readGraphWriterAPIKey(path)
 	}
 	return strings.TrimSpace(os.Getenv("GRAPH_API_KEY"))
+}
+
+func readGraphWriterAPIKey(path string) string {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(contents))
+}
+
+// currentWriterAPIKey reloads a file-backed credential for every flush, so
+// an atomic secret-file replacement takes effect without restarting the app.
+// A configured file always has precedence, including when it is unavailable.
+func (c config) currentWriterAPIKey() string {
+	if c.writerAPIKeyFile != "" {
+		return readGraphWriterAPIKey(c.writerAPIKeyFile)
+	}
+	return c.writerAPIKey
 }
 
 // parseTrustedCallerIPs accepts only literal IP addresses. Exact host entries
@@ -107,7 +123,14 @@ func parseTrustedCallerIPs(raw string) []netip.Addr {
 }
 
 func (c config) eventEmissionEnabled() bool {
-	return c.enabled && c.collectorErr == nil && c.collectorURL != "" && c.writerAPIKey != ""
+	return c.eventEmissionConfigured() && c.currentWriterAPIKey() != ""
+}
+
+// eventEmissionConfigured avoids filesystem reads on the request path. The
+// sender checks the current file-backed key immediately before each batch.
+func (c config) eventEmissionConfigured() bool {
+	return c.enabled && c.collectorErr == nil && c.collectorURL != "" &&
+		(c.writerAPIKeyFile != "" || c.writerAPIKey != "")
 }
 
 // normalizeCollectorURL accepts a root graph endpoint. Remote endpoints

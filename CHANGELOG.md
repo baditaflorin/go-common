@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.102.19] - 2026-10-06
+
+### Fixed
+
+- Reload file-backed Fleet Graph writer credentials for each batch, allowing
+  atomic secret rotation without restarting the service. A configured but
+  unavailable key file continues to fail closed, and the sender remains ready
+  to resume when the file becomes available.
+
 ## [0.102.18] - 2026-10-06
 
 ### Fixed
