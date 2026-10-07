@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.102.31] - 2026-10-08
+
+### Added
+
+- Allow `FLEET_FETCH_SOURCE=commoncrawl` to select archive-only fetches for
+  fleetfetch clients by default; explicit client options take precedence.
+
 ## [0.102.30] - 2026-10-08
 
 ### Added

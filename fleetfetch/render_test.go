@@ -102,6 +102,44 @@ func TestCommonCrawlSourceForwardedAndNoLiveFallback(t *testing.T) {
 	}
 }
 
+func TestCommonCrawlSourceCanBeSelectedByEnvironment(t *testing.T) {
+	t.Setenv(EnvSource, "commoncrawl")
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.URL.Query().Get("source")
+		w.Header().Set("X-FetchCache-Fetched-At", "2026-10-07T00:00:00Z")
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := NewClient(WithCacheURL(srv.URL))
+	if _, err := c.Get(context.Background(), "https://example.com/"); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "commoncrawl" {
+		t.Fatalf("source query = %q, want commoncrawl", seen)
+	}
+}
+
+func TestExplicitSourceOverridesEnvironment(t *testing.T) {
+	t.Setenv(EnvSource, "commoncrawl")
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.URL.Query().Get("source")
+		w.Header().Set("X-FetchCache-Fetched-At", "2026-10-07T00:00:00Z")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(WithCacheURL(srv.URL), WithSource(SourceLive))
+	if _, err := c.Get(context.Background(), "https://example.com/"); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "" {
+		t.Fatalf("source query = %q, want no source override", seen)
+	}
+}
+
 func TestCommonCrawlUnavailableCacheDoesNotFetchLive(t *testing.T) {
 	fallbackCalls := 0
 	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fallbackCalls++; w.WriteHeader(http.StatusOK) }))

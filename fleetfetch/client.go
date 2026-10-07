@@ -243,12 +243,16 @@ func cacheProxyForURL(cacheURL string) func(*http.Request) (*url.URL, error) {
 }
 
 // NewClient returns a Client wired with sensible defaults. Reads
-// FLEET_FETCH_CACHE_URL and either FLEET_FETCH_CACHE_API_KEY or the
-// protected FLEET_FETCH_CACHE_API_KEY_FILE path when corresponding
-// options aren't given.
+// FLEET_FETCH_SOURCE, FLEET_FETCH_CACHE_URL and either
+// FLEET_FETCH_CACHE_API_KEY or the protected FLEET_FETCH_CACHE_API_KEY_FILE
+// path when corresponding options aren't given. Explicit options override
+// environment defaults.
 func NewClient(opts ...Option) *Client {
 	c := &Client{
 		timeout: 15 * time.Second,
+	}
+	if source := strings.TrimSpace(os.Getenv(EnvSource)); source != "" {
+		c.source = Source(strings.ToLower(source))
 	}
 	for _, o := range opts {
 		o(c)
