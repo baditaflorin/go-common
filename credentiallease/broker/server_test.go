@@ -296,6 +296,18 @@ func TestAcquireRejectsTaskMismatchAndDoesNotIssue(t *testing.T) {
 	}
 }
 
+func TestDecodeRequestRejectsDuplicateJSONFields(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/leases", bytes.NewBufferString(`{"task_id":"first","task_id":"second"}`))
+	request.Header.Set("Content-Type", "application/json")
+	if _, ok := decodeRequest(recorder, request); ok {
+		t.Fatal("duplicate JSON fields were accepted")
+	}
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
 func TestAcquireRejectsIdempotencyReuseWithoutSecondIssue(t *testing.T) {
 	server, issuer, _, _ := newTestServer(t)
 	key := "00112233445566778899aabbccddeeff"

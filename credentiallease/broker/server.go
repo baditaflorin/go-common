@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/baditaflorin/go-common/internal/strictjson"
 )
 
 const (
@@ -470,15 +472,13 @@ func decodeRequest(w http.ResponseWriter, r *http.Request) (LeaseRequest, bool) 
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	var wire wireRequest
-	if err := decoder.Decode(&wire); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return LeaseRequest{}, false
 	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
+	var wire wireRequest
+	if err := strictjson.Decode(body, &wire); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request")
 		return LeaseRequest{}, false
 	}
