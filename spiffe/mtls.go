@@ -76,6 +76,17 @@ type HTTPClient struct {
 }
 
 func NewHTTPClient(ctx context.Context, socket string, allowedServerIDs []string) (*HTTPClient, error) {
+	return NewHTTPClientWithTimeout(ctx, socket, allowedServerIDs, 15*time.Second)
+}
+
+// NewHTTPClientWithTimeout creates the same redirect-disabled, proxy-free
+// SPIFFE mTLS client as NewHTTPClient with an explicit total and response
+// header timeout. The upper bound prevents callers from creating unbounded
+// requests while allowing control-plane calls with bounded evidence checks.
+func NewHTTPClientWithTimeout(ctx context.Context, socket string, allowedServerIDs []string, timeout time.Duration) (*HTTPClient, error) {
+	if timeout < time.Second || timeout > 3*time.Minute {
+		return nil, ErrUnavailable
+	}
 	identity, err := NewX509Identity(ctx, socket)
 	if err != nil {
 		return nil, err
@@ -89,10 +100,10 @@ func NewHTTPClient(ctx context.Context, socket string, allowedServerIDs []string
 		client: &http.Client{
 			Transport: &http.Transport{
 				Proxy: nil, TLSClientConfig: tlsConfig, TLSHandshakeTimeout: 5 * time.Second,
-				ResponseHeaderTimeout: 10 * time.Second, IdleConnTimeout: 30 * time.Second,
+				ResponseHeaderTimeout: timeout, IdleConnTimeout: 30 * time.Second,
 				MaxIdleConns: 20, MaxIdleConnsPerHost: 4, MaxConnsPerHost: 8,
 			},
-			Timeout:       15 * time.Second,
+			Timeout:       timeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 		identity: identity,

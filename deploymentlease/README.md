@@ -11,6 +11,11 @@ Load signing keys from protected runtime configuration and keep them outside
 the public service catalog and task input. Use an HTTPS endpoint reachable on
 the private service network. The SPIFFE HTTP transport does not use HTTP proxy
 environment variables and does not follow redirects.
+The authority client's default transport deadline is 160 seconds because CI,
+approval, and provenance checks are bounded at the server but may exceed a
+normal service-to-service request timeout. Callers should still provide a
+shorter context deadline for lease actions; the transport itself is capped at
+three minutes.
 
 Acquisition retries must reuse the same attempt ID. The authority makes those
 requests idempotent. Call `Validate` immediately before each deployment
