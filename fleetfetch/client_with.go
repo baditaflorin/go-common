@@ -83,6 +83,18 @@ func WithRender(mode string) Option {
 	return func(c *Client) { c.render = mode }
 }
 
+// Source selects the origin of response bytes, independently of Render mode.
+// CommonCrawl returns archived HTTP captures and must never trigger live fallback.
+type Source string
+
+const (
+	SourceLive        Source = ""
+	SourceCommonCrawl Source = "commoncrawl"
+)
+
+// WithSource selects live fetching (default) or a Common Crawl archive capture.
+func WithSource(source Source) Option { return func(c *Client) { c.source = source } }
+
 // WithCaller sets the X-Fleet-Caller header this client sends to the fetch
 // cache, identifying the calling service so downstream renderers
 // (go-js-proxy / go-html-proxy) can attribute render load per-enricher.

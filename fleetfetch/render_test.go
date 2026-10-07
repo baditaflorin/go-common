@@ -84,3 +84,33 @@ func TestWithRender_PerCallOverridesClientDefault(t *testing.T) {
 		t.Errorf("per-call html must override client js default; got %q", seen)
 	}
 }
+
+func TestCommonCrawlSourceForwardedAndNoLiveFallback(t *testing.T) {
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.URL.Query().Get("source")
+		w.Header().Set("X-FetchCache-Fetched-At", "2026-10-07T00:00:00Z")
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	c := NewClient(WithCacheURL(srv.URL), WithSource(SourceCommonCrawl))
+	if _, err := c.Get(context.Background(), "https://example.com/"); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "commoncrawl" {
+		t.Fatalf("source query = %q", seen)
+	}
+}
+
+func TestCommonCrawlUnavailableCacheDoesNotFetchLive(t *testing.T) {
+	fallbackCalls := 0
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fallbackCalls++; w.WriteHeader(http.StatusOK) }))
+	defer fallback.Close()
+	c := NewClient(WithCacheURL("http://127.0.0.1:1"), WithSource(SourceCommonCrawl), WithFallbackClient(fallback.Client()))
+	if _, err := c.Get(context.Background(), "https://example.com/"); err == nil {
+		t.Fatal("expected cache error")
+	}
+	if fallbackCalls != 0 {
+		t.Fatalf("unexpected live fallback calls: %d", fallbackCalls)
+	}
+}
