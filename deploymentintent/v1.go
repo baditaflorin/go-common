@@ -85,8 +85,18 @@ func ValidateV1(intent V1, now time.Time) error {
 	if !ValidPool(intent.TargetPool) {
 		return errors.New("target_pool must be a logical pool identifier, not a hostname or address")
 	}
-	if intent.Rollout.Strategy != "rolling" {
-		return errors.New("rollout.strategy must be rolling in schema v1")
+	switch intent.Rollout.Strategy {
+	case "rolling":
+	case "recreate":
+		// A single-instance Compose service cannot truthfully promise a
+		// zero-unavailable rolling update. `recreate` makes that bounded
+		// interruption explicit in the signed intent instead of silently
+		// treating docker compose up as a rolling strategy.
+		if intent.Rollout.Replicas != 1 || intent.Rollout.MaxUnavailable != 1 || intent.Rollout.MaxSurge != 0 {
+			return errors.New("recreate strategy requires one replica, one maximum unavailable, and no surge")
+		}
+	default:
+		return errors.New("rollout.strategy must be rolling or recreate in schema v1")
 	}
 	if intent.Rollout.Replicas < 1 || intent.Rollout.Replicas > 512 {
 		return errors.New("rollout.replicas must be between 1 and 512")
@@ -97,7 +107,7 @@ func ValidateV1(intent V1, now time.Time) error {
 	if intent.Rollout.MaxSurge < 0 || intent.Rollout.MaxSurge > 512 {
 		return errors.New("rollout.max_surge must be between 0 and 512")
 	}
-	if intent.Rollout.MaxSurge == 0 && intent.Rollout.MaxUnavailable >= intent.Rollout.Replicas {
+	if intent.Rollout.Strategy == "rolling" && intent.Rollout.MaxSurge == 0 && intent.Rollout.MaxUnavailable >= intent.Rollout.Replicas {
 		return errors.New("rollout cannot take every replica unavailable without a surge replica")
 	}
 	if intent.Rollout.TimeoutSeconds < 30 || intent.Rollout.TimeoutSeconds > 7200 {
