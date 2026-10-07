@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.102.30] - 2026-10-08
+
+### Added
+
+- Add `fleetfetch.WithSource(fleetfetch.SourceCommonCrawl)` and
+  `Client.GetFromSource` for archive-backed URL fetches. Common Crawl selection
+  is independent from render mode and never falls back to a live origin when
+  the fetch cache is unavailable.
+
 ## [0.102.29] - 2026-10-07
 
 ### Added

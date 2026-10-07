@@ -27,6 +27,7 @@ type Client struct {
 	fallback    *http.Client // SSRF-safe client used when cache is down
 	timeout     time.Duration
 	render      string // "" | "js" | "html"; forwarded as ?render=<mode>
+	source      Source // "" (live) | "commoncrawl"; forwarded as ?source=<source>
 
 	// caller is the X-Fleet-Caller value this client sends to the cache,
 	// identifying the calling service so downstream renderers (go-js-proxy)
@@ -105,6 +106,11 @@ func (c *Client) GetRendered(ctx context.Context, targetURL string, mode string)
 	return c.fetch(ctx, targetURL, 0, nil, mode)
 }
 
+// GetFromSource fetches a URL from the selected source with default rendering.
+func (c *Client) GetFromSource(ctx context.Context, targetURL string, source Source) (*Response, error) {
+	return c.fetchSource(ctx, targetURL, 0, nil, RenderDefault, source)
+}
+
 // FetchNetwork fetches targetURL with render=js-network and returns the
 // rendered DOM (Response.Body) together with the page's outbound network
 // request log parsed from the X-FetchCache-Network header. One render per
@@ -137,8 +143,18 @@ func (c *Client) FetchNetwork(ctx context.Context, targetURL string) (*Response,
 
 // fetch is the shared implementation behind Get/GetWithMaxAge/GetWithHeaders.
 func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Duration, perReqHeaders http.Header, render string) (fetchRes *Response, retErr error) {
+	return c.fetchSource(ctx, targetURL, maxAge, perReqHeaders, render, c.source)
+}
+
+func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.Duration, perReqHeaders http.Header, render string, source Source) (fetchRes *Response, retErr error) {
 	if targetURL == "" {
 		return nil, errors.New("fleetfetch: empty target url")
+	}
+	if source != SourceLive && source != SourceCommonCrawl {
+		return nil, fmt.Errorf("fleetfetch: unsupported source %q", source)
+	}
+	if source == SourceCommonCrawl && render != RenderDefault {
+		return nil, errors.New("fleetfetch: Common Crawl cannot be combined with live render modes")
 	}
 	start := time.Now()
 	defer func() {
@@ -191,9 +207,13 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	// by-design direct probes as cache traffic. ViaFallback stays true on
 	// the Response (the body came via the direct path). Keeps these
 	// throwaway probes out of the cache and its singleflight entirely.
+	if c.noCache && source == SourceCommonCrawl {
+		return nil, errors.New("fleetfetch: Common Crawl source requires the fetch cache")
+	}
 	if c.noCache {
 		return c.directFetch(ctx, targetURL, merged, nil)
 	}
+	archiveOnly := source == SourceCommonCrawl
 	if c.apiKeyErr != nil {
 		c.errs.Add(1)
 		return nil, c.apiKeyErr
@@ -220,6 +240,9 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 		// always safe to send — they'll just serve the default shape.
 		q.Set("render", render)
 	}
+	if source != SourceLive {
+		q.Set("source", string(source))
+	}
 	reqURL := c.cacheURL + "/fetch?" + q.Encode()
 
 	cctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -227,6 +250,10 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 
 	req, err := http.NewRequestWithContext(cctx, http.MethodGet, reqURL, nil)
 	if err != nil {
+		if archiveOnly {
+			c.errs.Add(1)
+			return nil, fmt.Errorf("fleetfetch: Common Crawl cache request: %w", err)
+		}
 		c.errs.Add(1)
 		return nil, fmt.Errorf("fleetfetch: build cache request: %w", err)
 	}
@@ -258,12 +285,20 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 			c.errs.Add(1)
 			return nil, fmt.Errorf("fleetfetch: caller context done: %w", ctx.Err())
 		}
+		if archiveOnly {
+			c.errs.Add(1)
+			return nil, fmt.Errorf("fleetfetch: Common Crawl cache unavailable: %w", err)
+		}
 		// Cache reachable but slow (our per-request deadline fired, not
 		// a transport failure). A direct fetch of the same origin would
 		// hit the same latency and bypass singleflight, so by default
 		// we surface a timeout instead of bypassing the cache.
 		if isTimeout(err) {
 			c.timeouts.Add(1)
+			if archiveOnly {
+				c.errs.Add(1)
+				return nil, fmt.Errorf("fleetfetch: Common Crawl cache timeout: %w", err)
+			}
 			if !c.fallbackOnTimeout {
 				c.errs.Add(1)
 				return nil, fmt.Errorf("%w: %v", ErrCacheTimeout, err)
@@ -279,6 +314,10 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		if archiveOnly {
+			c.errs.Add(1)
+			return nil, fmt.Errorf("fleetfetch: Common Crawl cache body: %w", err)
+		}
 		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache body: %w", err))
 	}
 
@@ -292,6 +331,10 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 		return nil, &CacheAuthError{StatusCode: resp.StatusCode}
 	}
 	if resp.StatusCode >= 500 && fetchedAt == "" {
+		if archiveOnly {
+			c.errs.Add(1)
+			return nil, fmt.Errorf("fleetfetch: Common Crawl cache status %d", resp.StatusCode)
+		}
 		if message, shed := loadshed.DecodeShed(resp.StatusCode, body); shed {
 			busyErr := &RenderBusyError{
 				StatusCode: resp.StatusCode,
@@ -302,6 +345,10 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 			// direct request. Rendered modes cannot: doing so silently replaces
 			// post-JS evidence with raw HTML and creates unshared origin work.
 			if render != RenderDefault {
+				c.errs.Add(1)
+				return nil, busyErr
+			}
+			if archiveOnly {
 				c.errs.Add(1)
 				return nil, busyErr
 			}
@@ -316,6 +363,10 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	// rate limit), not an upstream-passed 4xx. Fall back so the
 	// producer still gets a real response.
 	if resp.StatusCode >= 400 && fetchedAt == "" {
+		if archiveOnly {
+			c.errs.Add(1)
+			return nil, fmt.Errorf("fleetfetch: Common Crawl cache rejected with status %d", resp.StatusCode)
+		}
 		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache rejected with status %d (no X-FetchCache headers)", resp.StatusCode))
 	}
 
