@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.26] - 2026-10-07
+
+### Added
+
+- Allow SPIFFE mTLS HTTP clients to set a bounded total and response-header
+  timeout; deployment authority calls use a 160-second default for evidence
+  evaluation while lease actions remain caller-context bounded.
+
 ## [0.102.25] - 2026-10-07
 
 ### Added

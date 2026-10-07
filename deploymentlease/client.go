@@ -22,9 +22,11 @@ import (
 )
 
 const (
-	MinLifetime = 30 * time.Second
-	MaxLifetime = 10 * time.Minute
-	maxResponse = 256 << 10
+	MinLifetime           = 30 * time.Second
+	MaxLifetime           = 10 * time.Minute
+	maxResponse           = 256 << 10
+	maxRequestTimeout     = 3 * time.Minute
+	defaultRequestTimeout = 160 * time.Second
 )
 
 var (
@@ -68,6 +70,7 @@ type Config struct {
 	ServerSPIFFEIDs   []string
 	Principal         string
 	SigningKeys       map[string]ed25519.PublicKey
+	RequestTimeout    time.Duration
 }
 
 type httpDoer interface {
@@ -88,7 +91,14 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if ctx == nil || validateConfig(cfg) != nil {
 		return nil, ErrInvalidConfig
 	}
-	host, err := spiffe.NewHTTPClient(ctx, cfg.WorkloadAPISocket, cfg.ServerSPIFFEIDs)
+	requestTimeout := cfg.RequestTimeout
+	if requestTimeout == 0 {
+		requestTimeout = defaultRequestTimeout
+	}
+	if requestTimeout < time.Second || requestTimeout > maxRequestTimeout {
+		return nil, ErrInvalidConfig
+	}
+	host, err := spiffe.NewHTTPClientWithTimeout(ctx, cfg.WorkloadAPISocket, cfg.ServerSPIFFEIDs, requestTimeout)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
