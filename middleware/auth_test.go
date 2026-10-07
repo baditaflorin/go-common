@@ -120,13 +120,14 @@ func TestTokenAuth_HeaderTakesPrecedenceOverQuery(t *testing.T) {
 	}
 }
 
-func TestTokenAuth_PathTakesPrecedenceOverQuery(t *testing.T) {
-	// Legacy path has bad token, query has good. Path wins → 401.
+func TestTokenAuth_IgnoresLegacyPathToken(t *testing.T) {
+	// Path tokens are no longer an authentication source. The explicit
+	// compatibility query key still authenticates this request.
 	h := TokenAuth([]string{"good"})(okHandler())
 	req := httptest.NewRequest("GET", "/t/evil/route?api_key=good", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("legacy path should take precedence over query; expected 401, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("legacy path token should be ignored; expected 200 from query key, got %d", w.Code)
 	}
 }
