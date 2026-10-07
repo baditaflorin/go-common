@@ -22,6 +22,7 @@ import (
 type Client struct {
 	cacheURL    string
 	apiKey      string
+	apiKeyErr   error
 	cacheClient *http.Client // HTTP client used to talk to the cache itself
 	fallback    *http.Client // SSRF-safe client used when cache is down
 	timeout     time.Duration
@@ -192,6 +193,10 @@ func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Durati
 	// throwaway probes out of the cache and its singleflight entirely.
 	if c.noCache {
 		return c.directFetch(ctx, targetURL, merged, nil)
+	}
+	if c.apiKeyErr != nil {
+		c.errs.Add(1)
+		return nil, c.apiKeyErr
 	}
 
 	// Authentication failures are configuration failures, not cache

@@ -12,9 +12,9 @@ func WithCacheURL(u string) Option {
 }
 
 // WithAPIKey sets the X-API-Key header sent to the cache. Default
-// order: WithAPIKey → FLEET_FETCH_CACHE_API_KEY env → none. None is
-// fine for dockerhost-originated callers (the gateway has an
-// internal-allowlist short-circuit).
+// order: WithAPIKey → FLEET_FETCH_CACHE_API_KEY env →
+// FLEET_FETCH_CACHE_API_KEY_FILE → none. Cross-host and public-gateway
+// callers should use a service-scoped key from a protected secret source.
 func WithAPIKey(k string) Option {
 	return func(c *Client) { c.apiKey = k }
 }

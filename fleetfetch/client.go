@@ -21,7 +21,7 @@ import (
 // the gateway. Use it when calling from outside the fleet's Docker
 // network. Use a scoped X-API-Key on internal and public paths. The
 // internal DefaultURL avoids the public proxy but does not bypass auth.
-const PublicURL = "https://go-infrastructure-fetch-cache.0exec.com"
+const PublicURL = "https://infrastructure-fetch-cache.0exec.com"
 
 // ForwardHeaderPrefix prefixes any caller-supplied per-request header
 // sent to the fleet fetch cache. The cache strips this prefix and
@@ -231,9 +231,21 @@ func WithoutCache() Option {
 	return func(c *Client) { c.noCache = true }
 }
 
+// cacheProxyForURL keeps the Docker-network default off the environment
+// proxy. An explicitly configured HTTPS endpoint is external to that local
+// network and must use the service's configured egress proxy.
+func cacheProxyForURL(cacheURL string) func(*http.Request) (*url.URL, error) {
+	u, err := url.Parse(cacheURL)
+	if err == nil && strings.EqualFold(u.Scheme, "https") {
+		return http.ProxyFromEnvironment
+	}
+	return nil
+}
+
 // NewClient returns a Client wired with sensible defaults. Reads
-// FLEET_FETCH_CACHE_URL and FLEET_FETCH_CACHE_API_KEY from the env
-// when corresponding options aren't given.
+// FLEET_FETCH_CACHE_URL and either FLEET_FETCH_CACHE_API_KEY or the
+// protected FLEET_FETCH_CACHE_API_KEY_FILE path when corresponding
+// options aren't given.
 func NewClient(opts ...Option) *Client {
 	c := &Client{
 		timeout: 15 * time.Second,
@@ -251,27 +263,25 @@ func NewClient(opts ...Option) *Client {
 	if c.apiKey == "" {
 		c.apiKey = os.Getenv(EnvAPIKey)
 	}
+	if c.apiKey == "" {
+		if keyPath := os.Getenv(EnvAPIKeyFile); keyPath != "" {
+			keyBytes, err := os.ReadFile(keyPath)
+			if err != nil {
+				c.apiKeyErr = fmt.Errorf("fleetfetch: read API key file: %w", err)
+			} else {
+				c.apiKey = strings.TrimSpace(string(keyBytes))
+				if c.apiKey == "" {
+					c.apiKeyErr = errors.New("fleetfetch: API key file is empty")
+				}
+			}
+		}
+	}
 	if c.cacheClient == nil {
-		// Proxy: nil is load-bearing here.
-		//
-		// Services with proxy_egress: true in service.yaml have HTTPS_PROXY
-		// (and sometimes HTTP_PROXY) injected into their container environment
-		// from /opt/_shared/proxy.env at deploy time. Go's default transport
-		// picks those vars up via http.ProxyFromEnvironment, so a bare
-		// &http.Client{} would route the cache call through Webshare.
-		//
-		// The cache URL is a Docker-internal hostname (go_infrastructure_fetch_cache)
-		// that is invisible to any external proxy — Webshare cannot resolve it and
-		// returns target_connect_resolve_failed after a 21-second timeout.
-		//
-		// Proxy: nil disables env-based proxy lookup for this transport only.
-		// Public-internet enrichment calls use a separate client (the fallback
-		// field) which correctly inherits the proxy settings.
+		// Keep Docker-network cache hops off the proxy, which cannot resolve
+		// internal service DNS. Cross-host callers configure the public HTTPS
+		// endpoint and proxy_egress, so that hop uses ProxyFromEnvironment.
 		c.cacheClient = &http.Client{
-			// Keep the cache hop off the environment proxy while recording it
-			// in Fleet Graph. This internal Docker-DNS destination must not go
-			// through Webshare, which cannot resolve it and adds needless latency.
-			Transport: graph.RoundTripper(&http.Transport{Proxy: nil}),
+			Transport: graph.RoundTripper(&http.Transport{Proxy: cacheProxyForURL(c.cacheURL)}),
 			Timeout:   c.timeout,
 		}
 	}
