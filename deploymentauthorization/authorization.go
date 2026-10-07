@@ -11,11 +11,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"regexp"
 	"time"
 
 	"github.com/baditaflorin/go-common/deploymentintent"
+	"github.com/baditaflorin/go-common/internal/strictjson"
 	"github.com/secure-systems-lab/go-securesystemslib/dsse"
 )
 
@@ -267,79 +267,5 @@ func (v ed25519Verifier) KeyID() (string, error)   { return v.keyID, nil }
 func (v ed25519Verifier) Public() crypto.PublicKey { return v.key }
 
 func decodeStrict(data []byte, destination any) error {
-	if err := rejectDuplicateKeys(data); err != nil {
-		return err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		if err == nil {
-			return errors.New("input must contain exactly one JSON object")
-		}
-		return fmt.Errorf("trailing input: %w", err)
-	}
-	return nil
-}
-
-func rejectDuplicateKeys(data []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	if err := consumeJSONValue(decoder); err != nil {
-		return fmt.Errorf("invalid JSON structure: %w", err)
-	}
-	if _, err := decoder.Token(); err != io.EOF {
-		return errors.New("input must contain exactly one JSON object")
-	}
-	return nil
-}
-
-func consumeJSONValue(decoder *json.Decoder) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delim, ok := token.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch delim {
-	case '{':
-		seen := map[string]struct{}{}
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return errors.New("object key is not a string")
-			}
-			if _, exists := seen[key]; exists {
-				return fmt.Errorf("duplicate object key %q", key)
-			}
-			seen[key] = struct{}{}
-			if err := consumeJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		closeToken, err := decoder.Token()
-		if err != nil || closeToken != json.Delim('}') {
-			return errors.New("unterminated JSON object")
-		}
-	case '[':
-		for decoder.More() {
-			if err := consumeJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		closeToken, err := decoder.Token()
-		if err != nil || closeToken != json.Delim(']') {
-			return errors.New("unterminated JSON array")
-		}
-	default:
-		return errors.New("unexpected JSON delimiter")
-	}
-	return nil
+	return strictjson.Decode(data, destination)
 }

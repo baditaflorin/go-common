@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.102.25] - 2026-10-07
+
+### Added
+
+- Add the shared SPIFFE mTLS deployment-authority client for verifying signed
+  authorization decisions and acquiring, validating, renewing, and finishing
+  durable target leases.
+- Consolidate duplicate-key, unknown-field, and trailing-value JSON rejection
+  for security-sensitive request and evidence decoders.
+
 ## [0.102.24] - 2026-10-07
 
 ### Fixed
