@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -22,11 +23,13 @@ import (
 )
 
 const (
-	MinLifetime           = 30 * time.Second
-	MaxLifetime           = 10 * time.Minute
-	maxResponse           = 256 << 10
-	maxRequestTimeout     = 3 * time.Minute
-	defaultRequestTimeout = 160 * time.Second
+	MinLifetime              = 30 * time.Second
+	MaxLifetime              = 10 * time.Minute
+	maxResponse              = 256 << 10
+	maxRequestTimeout        = 3 * time.Minute
+	defaultRequestTimeout    = 160 * time.Second
+	maxRegistryTokenLifetime = 65 * time.Minute
+	maxRegistryTokenBytes    = 4096
 )
 
 var (
@@ -59,6 +62,45 @@ type Lease struct {
 	IssuedAt        time.Time `json:"issued_at"`
 	ExpiresAt       time.Time `json:"expires_at"`
 	IntentExpiresAt time.Time `json:"intent_expires_at"`
+}
+
+// RegistryCredential is a single-repository, read-only pull token issued only
+// for an active deployment lease. Token is held as bytes so callers can clear
+// it as soon as the image pull finishes. String formatting always redacts it.
+type RegistryCredential struct {
+	CredentialID string    `json:"credential_id"`
+	Token        []byte    `json:"-"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+func (c *RegistryCredential) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		CredentialID string    `json:"credential_id"`
+		Token        string    `json:"token"`
+		ExpiresAt    time.Time `json:"expires_at"`
+	}
+	if err := strictjson.Decode(data, &wire); err != nil {
+		return err
+	}
+	c.CredentialID = wire.CredentialID
+	c.Token = []byte(wire.Token)
+	c.ExpiresAt = wire.ExpiresAt
+	return nil
+}
+
+func (c RegistryCredential) String() string {
+	return fmt.Sprintf("RegistryCredential{CredentialID:%q ExpiresAt:%s Token:[REDACTED]}", c.CredentialID, c.ExpiresAt.UTC().Format(time.RFC3339))
+}
+
+func (c RegistryCredential) GoString() string { return c.String() }
+
+// Clear zeroes the in-memory bearer token after use.
+func (c *RegistryCredential) Clear() {
+	if c == nil {
+		return
+	}
+	clear(c.Token)
+	c.Token = nil
 }
 
 // Config uses only private runtime configuration. Keys must be loaded from a
@@ -244,6 +286,48 @@ func (c *Client) Finish(ctx context.Context, lease Lease, outcome string) error 
 	return err
 }
 
+// IssueRegistryCredential asks the authority for a short-lived, repository-
+// scoped read-only image-pull token. The authority refuses issuance without a
+// currently active lease owned by this mTLS principal.
+func (c *Client) IssueRegistryCredential(ctx context.Context, lease Lease) (RegistryCredential, error) {
+	if c == nil || ctx == nil || !validLeaseIdentity(lease) || lease.State != "active" {
+		return RegistryCredential{}, ErrInvalidConfig
+	}
+	body, err := json.Marshal(struct {
+		Fence int64 `json:"fence"`
+	}{lease.Fence})
+	if err != nil {
+		return RegistryCredential{}, ErrRejected
+	}
+	response, err := c.post(ctx, "/v1/leases/"+url.PathEscape(lease.LeaseID)+"/registry-credentials", body, http.StatusCreated, "application/json")
+	if err != nil {
+		return RegistryCredential{}, err
+	}
+	var credential RegistryCredential
+	if err := decodeStrict(response, &credential); err != nil || !validRegistryCredential(credential, time.Now().UTC()) {
+		credential.Clear()
+		return RegistryCredential{}, ErrRejected
+	}
+	return credential, nil
+}
+
+// RevokeRegistryCredential invalidates the bearer token immediately after the
+// image has been pulled. A bounded provider expiry remains the crash fallback.
+func (c *Client) RevokeRegistryCredential(ctx context.Context, lease Lease, credentialID string) error {
+	if c == nil || ctx == nil || !validLeaseIdentity(lease) || !deploymentintent.ValidUUID(credentialID) {
+		return ErrInvalidConfig
+	}
+	path := "/v1/leases/" + url.PathEscape(lease.LeaseID) + "/registry-credentials/" + url.PathEscape(credentialID)
+	_, err := c.request(ctx, http.MethodDelete, path, nil, http.StatusNoContent, "")
+	return err
+}
+
+func validRegistryCredential(credential RegistryCredential, now time.Time) bool {
+	return deploymentintent.ValidUUID(credential.CredentialID) && len(credential.Token) > 0 &&
+		len(credential.Token) <= maxRegistryTokenBytes && !strings.ContainsAny(string(credential.Token), "\r\n") &&
+		credential.ExpiresAt.After(now) && !credential.ExpiresAt.After(now.Add(maxRegistryTokenLifetime))
+}
+
 func (c *Client) leaseAction(ctx context.Context, lease Lease, action string, request any, expectedState string) (Lease, error) {
 	if c == nil || ctx == nil || !validLeaseIdentity(lease) {
 		return Lease{}, ErrInvalidConfig
@@ -264,14 +348,20 @@ func (c *Client) leaseAction(ctx context.Context, lease Lease, action string, re
 }
 
 func (c *Client) post(ctx context.Context, path string, body []byte, expectedStatus int, expectedMediaType string) ([]byte, error) {
+	return c.request(ctx, http.MethodPost, path, body, expectedStatus, expectedMediaType)
+}
+
+func (c *Client) request(ctx context.Context, method, path string, body []byte, expectedStatus int, expectedMediaType string) ([]byte, error) {
 	if c == nil || c.http == nil || ctx == nil || len(body) > deploymentauthorization.MaxEnvelopeBytes+deploymentintent.MaxBodyBytes+(64<<10) {
 		return nil, ErrInvalidConfig
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, c.endpoint+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, ErrInvalidConfig
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if len(body) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, ErrUnavailable
