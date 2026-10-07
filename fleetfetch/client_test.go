@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -117,12 +119,78 @@ func TestProxyConnectResponseErrorRequiresExplicitWebshareTargetPolicy(t *testin
 func TestNewClient_DefaultsAndEnv(t *testing.T) {
 	t.Setenv(EnvCacheURL, "https://override.example/")
 	t.Setenv(EnvAPIKey, "secret")
+	t.Setenv(EnvAPIKeyFile, "")
 	c := NewClient()
 	if c.cacheURL != "https://override.example/" {
 		t.Errorf("cacheURL: got %q want env override", c.cacheURL)
 	}
 	if c.apiKey != "secret" {
 		t.Errorf("apiKey: got %q want env value", c.apiKey)
+	}
+}
+
+func TestNewClient_ReadsAPIKeyFile(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "fetch-cache-api-key")
+	if err := os.WriteFile(keyPath, []byte("scoped-cache-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvAPIKey, "")
+	t.Setenv(EnvAPIKeyFile, keyPath)
+
+	c := NewClient()
+	if c.apiKey != "scoped-cache-key" {
+		t.Fatalf("apiKey = %q, want trimmed file content", c.apiKey)
+	}
+	if c.apiKeyErr != nil {
+		t.Fatalf("apiKeyErr = %v, want nil", c.apiKeyErr)
+	}
+}
+
+func TestNewClient_APIKeyEnvironmentTakesPrecedenceOverFile(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "fetch-cache-api-key")
+	if err := os.WriteFile(keyPath, []byte("file-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvAPIKey, "environment-key")
+	t.Setenv(EnvAPIKeyFile, keyPath)
+
+	c := NewClient()
+	if c.apiKey != "environment-key" {
+		t.Fatalf("apiKey = %q, want environment key", c.apiKey)
+	}
+}
+
+func TestNewClient_APIKeyFileReadErrorIsReturnedByClient(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing")
+	t.Setenv(EnvAPIKey, "")
+	t.Setenv(EnvAPIKeyFile, missingPath)
+
+	originHits := 0
+	originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		originHits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer originSrv.Close()
+
+	c := NewClient(WithFallbackClient(originSrv.Client()))
+	_, err := c.Get(context.Background(), originSrv.URL)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Get error = %v, want missing API key file error", err)
+	}
+	if originHits != 0 {
+		t.Fatalf("origin hits = %d, want no direct fallback on credential configuration error", originHits)
+	}
+}
+
+func TestCacheProxyForURLUsesProxyOnlyForHTTPS(t *testing.T) {
+	if got := cacheProxyForURL(DefaultURL); got != nil {
+		t.Fatal("internal Docker URL must bypass environment proxy")
+	}
+	if got := cacheProxyForURL("http://10.10.10.20:18205"); got != nil {
+		t.Fatal("private HTTP cache URL must bypass environment proxy")
+	}
+	if got := cacheProxyForURL("https://infrastructure-fetch-cache.0exec.com"); got == nil {
+		t.Fatal("public HTTPS cache URL must use environment proxy")
 	}
 }
 
@@ -141,6 +209,7 @@ func TestNewClient_DefaultIsInternalContainerDNS(t *testing.T) {
 
 func TestNewClient_DoesNotInventAPIKey(t *testing.T) {
 	t.Setenv(EnvAPIKey, "")
+	t.Setenv(EnvAPIKeyFile, "")
 	c := NewClient()
 	if c.apiKey != "" {
 		t.Fatalf("apiKey must remain unset without explicit configuration")

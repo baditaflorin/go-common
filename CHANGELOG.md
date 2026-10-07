@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.29] - 2026-10-07
+
+### Added
+
+- Support protected file-mounted fetch-cache API keys and route explicit HTTPS
+  cache endpoints through the configured egress proxy while keeping the
+  Docker-network default on direct container DNS.
+
 ## [0.102.28] - 2026-10-07
 
 ### Fixed
