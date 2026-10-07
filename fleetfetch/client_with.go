@@ -93,6 +93,7 @@ const (
 )
 
 // WithSource selects live fetching (default) or a Common Crawl archive capture.
+// It overrides FLEET_FETCH_SOURCE for this client.
 func WithSource(source Source) Option { return func(c *Client) { c.source = source } }
 
 // WithCaller sets the X-Fleet-Caller header this client sends to the fetch
