@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.27] - 2026-10-07
+
+### Added
+
+- Add an explicit single-replica `recreate` deployment intent strategy with a
+  required one-replica interruption budget, so Compose replacement downtime is
+  represented honestly instead of being mislabeled as a rolling update.
+
 ## [0.102.26] - 2026-10-07
 
 ### Added

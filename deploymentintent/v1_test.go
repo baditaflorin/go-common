@@ -99,6 +99,29 @@ func TestValidateV1EnforcesEnvironmentAndBoundedRollout(t *testing.T) {
 	}
 }
 
+func TestValidateV1RequiresExplicitSingleReplicaRecreateBudget(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	base := validIntent(now)
+	base.Rollout = Rollout{Strategy: "recreate", Replicas: 1, MaxUnavailable: 1, MaxSurge: 0, TimeoutSeconds: 300}
+	if err := ValidateV1(base, now); err != nil {
+		t.Fatalf("valid single-replica recreate intent rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*V1){
+		"more than one replica":  func(i *V1) { i.Rollout.Replicas = 2 },
+		"no interruption budget": func(i *V1) { i.Rollout.MaxUnavailable = 0 },
+		"unsupported surge":      func(i *V1) { i.Rollout.MaxSurge = 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			intent := base
+			mutate(&intent)
+			if err := ValidateV1(intent, now); err == nil {
+				t.Fatal("invalid recreate intent accepted")
+			}
+		})
+	}
+}
+
 func TestDecodeV1RejectsBodyOutsideSizeLimit(t *testing.T) {
 	if _, err := DecodeV1(make([]byte, MaxBodyBytes+1), time.Now()); err == nil {
 		t.Fatal("oversized intent accepted")
