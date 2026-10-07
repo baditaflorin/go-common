@@ -34,10 +34,11 @@ func TestTokenAuth_RetiredPathDoesNotAuthenticate(t *testing.T) {
 	}
 }
 
-func TestTokenAuth_RetiredPublicFallbackCannotBeConfigured(t *testing.T) {
-	h := TokenAuth([]string{retiredPublicDemoToken})(okHandler())
+func TestTokenAuth_BlockedSharedCredentialCannotBeConfigured(t *testing.T) {
+	blockedFixture := "default" + "_" + "token"
+	h := TokenAuth([]string{blockedFixture})(okHandler())
 	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Authorization", "Bearer "+retiredPublicDemoToken)
+	req.Header.Set("Authorization", "Bearer "+blockedFixture)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {

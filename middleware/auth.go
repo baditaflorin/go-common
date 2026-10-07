@@ -22,7 +22,7 @@ import (
 func TokenAuth(validTokens []string) Middleware {
 	validMap := make(map[string]bool)
 	for _, t := range validTokens {
-		if t != "" && t != retiredPublicDemoToken {
+		if t != "" && !isBlockedSharedCredential(t) {
 			validMap[t] = true
 		}
 	}

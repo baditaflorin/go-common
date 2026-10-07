@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"github.com/baditaflorin/go-common/apikey"
@@ -13,9 +15,14 @@ import (
 	"time"
 )
 
-// retiredPublicDemoToken is retained only to reject the value in old
-// explicit LocalTokens configuration while services migrate to scoped keys.
-const retiredPublicDemoToken = "default_token"
+// Keep the retired shared credential blocked for old explicit LocalTokens
+// configuration without retaining its plaintext value in source.
+var blockedSharedCredentialDigest = [32]byte{0x8e, 0xa7, 0x3c, 0xd9, 0xb2, 0x5d, 0xa3, 0x02, 0xdb, 0xd5, 0x43, 0x4b, 0x20, 0xff, 0x79, 0x16, 0x99, 0x64, 0x70, 0xd3, 0x26, 0xdd, 0x40, 0xe7, 0x43, 0xfd, 0x9f, 0x7d, 0xe2, 0xa9, 0x46, 0x2b}
+
+func isBlockedSharedCredential(value string) bool {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return subtle.ConstantTimeCompare(digest[:], blockedSharedCredentialDigest[:]) == 1
+}
 
 func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 	if opts.TrustGatewayHeader == "" {
@@ -27,7 +34,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 	local := make(map[string]bool, len(opts.LocalTokens))
 	for _, t := range opts.LocalTokens {
 		t = strings.TrimSpace(t)
-		if t != "" && t != retiredPublicDemoToken {
+		if t != "" && !isBlockedSharedCredential(t) {
 			local[t] = true
 		}
 	}

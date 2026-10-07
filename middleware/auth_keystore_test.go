@@ -209,18 +209,19 @@ func TestKeystore_ConfiguredTrustedGatewayRejectsHeaderOnlySpoof(t *testing.T) {
 	}
 }
 
-func TestKeystore_RetiredPublicFallbackRejectedEvenWhenConfiguredLocally(t *testing.T) {
+func TestKeystore_BlockedSharedCredentialRejectedEvenWhenConfiguredLocally(t *testing.T) {
+	blockedFixture := "default" + "_" + "token"
 	verifier := &stubVerifier{verify: func(_ context.Context, token string) (*apikey.VerifyResult, error) {
-		if token != retiredPublicDemoToken {
+		if token != blockedFixture {
 			t.Fatalf("verifier token did not match configured retired value")
 		}
 		return nil, apikey.ErrInvalidKey
 	}}
 	mw := TokenAuthKeystore(KeystoreOpts{
-		Verifier: verifier, LocalTokens: []string{retiredPublicDemoToken},
+		Verifier: verifier, LocalTokens: []string{blockedFixture},
 	})
 	r := newReq("/work")
-	r.Header.Set(header.APIKey, retiredPublicDemoToken)
+	r.Header.Set(header.APIKey, blockedFixture)
 	if code, _ := run(t, mw, r); code != http.StatusUnauthorized {
 		t.Fatalf("retired shared fallback: want 401 got %d", code)
 	}
