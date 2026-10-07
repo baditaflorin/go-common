@@ -5,7 +5,7 @@
 //	func main() {
 //	    cfg := config.Load("go_myservice", "v1.0.0")
 //	    srv := server.New(cfg,
-//	        server.WithKeystoreAuth("default_token"),
+//	        server.WithKeystoreAuth(),
 //	        server.WithDependencies(deps),
 //	        server.WithMaxBodyBytes(4<<20),
 //	    )

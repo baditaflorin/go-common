@@ -47,8 +47,11 @@ func TestJSProxy_Modern_ParsesResponse(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("api_key") != "secret" {
-			t.Errorf("expected api_key=secret in query, got %q", r.URL.Query().Get("api_key"))
+		if r.Header.Get("X-API-Key") != "secret" {
+			t.Errorf("expected X-API-Key header")
+		}
+		if r.URL.Query().Has("api_key") {
+			t.Error("API key must not appear in the request URL")
 		}
 		if r.URL.Query().Get("url") != "https://example.com" {
 			t.Errorf("expected url=example.com, got %q", r.URL.Query().Get("url"))
@@ -196,8 +199,11 @@ func TestJSProxyDOM_SynthesisesResult(t *testing.T) {
 	// wraps it into a ProxyResult with Network/ConsoleLogs/Performance
 	// left nil so callers can tell the two paths apart by inspection.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("api_key") != "k" {
-			t.Errorf("expected api_key=k, got %q", r.URL.Query().Get("api_key"))
+		if r.Header.Get("X-API-Key") != "k" {
+			t.Errorf("expected X-API-Key header")
+		}
+		if r.URL.Query().Has("api_key") {
+			t.Error("API key must not appear in the request URL")
 		}
 		_, _ = w.Write([]byte("<html>dom-only</html>"))
 	}))
@@ -226,8 +232,8 @@ func TestJSProxy_NetworkAndDOM_UseSeparateKeys(t *testing.T) {
 	// back-compat JS_PROXY_API_KEY is *not* set; only the specific
 	// ones are.
 	netSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("api_key") != "net-key" {
-			t.Errorf("network proxy got wrong key: %q", r.URL.Query().Get("api_key"))
+		if r.Header.Get("X-API-Key") != "net-key" || r.URL.Query().Has("api_key") {
+			t.Error("network proxy must receive the key only in X-API-Key")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"final_url":"https://x","dom_html":"<html/>"}`))
@@ -235,8 +241,8 @@ func TestJSProxy_NetworkAndDOM_UseSeparateKeys(t *testing.T) {
 	defer netSrv.Close()
 
 	domSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("api_key") != "dom-key" {
-			t.Errorf("dom proxy got wrong key: %q", r.URL.Query().Get("api_key"))
+		if r.Header.Get("X-API-Key") != "dom-key" || r.URL.Query().Has("api_key") {
+			t.Error("DOM proxy must receive the key only in X-API-Key")
 		}
 		_, _ = w.Write([]byte(`<html/>`))
 	}))
@@ -261,8 +267,8 @@ func TestJSProxy_LegacyKey_FallbackForBoth(t *testing.T) {
 	// Back-compat: when only JS_PROXY_API_KEY is set, both proxies
 	// should still authenticate. (Pre-split deployments.)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("api_key") != "legacy-key" {
-			t.Errorf("expected legacy-key fallback, got %q", r.URL.Query().Get("api_key"))
+		if r.Header.Get("X-API-Key") != "legacy-key" || r.URL.Query().Has("api_key") {
+			t.Error("legacy configured key must be sent only in X-API-Key")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"final_url":"https://x","dom_html":"<html/>"}`))

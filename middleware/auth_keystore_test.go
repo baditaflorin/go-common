@@ -177,9 +177,9 @@ func TestKeystoreDoesNotMarkLocalTokenAsServiceCaller(t *testing.T) {
 		t.Fatal("local token should not call the verifier")
 		return nil, nil
 	}}
-	mw := TokenAuthKeystore(KeystoreOpts{Verifier: verifier, LocalTokens: []string{"default_token"}})
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: verifier, LocalTokens: []string{"local_test_token"}})
 	r := newReq("/work")
-	r.Header.Set(header.APIKey, "default_token")
+	r.Header.Set(header.APIKey, "local_test_token")
 	var caller string
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		caller = graphidentity.VerifiedPrincipal(r.Context())
@@ -209,6 +209,26 @@ func TestKeystore_ConfiguredTrustedGatewayRejectsHeaderOnlySpoof(t *testing.T) {
 	}
 }
 
+func TestKeystore_RetiredPublicFallbackRejectedEvenWhenConfiguredLocally(t *testing.T) {
+	verifier := &stubVerifier{verify: func(_ context.Context, token string) (*apikey.VerifyResult, error) {
+		if token != retiredPublicDemoToken {
+			t.Fatalf("verifier token did not match configured retired value")
+		}
+		return nil, apikey.ErrInvalidKey
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{
+		Verifier: verifier, LocalTokens: []string{retiredPublicDemoToken},
+	})
+	r := newReq("/work")
+	r.Header.Set(header.APIKey, retiredPublicDemoToken)
+	if code, _ := run(t, mw, r); code != http.StatusUnauthorized {
+		t.Fatalf("retired shared fallback: want 401 got %d", code)
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("verifier calls=%d; retired value must not take the local path", verifier.calls)
+	}
+}
+
 func TestKeystore_LocalTokensFastPath(t *testing.T) {
 	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
 		t.Fatal("verifier should not be called for local tokens")
@@ -216,9 +236,9 @@ func TestKeystore_LocalTokensFastPath(t *testing.T) {
 	}}
 	mw := TokenAuthKeystore(KeystoreOpts{
 		Verifier:    v,
-		LocalTokens: []string{"default_token", "fb_static"},
+		LocalTokens: []string{"fb_static"},
 	})
-	r := newReq("/scan?target=x&api_key=default_token")
+	r := newReq("/scan?target=x&api_key=fb_static")
 	code, _ := run(t, mw, r)
 	if code != http.StatusOK {
 		t.Fatalf("local-token path: want 200 got %d", code)
@@ -505,18 +525,16 @@ func TestKeystore_RequiredTier_EmptyCallerTier_Denied(t *testing.T) {
 }
 
 func TestKeystore_RequiredTier_LocalToken_NoEscapeHatch(t *testing.T) {
-	// The local-token fast path (default_token, static fallback keys)
-	// never verifies a tier. It must never satisfy a tier gate — there is
-	// no "the demo key is secretly vetted-pentest" shortcut.
+	// A local credential never verifies a tier and cannot satisfy a tier gate.
 	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
 		t.Fatal("verifier should not be called for local tokens")
 		return nil, nil
 	}}
 	mw := TokenAuthKeystore(KeystoreOpts{
-		Verifier: v, LocalTokens: []string{"default_token"},
+		Verifier: v, LocalTokens: []string{"local_test_token"},
 		RequiredTier: "vetted-pentest", TierEnforce: true,
 	})
-	r := newReq("/scan?target=x&api_key=default_token")
+	r := newReq("/scan?target=x&api_key=local_test_token")
 	if code, _ := run(t, mw, r); code != http.StatusForbidden {
 		t.Fatalf("local token against a tier gate: want 403 got %d", code)
 	}

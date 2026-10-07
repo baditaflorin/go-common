@@ -19,9 +19,8 @@ import (
 
 // PublicURL is the externally-resolvable HTTPS endpoint exposed at
 // the gateway. Use it when calling from outside the fleet's Docker
-// network. Auth is keystore-gated (X-API-Key or ?api_key=) at this
-// path; the internal DefaultURL skips auth because container-to-
-// container calls don't traverse the gateway.
+// network. Use a scoped X-API-Key on internal and public paths. The
+// internal DefaultURL avoids the public proxy but does not bypass auth.
 const PublicURL = "https://go-infrastructure-fetch-cache.0exec.com"
 
 // ForwardHeaderPrefix prefixes any caller-supplied per-request header
@@ -251,9 +250,6 @@ func NewClient(opts ...Option) *Client {
 	}
 	if c.apiKey == "" {
 		c.apiKey = os.Getenv(EnvAPIKey)
-	}
-	if c.apiKey == "" {
-		c.apiKey = DefaultAPIKey
 	}
 	if c.cacheClient == nil {
 		// Proxy: nil is load-bearing here.

@@ -160,7 +160,6 @@ func JSProxyDOM(ctx context.Context, targetURL string) (*ProxyResult, error) {
 func jsProxyNetwork(ctx context.Context, base, apiKey, target string) (*ProxyResult, error) {
 	q := url.Values{}
 	q.Set("url", target)
-	q.Set("api_key", apiKey)
 
 	reqURL := strings.TrimRight(base, "/") + "/?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -168,6 +167,7 @@ func jsProxyNetwork(ctx context.Context, base, apiKey, target string) (*ProxyRes
 		return nil, fmt.Errorf("jsproxy: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-API-Key", apiKey)
 
 	resp, err := jsProxyHTTPClient.Do(req)
 	if err != nil {
@@ -237,13 +237,13 @@ func jsProxyNetwork(ctx context.Context, base, apiKey, target string) (*ProxyRes
 func jsProxyDOM(ctx context.Context, base, apiKey, target string) (*ProxyResult, error) {
 	q := url.Values{}
 	q.Set("url", target)
-	q.Set("api_key", apiKey)
 	reqURL := strings.TrimRight(base, "/") + "/?" + q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("jsproxy(dom): build request: %w", err)
 	}
+	req.Header.Set("X-API-Key", apiKey)
 	resp, err := jsProxyHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("jsproxy(dom): do request: %w", err)

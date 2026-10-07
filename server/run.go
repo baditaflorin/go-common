@@ -25,7 +25,7 @@ import (
 // What it does, in order:
 //
 //  1. config.Load(serviceName, version)             — same as today
-//  2. WithKeystoreAuth("default_token") prepended   — fleet auth
+//  2. WithKeystoreAuth() prepended                 — keystore-only fleet auth
 //  3. server.New(cfg, opts...)                      — /health, /version,
 //     /metrics + base mw
 //  4. srv.Mux.HandleFunc("/", handler)              — catchall (post-gateway
@@ -41,7 +41,7 @@ import (
 func Run(serviceName, version string, handler http.HandlerFunc, opts ...Option) {
 	cfg := config.Load(serviceName, version)
 
-	allOpts := append([]Option{WithKeystoreAuth("default_token")}, opts...)
+	allOpts := append([]Option{WithKeystoreAuth()}, opts...)
 	srv := New(cfg, allOpts...)
 
 	srv.Mux.HandleFunc("/", handler)
@@ -65,7 +65,7 @@ func Run(serviceName, version string, handler http.HandlerFunc, opts ...Option) 
 func RunTier(serviceName, version string, handler http.HandlerFunc, requiredTier string, enforce bool, opts ...Option) {
 	cfg := config.Load(serviceName, version)
 
-	allOpts := append([]Option{WithKeystoreAuthTier(requiredTier, enforce, "default_token")}, opts...)
+	allOpts := append([]Option{WithKeystoreAuthTier(requiredTier, enforce)}, opts...)
 	srv := New(cfg, allOpts...)
 
 	srv.Mux.HandleFunc("/", handler)

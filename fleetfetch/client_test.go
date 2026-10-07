@@ -139,11 +139,11 @@ func TestNewClient_DefaultIsInternalContainerDNS(t *testing.T) {
 	}
 }
 
-func TestNewClient_DefaultAPIKeyIsDefaultToken(t *testing.T) {
+func TestNewClient_DoesNotInventAPIKey(t *testing.T) {
 	t.Setenv(EnvAPIKey, "")
 	c := NewClient()
-	if c.apiKey != DefaultAPIKey {
-		t.Errorf("default apiKey: got %q want %q", c.apiKey, DefaultAPIKey)
+	if c.apiKey != "" {
+		t.Fatalf("apiKey must remain unset without explicit configuration")
 	}
 }
 

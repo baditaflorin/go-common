@@ -27,16 +27,16 @@ func TestResolveCritical_Unset(t *testing.T) {
 	}
 }
 
-func TestResolveCritical_DemoTokenRejected(t *testing.T) {
-	t.Setenv("CRIT_TEST_KEY", "default_token")
+func TestResolveCritical_LegacyFallbackRejected(t *testing.T) {
+	t.Setenv("CRIT_TEST_KEY", "legacy-fallback-value")
 	_, err := ResolveCritical("svc-y", "CRIT_TEST_KEY")
 	if err == nil {
-		t.Fatal("expected error for demo token, got nil")
+		t.Fatal("expected error for unrecognized legacy credential, got nil")
 	}
 	for _, want := range []string{
 		"slug=svc-y",
 		"env=CRIT_TEST_KEY",
-		"reason=demo_default_token",
+		"unknown_prefix",
 		"fleet-runner key issue svc-y",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -90,7 +90,7 @@ func TestResolveCritical_Success_Fallback(t *testing.T) {
 
 func TestResolveCritical_ChainPrecedence(t *testing.T) {
 	// First non-empty wins, just like Resolve. Validation runs on
-	// the winner only — earlier entries being "default_token" is
+	// the winner only — earlier entries being invalid is
 	// irrelevant if a later var carries a real key.
 	t.Setenv("CRIT_TEST_A", "")
 	t.Setenv("CRIT_TEST_B", "ak_realkey0123")

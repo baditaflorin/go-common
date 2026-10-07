@@ -10,12 +10,9 @@
 // ~/.zshenv and every container .env. Per-repo overrides are
 // expressed as service-specific env vars.
 //
-// Before this helper, each consumer reimplemented the precedence
-// chain. The bug pattern that motivated extracting it: a consumer
-// that read only its own SERVICE_*_TOKEN var fell back to the
-// literal "default_token", which silently 401'd once the universal
-// demo token was rotated. Centralising the fallback lets every
-// consumer inherit the same resolution without copy-paste.
+// Before this helper, each consumer reimplemented the precedence chain.
+// A missing per-service credential must now remain a visible configuration
+// error; resolution never invents a shared fallback value.
 //
 // Prefix scheme
 //
@@ -29,13 +26,8 @@
 //
 // What it deliberately does NOT do
 //
-//   - Embed any literal key value. Hardcoding a fallback like
-//     "default_token" in a *public* library is a known-weak default:
-//     deployments that forget to set FLEET_API_KEY would silently
-//     authenticate (until rotation) and the literal value would be
-//     auto-discovered by anyone reading the source. Callers that
-//     genuinely want a public-demo fallback must opt in *and* log a
-//     WARN so the misconfiguration is visible in startup logs.
+//   - Embed a fallback credential. Missing configuration must remain visible
+//     and callers should fail closed for privileged service-to-service access.
 //
 //   - Read or echo the value anywhere except via return. No package
 //     state, no log lines containing the key, no debug prints.
@@ -79,7 +71,7 @@ var keyPrefixes = []string{KeyPrefixDynamic, KeyPrefixFallback}
 // ResolveResult reports the outcome of a Resolve call. Callers
 // typically use Source for one INFO log line at startup
 // ("authenticating using key from $FLEET_API_KEY") and Found to
-// decide whether to fail-fast or fall back to a public-demo token.
+// fail closed when no service credential is configured.
 type ResolveResult struct {
 	// Key is the resolved key value. Empty when Found is false.
 	// Callers MUST NOT log this field.
@@ -100,17 +92,14 @@ type ResolveResult struct {
 //
 // Standard fleet ordering for a consumer service:
 //
-//	r := apikey.Resolve("SERVICE_CATALOG_TOKEN", "FLEET_API_KEY")
+//	r := apikey.Resolve("SERVICE_CATALOG_API_KEY")
 //	if !r.Found {
-//	    log.Warn("no caller key configured; falling back to public demo token",
-//	        "tried", []string{"SERVICE_CATALOG_TOKEN", "FLEET_API_KEY"})
-//	    r.Key = "default_token" // explicit opt-in; survives until next rotation
-//	} else if !apikey.HasFleetPrefix(r.Key) {
-//	    log.Warn("caller key has unrecognised prefix — likely misconfigured",
-//	        "source", r.Source,
-//	        "expected_prefixes", []string{apikey.KeyPrefixDynamic, apikey.KeyPrefixFallback})
+//	    return errors.New("SERVICE_CATALOG_API_KEY is required")
 //	}
-//	log.Info("apikey resolved", "source", r.Source) // never log r.Key
+//	if !apikey.HasFleetPrefix(r.Key) {
+//	    return errors.New("service credential has an unknown key prefix")
+//	}
+//	log.Info("service credential resolved", "source", r.Source) // never log r.Key
 //
 // Resolve performs no I/O beyond os.Getenv and is safe to call from
 // any goroutine. Pass the env-var names in priority order; the first
@@ -131,10 +120,8 @@ func Resolve(envVars ...string) ResolveResult {
 // expired, or unknown to the keystore. Use Verify (via Client /
 // Cache) for that.
 //
-// Returns false for the empty string and for the literal
-// "default_token" (the public-demo fallback is intentionally
-// excluded — operators who fall back to it should see a separate
-// WARN, not a silent OK from this validator).
+// Returns false for empty values and values that do not carry a recognized
+// service-key prefix.
 func HasFleetPrefix(key string) bool {
 	if key == "" {
 		return false

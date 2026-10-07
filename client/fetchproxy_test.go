@@ -29,8 +29,8 @@ func TestFetchViaHTMLProxyHappy(t *testing.T) {
 			http.Error(w, "wrong url param", 400)
 			return
 		}
-		if r.URL.Query().Get("api_key") != "test-key" {
-			http.Error(w, "wrong key", 401)
+		if r.Header.Get("X-API-Key") != "test-key" || r.URL.Query().Has("api_key") {
+			http.Error(w, "wrong key transport", 401)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

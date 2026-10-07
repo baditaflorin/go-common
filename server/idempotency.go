@@ -12,7 +12,7 @@ import (
 // Typical use:
 //
 //	srv := server.New(cfg,
-//	    server.WithKeystoreAuth("default_token"),
+//	    server.WithKeystoreAuth(),
 //	    server.WithIdempotencyKey(middleware.IdempotencyConfig{
 //	        TTL:        15 * time.Minute,
 //	        MaxEntries: 50_000,

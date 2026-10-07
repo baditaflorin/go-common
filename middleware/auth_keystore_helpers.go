@@ -13,6 +13,10 @@ import (
 	"time"
 )
 
+// retiredPublicDemoToken is retained only to reject the value in old
+// explicit LocalTokens configuration while services migrate to scoped keys.
+const retiredPublicDemoToken = "default_token"
+
 func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 	if opts.TrustGatewayHeader == "" {
 		opts.TrustGatewayHeader = header.AuthUser
@@ -23,7 +27,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 	local := make(map[string]bool, len(opts.LocalTokens))
 	for _, t := range opts.LocalTokens {
 		t = strings.TrimSpace(t)
-		if t != "" {
+		if t != "" && t != retiredPublicDemoToken {
 			local[t] = true
 		}
 	}
@@ -170,8 +174,8 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				return
 			}
 
-			// 3. Extract the raw token from the same three sources legacy
-			//    TokenAuth checks: Bearer header, /t/<token>/ path, ?api_key=.
+			// 3. Extract the raw token from the supported sources: Bearer,
+			//    X-API-Key, or the compatibility query parameter.
 			token := ExtractToken(r)
 			if token == "" {
 				observe(AuthSourceMissing, AuthResultDeny, 0)
@@ -179,11 +183,10 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				return
 			}
 
-			// 4. Local-token fast path (the gateway's static fallback, demo
-			//    token, etc.). Avoids a network hop for the hot common case.
+			// 4. Explicit service-owned local credential fast path. Avoids a
+			//    network hop only for credentials configured by this service.
 			if local[token] {
-				// callerTier "" by design — a local/static/demo token
-				// (default_token, the gateway's fallback key, etc.) never
+				// callerTier "" by design — a local credential never
 				// touches the keystore, so it never carries a real tier.
 				// It cannot satisfy a non-empty RequiredTier; there is no
 				// "the demo key is secretly vetted-pentest" escape hatch.

@@ -45,11 +45,9 @@
 //	FLEET_API_KEY           single fleet-wide key, used when *_API_KEY unset
 //	FETCHPROXY_ALLOW_DIRECT "false" disables the direct-fetch fallback
 //
-// No keys are baked in: go-common is a public repo and must stay clean.
-// Services run in production with real keys injected via .env; for
-// in-fleet demos the gateway accepts the literal "default_token", but
-// that string is gateway-side, not source-side. See services-registry
-// CLAUDE.md "Auth — how mesh-0exec actually authenticates".
+// No keys are baked in: go-common is public and must stay clean. Services
+// receive scoped credentials through the approved secret path; missing keys
+// must be fixed at provisioning rather than replaced with a shared fallback.
 package client
 
 import (

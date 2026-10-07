@@ -70,12 +70,12 @@ const ExampleAgentJSON = `{
       },
       "auth": {
         "type": "api_key",
-        "header": "X-API-Key",
-        "query_param": "api_key"
+        "header": "Authorization",
+        "scheme": "Bearer"
       },
       "output_shape": "response.Envelope-wrapped audit: per-header grades, composite_grade, score, recommendations.",
       "examples": [
-        "curl 'https://analyze-headers.0crawl.com/?url=https://example.com&api_key=<KEY>'"
+        "curl -H 'Authorization: Bearer <KEY>' 'https://analyze-headers.0crawl.com/?url=https://example.com'"
       ]
     }
   ]

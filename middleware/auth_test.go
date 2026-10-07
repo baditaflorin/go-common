@@ -24,9 +24,31 @@ func TestTokenAuth_Header(t *testing.T) {
 	}
 }
 
-func TestTokenAuth_LegacyPath(t *testing.T) {
+func TestTokenAuth_RetiredPathDoesNotAuthenticate(t *testing.T) {
 	h := TokenAuth([]string{"good"})(okHandler())
 	req := httptest.NewRequest("GET", "/t/good/something", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for retired path auth, got %d", w.Code)
+	}
+}
+
+func TestTokenAuth_RetiredPublicFallbackCannotBeConfigured(t *testing.T) {
+	h := TokenAuth([]string{retiredPublicDemoToken})(okHandler())
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Bearer "+retiredPublicDemoToken)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for retired fallback, got %d", w.Code)
+	}
+}
+
+func TestTokenAuth_XAPIKeyHeader(t *testing.T) {
+	h := TokenAuth([]string{"good"})(okHandler())
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-API-Key", "good")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {

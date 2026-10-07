@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.102.28] - 2026-10-07
+
+### Fixed
+
+- Stop Go Common server entrypoints and internal clients from inventing a
+  shared public fallback credential. Require configured service keys for
+  fetch-cache and pentest findings-store calls; reject the retired value even
+  when it remains in a legacy local-token list.
+- Remove stale auth examples that put credentials in request URLs or path
+  prefixes.
+
+
 ## [0.102.27] - 2026-10-07
 
 ### Added
@@ -544,11 +556,11 @@ embedded version string (consumers pin via `go.mod`).
 - **`server.RunTier(serviceName, version, handler, requiredTier string, enforce bool, opts ...Option)`** —
   `Run` with the prepended auth swapped from `WithKeystoreAuth` to
   `WithKeystoreAuthTier` (v0.84.0). `Run` unconditionally prepends
-  `WithKeystoreAuth("default_token")`; a handful of pentest-tagged
+  legacy local-token auth; a handful of pentest-tagged
   services (Coolify-runtime, 5-line `main.go` via `Run`, not `New`) need
   their direct entrypoint tier-gated too. Passing `WithKeystoreAuthTier`
   as an extra `Run` option would stack two keystore verifies (the
-  prepended untiered one still admits any valid key or `default_token`,
+  prepended untiered one still admits any valid key or configured local credential,
   then the tier one runs second) — correct but wasteful and confusing.
   `RunTier` replaces the prepended option outright, same one-verify-per-
   request shape as `Run`.
@@ -563,7 +575,7 @@ embedded version string (consumers pin via `go.mod`).
   hits a service's own `/mcp` endpoint directly was never subject to
   `access_tier` at all. Mirrors `WithKeystoreAuth`/`WithKeystoreAuthMesh`'s
   established pattern, wiring `middleware.KeystoreOpts.RequiredTier`/
-  `.TierEnforce` (added in v0.82.0). `localTokens` (e.g. `"default_token"`)
+  `.TierEnforce` (added in v0.82.0). `localTokens`
   are NOT exempt — they resolve to an empty caller tier by construction, so
   they fail closed against any non-empty `requiredTier` the same way a
   live keystore-verified caller with no tier would.

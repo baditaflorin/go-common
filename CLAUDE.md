@@ -105,8 +105,8 @@ to deploy and no `/health` to probe.
 
 | `mesh`       | Domain pattern         | Auth                                                                       | Typical contents                       |
 |--------------|------------------------|----------------------------------------------------------------------------|----------------------------------------|
-| `mesh-0exec` | `<slug>.0exec.com`     | `?api_key=…` or `X-API-Key` header — keystore-gated                        | proxy, search, ocr, security           |
-| `mesh-0crawl`| `<slug>.0crawl.com`    | `Authorization: Bearer` / `X-API-Key` / `?api_key=…` — keystore-gated (same auth surface as 0exec) | domains, recon, web-analysis           |
+| `mesh-0exec` | `<slug>.0exec.com`     | `Authorization: Bearer` (preferred) or `X-API-Key` — keystore-gated       | proxy, search, ocr, security           |
+| `mesh-0crawl`| `<slug>.0crawl.com`    | `Authorization: Bearer` (preferred) or `X-API-Key` — keystore-gated      | domains, recon, web-analysis           |
 | `mesh-pages` | `*.github.io` / custom | none (static)                                                              | dashboards, catalogs, browser-only WASM apps |
 
 Both container meshes are gated by the **same** keystore (see auth
@@ -311,82 +311,35 @@ Rate limits: 60 reads/min/IP and 30 writes/hour/(IP, anonId) by default;
   Existing apps can migrate at their own pace; the panel is opt-in for
   the user via the sync-mode radio.
 
-## Auth — both container meshes use the **same** keystore (`go-apikey-service`)
+## Auth — both container meshes use the same keystore (`go-apikey-service`)
 
-**The keystore is the fleet's single point of compromise.** Treat it
-like a CA root: every `0exec` and `0crawl` service trusts whatever it
-says. If this repo is on `mesh-pages` (i.e. `kind: static`), the
-keystore does not apply — skip this section.
+**The keystore is the fleet's single point of compromise.** Treat it like a
+CA root. Static, shared public fallback credentials have been retired. Every
+caller must use a real keystore-issued key; do not place keys in URLs,
+examples, browser history, or logs.
 
-Three canonical request shapes (every mesh, every service):
+The supported production request forms are:
 
-  1. `Authorization: Bearer <key>` — production canonical, what every SDK uses.
-  2. `X-API-Key: <key>` — legacy header alias, same handler.
-  3. `?api_key=<key>` — demo / browser-playground only (key leaks in logs).
+1. `Authorization: Bearer <key>` — canonical form for APIs and SDKs.
+2. `X-API-Key: <key>` — compatibility header for existing clients.
 
-A fourth legacy shape, `https://<slug>.0crawl.com/t/<token>/...`, **was
-deprecated on 2026-05-14**. The gateway returns **410 Gone** with
-`Location: /<rest>?api_key=<token>` and a `Deprecation` header for any
-caller still using it. After one deprecation cycle (~2026-06-14) the
-410 block will be removed; `/t/<anything>` will return plain 404.
+The gateway validates the credential with the keystore `/verify` endpoint and
+forwards the verified identity headers to the service. Services use
+`middleware.TokenAuthKeystore` or `server.WithKeystoreAuth()` and fail closed
+when a request has no verified identity. Do not configure a shared local
+fallback in the service or gateway.
 
-Request flow at the gateway:
-
-1. **nginx vhost** captures the key into `$api_key_in` (Bearer regex →
-   X-API-Key header → ?api_key query, in that order).
-2. ~~**Static fallback**~~ — **sunset 2026-08-22 (security risk).** This
-   step previously accepted the universal demo key (`$default_token`,
-   from `/etc/nginx/conf.d/_default_token.conf`) immediately and set
-   `X-Auth-User: demo`, surviving keystore outages for the public demo
-   path. A static, undifferentiated, rate-limit-only gate in front of
-   every service was judged too broad a bypass and has been removed
-   from the gateway. `$api_key_in == default_token` now falls through to
-   step 3 like any other value and gets a normal 401 from the keystore.
-   There is currently no public, unauthenticated demo path — every
-   caller needs a real keystore-issued key. Don't reference
-   `default_token` as a working example in service docs; if you find one,
-   fix it the same way this passage was fixed (mark it sunset, point at
-   real auth) rather than leaving it looking live.
-3. Otherwise nginx POSTs `X-Verify-Key: $api_key_in` to the keystore's
-   `/verify` via `auth_request`.
-4. Keystore checks SQLite → returns 200 + `X-Auth-User` / `X-Auth-Scope`,
-   or 401.
-5. On 200, nginx forwards the original request to the service container
-   with `X-Auth-*` headers AND `X-API-Key: $api_key_in` populated, so
-   the upstream `middleware.TokenAuthKeystore` sees a positive auth
-   signal regardless of which gateway auth path was taken.
-
-**Services do not call the keystore themselves** — nginx already gated
-the request. Trust the gateway-injected `X-Auth-*` headers. If you
-genuinely need verification inside a service (admin tooling, internal
-RPC), use the canonical clients — never handroll HTTP calls:
-
-```go
-// Middleware (preferred — gateway header fast-path + keystore fallback + Cache + fail-closed 503):
-import "github.com/baditaflorin/go-common/middleware"   // ≥ v0.7.0
-// Direct client (only for non-HTTP-handler code):
-import "github.com/baditaflorin/go-common/apikey"
-c := apikey.New() // reads APIKEY_SERVICE_URL + APIKEY_SERVICE_ADMIN_TOKEN
-verifier := apikey.NewCache(c) // 15-min positive cache, no negative cache
-result, err := verifier.Verify(ctx, userKey)
-```
-
-Keystore outage behaviour (designed-in graceful degradation):
-- **Static fallback** in nginx keeps the public demo key working.
-- **`apikey.Cache`** in each service keeps recently-verified callers
-  working ~15 min.
-- **Snapshot data** in `fleet-state/state/snapshot.json` flags the
-  keystore as BROKEN once `/health` fails — that's the alert.
-- **Recovery procedures**:
-  - WAL stuck readonly (HTTP 409 "attempt to write a readonly database"):
-    public — `go-apikey-service/docs/recovery-keystore-readonly-wal.md`.
-  - Full keystore outage / data wipe: private `fleet-state/RUNBOOK.md`
-    under "keystore outage".
+Keystore outage behavior:
+- `apikey.Cache` retains recently verified callers for its bounded positive-cache window.
+- `fleet-state/state/snapshot.json` reports a broken keystore health check.
+- Recovery procedures are in the private `fleet-state/RUNBOOK.md` under
+  "keystore outage"; the WAL-specific recovery procedure is
+  `go-apikey-service/docs/recovery-keystore-readonly-wal.md`.
 
 The admin token (`X-Admin-Token` on `/issue`, `/revoke`, `/list`,
-`/purge`) is stored as `ADMIN_TOKEN` on the keystore container and
-read by clients from `APIKEY_SERVICE_ADMIN_TOKEN`. Rotation playbook:
-private `fleet-state/OPS.md`.
+`/purge`) is stored as `ADMIN_TOKEN` on the keystore container and read by
+clients from `APIKEY_SERVICE_ADMIN_TOKEN`. Rotation playbook: private
+`fleet-state/OPS.md`.
 
 ### Outbound auth — service-to-service calls
 
@@ -399,12 +352,12 @@ In one line: the canonical bootstrap is
 `fleet-runner key provision <slug>` (atomic: issue keystore key +
 write `/opt/services/<slug>/.env` on dockerhost + `docker compose up -d`).
 Audit at rest with `fleet-runner audit fleet-auth-scope` —
-flags services on `default_token` (will silently 401 against vault).
+flags services using a retired public fallback (which cannot authenticate to Vault).
 
 Code-side guard: every service that does outbound calls to a fleet
 sibling MUST use `apikey.MustResolveCritical(slug, "FLEET_API_KEY")`
 in `main.go`. The binary fail-fast-exits if `FLEET_API_KEY` is
-empty, `default_token`, or has an unknown prefix — surfaces what
+empty or has an unknown prefix — surfaces what
 would otherwise be a silent run-time 401.
 
 ### Image tagging — every build pushes `:<short-sha>` + `:<version>` + `:latest`
@@ -421,20 +374,11 @@ Legacy `:latest` / `:<semver>` pins on the dockerhost are auto-migrated
 to `:<sha>` on the next `fleet-runner deploy <slug>` invocation, so
 existing services flip over organically as they get touched.
 
-## Auth — `mesh-0crawl` legacy `/t/<token>/` shape (DEPRECATED)
+## Retired path-token authentication
 
-Sunset on 2026-05-14. The gateway returns **410 Gone** with
-`Location: /<rest>?api_key=<token>` and `Deprecation: version="v1"`.
-Any SDK or client still using `/t/<token>/...` should follow the
-`Location` header to the canonical shape. The 410 block itself will
-be removed in the following deprecation cycle; after that
-`/t/<anything>` returns 404.
-
-Defense in depth: `go-common/middleware` v0.11.0 dropped path-token
-extraction from `extractToken`, so even a caller bypassing the gateway
-and hitting an upstream container directly with `/t/<token>/...` will
-not be authenticated. The only paths that work are the three canonical
-auth shapes documented above.
+Path credentials are unsupported at the gateway and in Go Common. Update
+clients to send a keystore-issued credential in `Authorization: Bearer` or
+`X-API-Key`; never put credentials in the URL.
 
 ## `go-common` packages — use these, don't reinvent
 
@@ -693,8 +637,6 @@ fleet-runner inject <src> <dest>             # copy a file into every repo (stil
 fleet-runner exec   "<cmd>"                  # shell command in every repo (filterable)
 fleet-runner push   "<msg>"                  # commit+push all dirty repos
 fleet-runner nginx-render                    # regenerate vhosts from templates
-fleet-runner rotate-default-token <value>    # gateway-only rotation, zero repo edits
-fleet-runner default-token                   # print the current gateway default token
 fleet-runner overrides list                  # per service, which override keys apply (and via which rule)
 fleet-runner overrides explain <slug>        # one service: every override key and its source (slug vs rule)
 fleet-runner overrides audit                 # stale per-slug entries, unused rules, per-key adoption counts

@@ -48,7 +48,7 @@ func TestHasFleetPrefix(t *testing.T) {
 		{"dynamic ak_", "ak_a1b2c3d4e5f6", true},
 		{"fallback fb_", "fb_static_demo_value", true},
 		{"empty", "", false},
-		{"public demo token", "default_token", false},
+		{"legacy fallback shape", "legacy-fallback-value", false},
 		{"misconfigured truthy", "true", false},
 		{"misconfigured yes", "yes", false},
 		{"foreign prefix (e.g. AWS)", "AKIA1234567890", false},

@@ -11,12 +11,3 @@ package fleetfetch
 //
 //	FLEET_FETCH_CACHE_URL=https://go-infrastructure-fetch-cache.0exec.com
 const DefaultURL = "http://go_infrastructure_fetch_cache:18205"
-
-// DefaultAPIKey is the pre-trusted local token (set via
-// server.WithKeystoreAuth("default_token") on the cache container).
-// NewClient defaults the API key to this when no override is given,
-// so internal callers don't need any wiring to satisfy the cache's
-// in-process keystore middleware. External callers should override
-// via WithAPIKey or FLEET_FETCH_CACHE_API_KEY (the default_token is
-// rate-limited at the public gateway).
-const DefaultAPIKey = "default_token"
