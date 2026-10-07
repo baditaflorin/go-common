@@ -36,7 +36,7 @@ Constraints:
 - TRL target on first ship: 4 ("developing"). Be honest in trl_evidence.
 - Use go-common/{config,server,safehttp,ua,middleware,apikey}.
 - No GitHub Actions build workflow. Husky + local `go test ./...` is the CI.
-- No secrets in any file. Default tokens must be intentionally public.
+- No secrets in source or docs. Do not create demo or shared default credentials.
 - Image tag: ghcr.io/baditaflorin/<id>:<version>, no `v` prefix.
 
 Emit these files exactly (skeletons are in SERVICE-TEMPLATE.md):
@@ -56,7 +56,7 @@ template below.
 
 | Decision      | How to pick                                                                 |
 |---------------|-----------------------------------------------------------------------------|
-| **Mesh**      | Public demo / auth-free dashboard → `mesh-pages`. Path-token recon / domain analysis → `mesh-0crawl`. API-key gated tool → `mesh-0exec`. |
+| **Mesh**      | Public demo / auth-free dashboard → `mesh-pages`. Domain analysis → `mesh-0crawl`. API-key gated tool → `mesh-0exec`. |
 | **Category**  | Must be one of the enum in `schema/v1.json` (`proxy`, `search`, `ocr`, `geo`, `nlp`, `content`, `domains`, `security`, `recon`, `infrastructure`, `web_analysis`, `visualization`, `registry`, `dashboard`). Don't invent. |
 | **Slug**      | Derived from repo name by the rules in `FLEET.md` §Slug rules. Don't pick by hand — let `bin/generate.py` derive it and verify the result. |
 | **Host port** | `fleet-runner allocate-port --count 1` (reserved range 18100–18999). Never squat. |
@@ -66,8 +66,8 @@ looks like:
 
 | Mesh         | `api.endpoint`     | Auth header / param                                |
 |--------------|--------------------|----------------------------------------------------|
-| `mesh-0exec` | `/` (or `/v1/...`) | `?api_key=…` or `X-API-Key`                        |
-| `mesh-0crawl`| `/t/{token}/`      | path token; default `default_token` for public demo |
+| `mesh-0exec` | `/` (or `/v1/...`) | `Authorization: Bearer` (preferred) or `X-API-Key` |
+| `mesh-0crawl`| `/`                | `Authorization: Bearer` (preferred) or `X-API-Key` |
 | `mesh-pages` | `/`                | none                                               |
 
 ---
@@ -95,8 +95,7 @@ func main() {
 `server.Run` (go-common ≥ v0.9.0) is the canonical entrypoint for both
 0crawl and 0exec services. It loads config, mounts `/health`,
 `/version`, `/metrics`, wraps the mux with `TokenAuthKeystore` (gateway
-X-Auth-User fast path + keystore fallback + `default_token` local
-fallback), and binds `/`, `/<id>`, and the public kebab alias to
+identity fast path + keystore verification), and binds `/`, `/<id>`, and the public kebab alias to
 `Handler`. Don't open-code any of that.
 
 Need extra routes or extra middleware? Drop down to the explicit form:
@@ -109,7 +108,7 @@ import (
 
 func main() {
     cfg := config.Load("<id>", version)
-    srv := server.New(cfg, server.WithKeystoreAuth("default_token"))
+    srv := server.New(cfg, server.WithKeystoreAuth())
     srv.Mux.HandleFunc("/", Handler)
     srv.Mux.HandleFunc("/<id>", Handler)
     srv.Mux.HandleFunc("/extra-thing", ExtraHandler)
@@ -197,7 +196,7 @@ owner:
   contact: "baditaflorin@gmail.com"   # canonical contact (email / slack handle)
   github: "baditaflorin"              # optional; default assignee for issues / PRs
 api:
-  endpoint: /                # or /t/{token}/ for mesh-0crawl
+  endpoint: /
   method: GET
   params:
     - name: q
@@ -382,9 +381,9 @@ One-paragraph description of what the service does.
 
 ## Usage
 
-curl 'https://<slug>.0exec.com/?q=example&api_key=<KEY>'
-# or for mesh-0crawl:
-curl 'https://<slug>.0crawl.com/t/default_token/?q=example'
+curl -H 'Authorization: Bearer <KEY>' 'https://<slug>.0exec.com/?q=example'
+# mesh-0crawl uses the same header on the service endpoint:
+curl -H 'Authorization: Bearer <KEY>' 'https://<slug>.0crawl.com/?q=example'
 
 Response: JSON, fields documented below.
 
@@ -417,7 +416,7 @@ edit per-service — `fleet-runner inject` re-syncs it from the registry.
 | `GET /metrics` | `go-common/server` automatically  | JSON request counters (Prometheus shape on roadmap)               |
 | `GET /selftest`| You (see below)                   | Liveness probe of real upstreams — consumed by selftest-aggregator |
 | `GET /_gw_health` | nginx vhost template           | **Do not** implement; the gateway adds it                         |
-| Your route(s)  | You                               | `/` for 0exec/pages; `/t/{token}/` plus `/<id>` for 0crawl        |
+| Your route(s)  | You                               | `/` plus `/<id>` and the public kebab alias        |
 
 ### `/selftest` — one small round-trip, NOT a full handler invocation
 

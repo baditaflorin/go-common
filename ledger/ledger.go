@@ -79,8 +79,8 @@ type Credential string
 
 // CredentialFromRequest forwards the SAME token
 // server.WithKeystoreAuth/WithKeystoreAuthMesh already verified for r,
-// via middleware.ExtractToken (the fleet's three canonical shapes:
-// Authorization: Bearer, X-API-Key, ?api_key=). Empty when r was
+// via middleware.ExtractToken (the fleet's supported credential headers:
+// Authorization: Bearer or X-API-Key. Empty when r was
 // authenticated via the private-mesh trust path, which carries no token
 // at all — Charge rejects an empty Credential with ErrNoCredential rather
 // than guessing an account to charge.

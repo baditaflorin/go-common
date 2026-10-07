@@ -190,12 +190,13 @@ func (c *Client) waitRemote(ctx context.Context, host string, weight int, maxWai
 		Weight:    weight,
 		TimeoutMs: int(maxWait.Milliseconds()),
 	})
-	reqURL := strings.TrimRight(c.BaseURL, "/") + "/wait?api_key=" + c.APIKey
+	reqURL := strings.TrimRight(c.BaseURL, "/") + "/wait"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("ratecoord: build req: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", c.APIKey)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("ratecoord: do: %w", err)

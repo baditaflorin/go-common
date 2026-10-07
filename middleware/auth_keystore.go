@@ -50,9 +50,8 @@ type KeystoreOpts struct {
 	// Verifier is the keystore client (or its Cache wrapper). Required.
 	Verifier apikey.Verifier
 
-	// LocalTokens are accepted without hitting the keystore — fast path for
-	// the gateway's static-fallback key (`fb_05dea…`) and the legacy
-	// `default_token`. Empty = no local fallback.
+	// LocalTokens are optional service-owned credentials accepted without
+	// hitting the keystore. Retired public fallback values are always denied.
 	LocalTokens []string
 
 	// TrustGatewayHeader: if non-empty, requests carrying this header are
@@ -166,12 +165,10 @@ type ScopeChecker interface {
 //
 //  1. Authorization: Bearer <key>     — what every SDK and API gateway sends
 //  2. X-API-Key: <key>                — legacy header alias
-//  3. ?api_key=<key>                  — demo / browser-playground only
+//  3. ?api_key=<key>                  — accepted for compatibility; avoid it
+//     because URLs are commonly copied into logs and browser history.
 //
-// The legacy /t/<token>/ path-prefix extraction was removed in
-// go-common v0.11.0 (2026-05-14). Gateway returns 410 Gone for that
-// shape, so any caller still using it is broken at the edge anyway —
-// no need to honor it at the upstream. Defense in depth.
+// Path-token extraction is not supported. Send credentials in a header.
 //
 // Exported (v0.76.0) so callers outside this package can forward the
 // SAME credential the middleware itself trusts — canonically

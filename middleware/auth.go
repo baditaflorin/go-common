@@ -10,8 +10,8 @@ import (
 // tokens. Sources checked, in order of precedence:
 //
 //  1. Authorization: Bearer <token>
-//  2. URL path /t/{token}/...     (legacy support)
-//  3. ?api_key=<token> query param (browser-friendly)
+//  2. X-API-Key: <token>
+//  3. ?api_key=<token> query param (compatibility only; avoid in new clients)
 //
 // The /health, /version, /selftest, /capabilities, /openapi.json, and /agent.json
 // paths bypass auth regardless of token. /capabilities and /openapi.json
@@ -22,7 +22,9 @@ import (
 func TokenAuth(validTokens []string) Middleware {
 	validMap := make(map[string]bool)
 	for _, t := range validTokens {
-		validMap[t] = true
+		if t != "" && !isBlockedSharedCredential(t) {
+			validMap[t] = true
+		}
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -43,18 +45,12 @@ func TokenAuth(validTokens []string) Middleware {
 				token = strings.TrimPrefix(authHeader, "Bearer ")
 			}
 
-			// 2. Legacy /t/{token}/ path
+			// 2. X-API-Key: <token>
 			if token == "" {
-				parts := strings.Split(r.URL.Path, "/")
-				for i, p := range parts {
-					if p == "t" && i+1 < len(parts) {
-						token = parts[i+1]
-						break
-					}
-				}
+				token = r.Header.Get("X-API-Key")
 			}
 
-			// 3. ?api_key=<token> query param (browser-friendly)
+			// 3. ?api_key=<token> query param (compatibility only)
 			if token == "" {
 				token = r.URL.Query().Get("api_key")
 			}

@@ -15,7 +15,7 @@ import (
 // (apikey.New uses defaults; failures are deferred to first request).
 func TestWithKeystoreAuth_Wires(t *testing.T) {
 	cfg := &config.Config{AppName: "test", Version: "0.0.0", Port: "0"}
-	srv := New(cfg, WithKeystoreAuth("default_token"))
+	srv := New(cfg, WithKeystoreAuth())
 	if srv == nil {
 		t.Fatal("server is nil")
 	}
@@ -32,7 +32,7 @@ func TestWithKeystoreAuth_Wires(t *testing.T) {
 // middleware's own TokenAuthKeystore tests.
 func TestWithKeystoreAuthTier_Wires(t *testing.T) {
 	cfg := &config.Config{AppName: "test", Version: "0.0.0", Port: "0"}
-	srv := New(cfg, WithKeystoreAuthTier("vetted-pentest", true, "default_token"))
+	srv := New(cfg, WithKeystoreAuthTier("vetted-pentest", true))
 	if srv == nil {
 		t.Fatal("server is nil")
 	}

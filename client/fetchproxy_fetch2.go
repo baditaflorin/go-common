@@ -31,7 +31,6 @@ func fetchViaHTMLProxy(ctx context.Context, target string, cfg fetchConfig) (*Fe
 
 	q := url.Values{}
 	q.Set("url", target)
-	q.Set("api_key", apiKey)
 	if cfg.userAgent != "" {
 		q.Set("ua", cfg.userAgent)
 	}
@@ -42,6 +41,7 @@ func fetchViaHTMLProxy(ctx context.Context, target string, cfg fetchConfig) (*Fe
 		return nil, fmt.Errorf("html-proxy: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-API-Key", apiKey)
 
 	resp, err := fetchHTTPClient.Do(req)
 	if err != nil {

@@ -1,33 +1,12 @@
-// critical.go — fail-fast caller-key resolution for critical infra.
+// critical.go — fail-fast caller-key resolution for critical infrastructure.
+// ResolveCritical refuses missing, unrecognized, and retired shared fallback
+// credentials so Vault allowlists receive only a real service principal.
+// Pair it with a required Compose secret or another approved secret path so a
+// misconfigured container does not start with an invented credential.
 //
-// Sister to resolve.go: the permissive Resolve API lets callers
-// decide whether to fall back to the public demo "default_token".
-// For consumer-tier services that read open data, that's fine. For
-// critical infra (DNS reconciler, vault clients, deploy gates),
-// falling back to default_token means the service identifies as
-// actor=demo at the keystore — which is never on the consumers
-// allowlist for production secrets like hcloud_token. Every vault
-// read 403s ("not in consumers list"), the service's background
-// ticker silently logs zero successful runs, and operators end up
-// doing manual API calls.
-//
-// The 2026-05-17 incident that motivated this: go-fleet-dns-sync
-// shipped with FLEET_API_KEY=default_token fallback in its compose
-// file. /health was green for >24h while the 30-min reconcile
-// ticker logged 0 syncs because every vault token-fetch returned
-// 403. New services' A records didn't auto-provision; an operator
-// POSTed to Hetzner Cloud Zones API by hand to unblock a bootstrap.
-//
-// ResolveCritical / MustResolveCritical replace the silent-failure-
-// on-misconfig path with a structured error (or loud fatal) at
-// boot. Pair with a docker-compose.yml that uses ${FLEET_API_KEY:?…}
-// so the container won't even start without an explicit value.
-//
-// Error / fatal format is deterministic so an AI agent reading
-// container logs can regex out slug, reason, and the literal
-// remediation command:
-//
-//	apikey.critical_key_missing slug=<slug> env=<varname> reason=<reason> fix=`<cmd>` docs=<url>
+// Error / fatal format is deterministic so logs can identify the service,
+// env-var name, rejection reason, and approved remediation without printing
+// any credential value.
 
 package apikey
 
@@ -42,14 +21,9 @@ import (
 // reference it without string-duplication.
 const CriticalRunbookURL = "https://github.com/baditaflorin/services-registry/blob/main/RUNBOOK-UNATTENDED.md#service-principals"
 
-// demoTokenLiteral is the public demo key value. Hardcoded here for
-// the *negative* check only — we refuse it. Never used as a fallback.
-const demoTokenLiteral = "default_token"
-
 // ResolveCritical walks envVars in order and returns the first
-// non-empty value, or a structured error if the chain is unset, the
-// chosen value is the public demo "default_token", or the chosen
-// value carries no recognised fleet prefix.
+// non-empty value, or a structured error if the chain is unset or the
+// chosen value carries no recognized fleet-key prefix.
 //
 // slug is the service.yaml `id:` — it appears in the error so an
 // operator or AI agent can copy-paste the exact remediation:
@@ -69,10 +43,6 @@ func ResolveCritical(slug string, envVars ...string) (string, error) {
 	r := Resolve(envVars...)
 	if !r.Found {
 		return "", criticalErr(slug, strings.Join(envVars, ","), "unset",
-			fmt.Sprintf("fleet-runner key issue %s --never-expires; install returned value as FLEET_API_KEY on dockerhost (/opt/services/%s/.env); docker compose up -d", slug, slug))
-	}
-	if r.Key == demoTokenLiteral {
-		return "", criticalErr(slug, r.Source, "demo_default_token",
 			fmt.Sprintf("fleet-runner key issue %s --never-expires; install returned value as FLEET_API_KEY on dockerhost (/opt/services/%s/.env); docker compose up -d", slug, slug))
 	}
 	if !HasFleetPrefix(r.Key) {

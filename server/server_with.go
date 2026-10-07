@@ -98,11 +98,9 @@ func WithServerTimeouts(read, write, idle time.Duration) Option {
 // gateway X-Auth-User is trusted on the hot path, the keystore is
 // only called when the gateway is bypassed.
 //
-// localTokens are pre-trusted without hitting the keystore — e.g. the
-// gateway's static fallback key, or "default_token" for demos.
-// Pass none for keystore-only.
-//
-//	srv := server.New(cfg, server.WithKeystoreAuth("default_token"))
+// localTokens are optional service-owned credentials accepted without a
+// keystore lookup. Avoid public or shared fallback values; use a real
+// keystore-issued credential for callers and pass none for keystore-only auth.
 //
 // Reads APIKEY_SERVICE_URL + APIKEY_SERVICE_ADMIN_TOKEN from env (with
 // sane defaults). Failures are deferred to first /verify call — the
@@ -153,9 +151,9 @@ func WithKeystoreAuthMesh(localTokens ...string) Option {
 // WithKeystoreAuthTier is WithKeystoreAuth plus an access_tier gate: the
 // caller's key must carry a tier matching requiredTier (apikey.TierSatisfies,
 // exact-string equality, fail-closed) or the request is denied. localTokens
-// (e.g. "default_token") are NOT exempt from the tier check — they resolve to
-// an empty callerTier, which never satisfies a non-empty requiredTier. This
-// is the direct-service-path counterpart to the gateway's own tier
+// locally configured credentials are NOT exempt from the tier check — they
+// resolve to an empty callerTier, which never satisfies a non-empty requiredTier.
+// This is the direct-service-path counterpart to the gateway's own tier
 // enforcement (go-fleet-mcp-gateway's toolHandler); wire it into any service
 // whose access_tier override in services-registry needs enforcing on its own
 // /mcp endpoint, not just when called through the gateway.
@@ -165,7 +163,7 @@ func WithKeystoreAuthMesh(localTokens ...string) Option {
 // without actually denying; true denies with 403. requiredTier == "" makes
 // this behave exactly like WithKeystoreAuth (no tier gate at all).
 //
-//	srv := server.New(cfg, server.WithKeystoreAuthTier("vetted-pentest", true, "default_token"))
+//	srv := server.New(cfg, server.WithKeystoreAuthTier("vetted-pentest", true))
 func WithKeystoreAuthTier(requiredTier string, enforce bool, localTokens ...string) Option {
 	return func(s *Server) {
 		ks := apikey.NewCache(apikey.New())

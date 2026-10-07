@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"github.com/baditaflorin/go-common/apikey"
@@ -13,6 +15,15 @@ import (
 	"time"
 )
 
+// Keep the retired shared credential blocked for old explicit LocalTokens
+// configuration without retaining its plaintext value in source.
+var blockedSharedCredentialDigest = [32]byte{0x8e, 0xa7, 0x3c, 0xd9, 0xb2, 0x5d, 0xa3, 0x02, 0xdb, 0xd5, 0x43, 0x4b, 0x20, 0xff, 0x79, 0x16, 0x99, 0x64, 0x70, 0xd3, 0x26, 0xdd, 0x40, 0xe7, 0x43, 0xfd, 0x9f, 0x7d, 0xe2, 0xa9, 0x46, 0x2b}
+
+func isBlockedSharedCredential(value string) bool {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return subtle.ConstantTimeCompare(digest[:], blockedSharedCredentialDigest[:]) == 1
+}
+
 func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 	if opts.TrustGatewayHeader == "" {
 		opts.TrustGatewayHeader = header.AuthUser
@@ -23,7 +34,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 	local := make(map[string]bool, len(opts.LocalTokens))
 	for _, t := range opts.LocalTokens {
 		t = strings.TrimSpace(t)
-		if t != "" {
+		if t != "" && !isBlockedSharedCredential(t) {
 			local[t] = true
 		}
 	}
@@ -170,8 +181,8 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				return
 			}
 
-			// 3. Extract the raw token from the same three sources legacy
-			//    TokenAuth checks: Bearer header, /t/<token>/ path, ?api_key=.
+			// 3. Extract the raw token from the supported sources: Bearer,
+			//    X-API-Key, or the compatibility query parameter.
 			token := ExtractToken(r)
 			if token == "" {
 				observe(AuthSourceMissing, AuthResultDeny, 0)
@@ -179,11 +190,10 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				return
 			}
 
-			// 4. Local-token fast path (the gateway's static fallback, demo
-			//    token, etc.). Avoids a network hop for the hot common case.
+			// 4. Explicit service-owned local credential fast path. Avoids a
+			//    network hop only for credentials configured by this service.
 			if local[token] {
-				// callerTier "" by design — a local/static/demo token
-				// (default_token, the gateway's fallback key, etc.) never
+				// callerTier "" by design — a local credential never
 				// touches the keystore, so it never carries a real tier.
 				// It cannot satisfy a non-empty RequiredTier; there is no
 				// "the demo key is secretly vetted-pentest" escape hatch.
