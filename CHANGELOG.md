@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.32] - 2026-10-08
+
+### Added
+
+- Add lease-bound SPIFFE client operations for issuing and revoking short-lived
+  registry pull credentials; keep bearer tokens redacted from formatting and
+  clear caller-owned token buffers after use.
+
 ## [0.102.31] - 2026-10-08
 
 ### Added

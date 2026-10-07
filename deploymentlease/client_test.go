@@ -41,16 +41,19 @@ func TestClientAcquiresVerifiesAndManagesLease(t *testing.T) {
 	}
 	var actions []string
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
-			t.Errorf("unexpected request method/content type: %s %q", r.Method, r.Header.Get("Content-Type"))
-		}
 		switch r.URL.Path {
 		case "/v1/authorizations":
+			if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("unexpected request method/content type: %s %q", r.Method, r.Header.Get("Content-Type"))
+			}
 			actions = append(actions, "authorize")
 			w.Header().Set("Content-Type", "application/vnd.dsse.envelope.v1+json")
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write(envelope)
 		case "/v1/leases":
+			if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("unexpected request method/content type: %s %q", r.Method, r.Header.Get("Content-Type"))
+			}
 			actions = append(actions, "acquire")
 			var body struct {
 				AttemptID string          `json:"attempt_id"`
@@ -70,13 +73,44 @@ func TestClientAcquiresVerifiesAndManagesLease(t *testing.T) {
 			}
 			writeTestJSON(w, http.StatusOK, lease)
 		case "/v1/leases/" + lease.LeaseID + "/validate":
+			if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("unexpected request method/content type: %s %q", r.Method, r.Header.Get("Content-Type"))
+			}
 			actions = append(actions, "validate")
 			writeTestJSON(w, http.StatusOK, lease)
 		case "/v1/leases/" + lease.LeaseID + "/renew":
+			if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("unexpected request method/content type: %s %q", r.Method, r.Header.Get("Content-Type"))
+			}
 			actions = append(actions, "renew")
 			lease.ExpiresAt = time.Now().UTC().Add(2 * time.Minute)
 			writeTestJSON(w, http.StatusOK, lease)
+		case "/v1/leases/" + lease.LeaseID + "/registry-credentials":
+			if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("unexpected registry credential request method/content type: %s %q", r.Method, r.Header.Get("Content-Type"))
+			}
+			var body struct {
+				Fence int64 `json:"fence"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Fence != lease.Fence {
+				t.Errorf("unexpected registry credential lease binding: fence=%d err=%v", body.Fence, err)
+			}
+			actions = append(actions, "registry-issue")
+			writeTestJSON(w, http.StatusCreated, map[string]any{
+				"credential_id": "af441920-b43e-4ab5-a6b8-d0be9468b9a8",
+				"token":         "ghs_read_only_fixture",
+				"expires_at":    time.Now().UTC().Add(30 * time.Minute),
+			})
+		case "/v1/leases/" + lease.LeaseID + "/registry-credentials/af441920-b43e-4ab5-a6b8-d0be9468b9a8":
+			if r.Method != http.MethodDelete || r.Header.Get("Content-Type") != "" {
+				t.Errorf("unexpected registry credential revoke method/content type: %s %q", r.Method, r.Header.Get("Content-Type"))
+			}
+			actions = append(actions, "registry-revoke")
+			w.WriteHeader(http.StatusNoContent)
 		case "/v1/leases/" + lease.LeaseID + "/finish":
+			if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("unexpected request method/content type: %s %q", r.Method, r.Header.Get("Content-Type"))
+			}
 			actions = append(actions, "finish")
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -97,6 +131,16 @@ func TestClientAcquiresVerifiesAndManagesLease(t *testing.T) {
 	if got.LeaseID != lease.LeaseID || got.Fence != lease.Fence {
 		t.Fatalf("unexpected lease: %+v", got)
 	}
+	credential, err := client.IssueRegistryCredential(context.Background(), got)
+	if err != nil {
+		t.Fatalf("issue registry credential: %v", err)
+	}
+	if credential.CredentialID != "af441920-b43e-4ab5-a6b8-d0be9468b9a8" || string(credential.Token) != "ghs_read_only_fixture" {
+		t.Fatalf("unexpected registry credential: %s", credential.String())
+	}
+	if strings.Contains(credential.String(), "ghs_read_only_fixture") {
+		t.Fatal("registry credential String exposed the bearer token")
+	}
 	if _, err := client.Validate(context.Background(), got); err != nil {
 		t.Fatalf("validate lease: %v", err)
 	}
@@ -104,10 +148,14 @@ func TestClientAcquiresVerifiesAndManagesLease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renew lease: %v", err)
 	}
+	if err := client.RevokeRegistryCredential(context.Background(), renewed, credential.CredentialID); err != nil {
+		t.Fatalf("revoke registry credential: %v", err)
+	}
+	credential.Clear()
 	if err := client.Finish(context.Background(), renewed, "completed"); err != nil {
 		t.Fatalf("finish lease: %v", err)
 	}
-	wantActions := []string{"authorize", "acquire", "validate", "renew", "finish"}
+	wantActions := []string{"authorize", "acquire", "registry-issue", "validate", "renew", "registry-revoke", "finish"}
 	if strings.Join(actions, ",") != strings.Join(wantActions, ",") {
 		t.Fatalf("request sequence = %v, want %v", actions, wantActions)
 	}
@@ -179,6 +227,56 @@ func TestNewWithHTTPRejectsInsecureOrAmbiguousConfiguration(t *testing.T) {
 				t.Fatalf("NewWithHTTP error = %v, want invalid config", err)
 			}
 		})
+	}
+}
+
+func TestIssueRegistryCredentialRejectsInvalidResponse(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	intent := testIntent(now)
+	credentialID := "af441920-b43e-4ab5-a6b8-d0be9468b9a8"
+	lease := Lease{
+		LeaseID: "af441920-b43e-4ab5-a6b8-d0be9468b9a6", DecisionID: "af441920-b43e-4ab5-a6b8-d0be9468b9a7",
+		AttemptID: "af441920-b43e-4ab5-a6b8-d0be9468b9a5", IntentID: intent.IntentID,
+		IntentDigest: mustIntentDigest(t, intent), ArtifactDigest: intent.ArtifactDigest,
+		SourceCommit: intent.SourceCommit, RollbackDigest: intent.RollbackDigest, Principal: testPrincipal,
+		ServiceID: intent.ServiceID, Environment: intent.Environment, TargetPool: intent.TargetPool,
+		TargetID: "staging-runner-01", PolicyVersion: "staging-v1", Fence: 1, State: "active",
+		IssuedAt: now, ExpiresAt: now.Add(time.Minute), IntentExpiresAt: intent.ExpiresAt,
+	}
+	tests := []struct {
+		name string
+		body any
+	}{
+		{name: "missing token", body: map[string]any{"credential_id": credentialID, "expires_at": now.Add(time.Minute)}},
+		{name: "invalid credential ID", body: map[string]any{"credential_id": "not-a-uuid", "token": "ghs_fixture", "expires_at": now.Add(time.Minute)}},
+		{name: "expired", body: map[string]any{"credential_id": credentialID, "token": "ghs_fixture", "expires_at": now.Add(-time.Second)}},
+		{name: "lifetime too long", body: map[string]any{"credential_id": credentialID, "token": "ghs_fixture", "expires_at": now.Add(maxRegistryTokenLifetime + time.Minute)}},
+		{name: "token contains newline", body: map[string]any{"credential_id": credentialID, "token": "ghs_fixture\nleaked", "expires_at": now.Add(time.Minute)}},
+		{name: "token too large", body: map[string]any{"credential_id": credentialID, "token": strings.Repeat("x", maxRegistryTokenBytes+1), "expires_at": now.Add(time.Minute)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeTestJSON(w, http.StatusCreated, tt.body)
+			}))
+			defer server.Close()
+			client, err := newWithHTTP(testConfig(server.URL, make(ed25519.PublicKey, ed25519.PublicKeySize)), server.Client(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			credential, err := client.IssueRegistryCredential(context.Background(), lease)
+			credential.Clear()
+			if err != ErrRejected {
+				t.Fatalf("IssueRegistryCredential error = %v, want rejected", err)
+			}
+		})
+	}
+}
+
+func TestIssueRegistryCredentialRequiresActiveLease(t *testing.T) {
+	client := &Client{}
+	if _, err := client.IssueRegistryCredential(context.Background(), Lease{}); err != ErrInvalidConfig {
+		t.Fatalf("IssueRegistryCredential with invalid lease error = %v, want invalid config", err)
 	}
 }
 
