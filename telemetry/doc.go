@@ -8,11 +8,11 @@
 // For automatic OpenObserve export, provide a service-scoped
 // FLEET_SECRETS_API_KEY (recommended) or legacy FLEET_API_KEY that can read the
 // allowlisted ingestion secret from Go Fleet Secrets. Without an endpoint
-// override, export uses https://otlp.0exec.com/api/default/v1/traces. The stable
-// hostname can move between backends through DNS or gateway routing. An
-// OTEL_EXPORTER_OTLP_ENDPOINT override is preserved; the vault token is attached
-// only for otlp.0exec.com or the current openobserve.0own.com hostname. Other
-// collector hosts must use OTEL_EXPORTER_OTLP_HEADERS for their own credentials.
+// override, export uses https://openobserve.0own.com/api/default/v1/traces.
+// An OTEL_EXPORTER_OTLP_ENDPOINT override is preserved; the vault token is
+// attached only for the approved HTTPS hosts otlp.0exec.com and
+// openobserve.0own.com. Other collector hosts must use
+// OTEL_EXPORTER_OTLP_HEADERS for their own credentials.
 // Header values follow the OpenTelemetry comma-separated, URL-escaped key=value
 // convention.
 // OTEL_EXPORTER_OTLP_CERTIFICATE may specify a private CA PEM; client
