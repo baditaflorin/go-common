@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.102.36] - 2026-10-09
+
+### Added
+
+- Add opt-in continuous Go profiling through the official Pyroscope SDK, with
+  bounded profiles, TLS and file-mounted credentials for remote endpoints.
+
 ## [0.102.35] - 2026-10-09
 
 ### Added
