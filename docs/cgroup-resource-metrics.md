@@ -34,3 +34,11 @@ To consume these metrics in a service, use `go-common` v0.102.35 or later,
 ensure the normal `server.New` or `promx.AutoWire` path is used, and verify the
 service's `/metrics` endpoint and Prometheus target. Older service versions do
 not emit these series until their dependency is bumped and redeployed.
+
+For cross-repository CI job history from both independent Woodpecker servers,
+run `woodpecker-jobs --limit 30` on Builder LXC 108 (use `--json` for
+machine-readable output). That command lives in `go-fleet-metrics-hub`; it
+joins pipeline records to the host-side step sampler's CPU and RAM samples.
+Those job measurements are fleet telemetry and do not belong to a Go service's
+`go-common` cgroup metrics. Missing job samples are shown as unavailable, not
+as zero resource use.
