@@ -391,6 +391,7 @@ clients to send a keystore-issued credential in `Authorization: Bearer` or
 | credentiallease | `github.com/baditaflorin/go-common/credentiallease` | callback-scoped leases; `credentiallease/broker` is the fail-closed v1 handler core |
 | middleware   | `github.com/baditaflorin/go-common/middleware`    | `TokenAuthKeystore` HTTP middleware (≥ v0.7.0)          |
 | loadshed     | `github.com/baditaflorin/go-common/loadshed`      | non-blocking concurrency gate: cap calls to a slow upstream, fast-503 the excess (`loadshed_shed_total`) (≥ v0.65.0) |
+| cgroup / promx | `github.com/baditaflorin/go-common/cgroup` + `promx` | own-process container CPU, memory, throttling, and PSI pressure metrics, auto-wired by standard server startup (≥ v0.102.35); see `docs/cgroup-resource-metrics.md` |
 | qrterm       | `github.com/baditaflorin/go-common/qrterm`        | render content as a scannable QR — terminal half-block art or `image/png` — behind the conventional `?qr` / `?qr=png` query param (≥ v0.99.0) |
 
 ```go
