@@ -2,7 +2,7 @@ package promx
 
 // AutoWire performs the full bootstrap go-common/server calls at startup:
 // Init the shared registry, then create (or reuse) one each of the egress,
-// inbound-HTTP, and auth collector sets. Returned collectors are package
+// inbound-HTTP, auth, and cgroup-resource collector sets. Returned collectors are package
 // singletons — repeated AutoWire calls (e.g. across tests) return the same
 // instances without re-registering with Prometheus.
 //
@@ -35,6 +35,7 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 		autoLoadshed = nil
 		autoBackoffCoord = nil
 		autoWebshare = nil
+		autoCgroup = nil
 		autoBoundReg = reg
 	}
 	if autoEgress == nil {
@@ -101,6 +102,9 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 	}
 	if autoWebshare == nil {
 		autoWebshare = NewWebshareDirectCollectors(reg)
+	}
+	if autoCgroup == nil {
+		autoCgroup = NewCgroupCollectors(reg, ServiceID())
 	}
 	return autoEgress, autoHTTP, autoAuth
 }
@@ -215,4 +219,11 @@ func AutoPolicy() *PolicyCollectors {
 	autoMu.Lock()
 	defer autoMu.Unlock()
 	return autoPolicy
+}
+
+// AutoCgroup returns the cgroup resource collectors registered by AutoWire.
+func AutoCgroup() *CgroupCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoCgroup
 }
