@@ -251,8 +251,11 @@ func NewClient(opts ...Option) *Client {
 	c := &Client{
 		timeout: 15 * time.Second,
 	}
-	if source := strings.TrimSpace(os.Getenv(EnvSource)); source != "" {
-		c.source = Source(strings.ToLower(source))
+	switch source := strings.ToLower(strings.TrimSpace(os.Getenv(EnvSource))); source {
+	case "", "live":
+		c.source = SourceLive
+	default:
+		c.source = Source(source)
 	}
 	for _, o := range opts {
 		o(c)
