@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.102.33] - 2026-10-08
+
+### Fixed
+
+- Send default Go Common OTLP traces to the OpenObserve instance on 0own.
+  Keep automatic vault credentials restricted to the approved HTTPS endpoints.
+
 ## [0.102.32] - 2026-10-08
 
 ### Added

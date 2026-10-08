@@ -146,8 +146,12 @@ func TestAutoOpenObserveConfigurationUsesScopedFleetSecret(t *testing.T) {
 	if !called {
 		t.Fatal("expected the service-scoped secret lookup")
 	}
-	if cfg.OTLPEndpoint != defaultOpenObserveEndpoint {
-		t.Fatalf("endpoint=%q, want %q", cfg.OTLPEndpoint, defaultOpenObserveEndpoint)
+	const wantEndpoint = "https://openobserve.0own.com/api/default/v1/traces"
+	if defaultOpenObserveEndpoint != wantEndpoint {
+		t.Fatalf("default endpoint=%q, want %q", defaultOpenObserveEndpoint, wantEndpoint)
+	}
+	if cfg.OTLPEndpoint != wantEndpoint {
+		t.Fatalf("endpoint=%q, want %q", cfg.OTLPEndpoint, wantEndpoint)
 	}
 	gotAuth := cfg.otlpHeaders["Authorization"]
 	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("default:o2oi_canary-only"))

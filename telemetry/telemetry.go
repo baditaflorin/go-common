@@ -36,7 +36,7 @@ import (
 const instrumentationScope = "github.com/baditaflorin/go-common/telemetry"
 
 const (
-	defaultOpenObserveEndpoint = "https://otlp.0exec.com/api/default/v1/traces"
+	defaultOpenObserveEndpoint = "https://openobserve.0own.com/api/default/v1/traces"
 	defaultFleetSecretsURL     = "https://fleet-secrets.0exec.com"
 	openObserveTokenSecret     = "openobserve_otlp_ingestion_token"
 	openObserveTokenFileEnv    = "OPENOBSERVE_OTLP_INGESTION_TOKEN_FILE"
