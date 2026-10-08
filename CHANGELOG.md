@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.102.35] - 2026-10-09
+
+### Added
+
+- Add current-cgroup CPU and memory snapshots, quota, throttling, and PSI pressure metrics. Auto-wire them for standard Go Common servers and allow custom Prometheus registries to opt in.
+
 ## [0.102.34] - 2026-10-08
 
 ### Fixed
