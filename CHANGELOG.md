@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.34] - 2026-10-08
+
+### Fixed
+
+- Accept `FLEET_FETCH_SOURCE=live` (case-insensitively and with surrounding
+  whitespace) as the default live-origin mode, matching the documented
+  environment contract.
+
 ## [0.102.33] - 2026-10-08
 
 ### Fixed

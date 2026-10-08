@@ -121,6 +121,29 @@ func TestCommonCrawlSourceCanBeSelectedByEnvironment(t *testing.T) {
 	}
 }
 
+func TestLiveSourceCanBeSelectedByEnvironment(t *testing.T) {
+	for _, value := range []string{"live", " LIVE "} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv(EnvSource, value)
+			var seen string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seen = r.URL.Query().Get("source")
+				w.Header().Set("X-FetchCache-Fetched-At", "2026-10-07T00:00:00Z")
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			c := NewClient(WithCacheURL(srv.URL))
+			if _, err := c.Get(context.Background(), "https://example.com/"); err != nil {
+				t.Fatal(err)
+			}
+			if seen != "" {
+				t.Fatalf("live source query = %q, want no source override", seen)
+			}
+		})
+	}
+}
+
 func TestExplicitSourceOverridesEnvironment(t *testing.T) {
 	t.Setenv(EnvSource, "commoncrawl")
 	var seen string
