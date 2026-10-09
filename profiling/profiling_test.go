@@ -87,3 +87,44 @@ func TestStartFromEnvWithoutEndpointIsNoop(t *testing.T) {
 	}
 	stop()
 }
+
+func TestLoadBasicAuthFromFleetSecrets(t *testing.T) {
+	values := map[string]string{
+		userSecretEnv:     "pyroscope-user",
+		passwordSecretEnv: "pyroscope-password",
+	}
+	lookups := []string{}
+	user, password, err := loadBasicAuth(func(name string) string { return values[name] }, func(name string) (string, error) {
+		lookups = append(lookups, name)
+		return map[string]string{"pyroscope-user": "profile-writer", "pyroscope-password": "secret-value"}[name], nil
+	})
+	if err != nil || user != "profile-writer" || password != "secret-value" {
+		t.Fatalf("loadBasicAuth = (%q, %q), %v", user, password, err)
+	}
+	if len(lookups) != 2 || lookups[0] != "pyroscope-user" || lookups[1] != "pyroscope-password" {
+		t.Fatalf("unexpected secret lookups: %#v", lookups)
+	}
+}
+
+func TestLoadBasicAuthRejectsPartialAndMixedSources(t *testing.T) {
+	tests := []map[string]string{
+		{userSecretEnv: "only-user"},
+		{userFileEnv: "/tmp/user-only"},
+		{userSecretEnv: "vault-user", passwordSecretEnv: "vault-pass", userFileEnv: "/tmp/user", passwordFileEnv: "/tmp/pass"},
+	}
+	for _, values := range tests {
+		if _, _, err := loadBasicAuth(func(name string) string { return values[name] }, nil); err == nil {
+			t.Errorf("loadBasicAuth accepted invalid source combination: %#v", values)
+		}
+	}
+}
+
+func TestLoadBasicAuthHidesVaultError(t *testing.T) {
+	values := map[string]string{userSecretEnv: "pyroscope-user", passwordSecretEnv: "pyroscope-password"}
+	_, _, err := loadBasicAuth(func(name string) string { return values[name] }, func(string) (string, error) {
+		return "", os.ErrPermission
+	})
+	if err == nil || strings.Contains(err.Error(), "permission") || strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("vault lookup error was not normalized: %v", err)
+	}
+}

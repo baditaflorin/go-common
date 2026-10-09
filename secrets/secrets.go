@@ -21,12 +21,23 @@ package secrets
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/baditaflorin/go-common/response"
 )
+
+const (
+	defaultFleetSecretsURL = "https://fleet-secrets.0exec.com"
+	maxAPIKeyFileBytes     = 8 << 10
+)
+
+var ErrMissingAPIKey = errors.New("secrets: Fleet Secrets API key is not configured")
 
 // Doer is the minimal HTTP surface this client needs. Both *http.Client
 // and the safehttp client satisfy it.
@@ -55,6 +66,50 @@ func New(baseURL, apiKey string, httpClient Doer) *Client {
 	}
 }
 
+// NewFromEnv builds a client for the fleet's approved HTTPS endpoint and
+// resolves its caller key from protected runtime configuration. A custom
+// Doer is accepted for tests; nil uses a short-timeout HTTP client that never
+// follows redirects, so the API key cannot be forwarded to another host.
+func NewFromEnv(getenv func(string) string, httpClient Doer) (*Client, error) {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	baseURL := strings.TrimSpace(getenv("FLEET_SECRETS_URL"))
+	if baseURL == "" {
+		baseURL = defaultFleetSecretsURL
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Hostname(), "fleet-secrets.0exec.com") || (parsed.Port() != "" && parsed.Port() != "443") || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("secrets: URL must use the approved HTTPS host without credentials or query data")
+	}
+
+	apiKey := strings.TrimSpace(getenv("FLEET_SECRETS_API_KEY"))
+	if apiKey == "" {
+		if path := strings.TrimSpace(getenv("FLEET_SECRETS_API_KEY_FILE")); path != "" {
+			apiKey, err = readProtectedFile(path, maxAPIKeyFileBytes)
+			if err != nil {
+				return nil, errors.New("secrets: Fleet Secrets API key file is unavailable or has unsafe permissions")
+			}
+		}
+	}
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(getenv("FLEET_API_KEY"))
+	}
+	if apiKey == "" {
+		return nil, ErrMissingAPIKey
+	}
+
+	if httpClient == nil {
+		httpClient = &http.Client{
+			Timeout: 2 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+	}
+	return New(baseURL, apiKey, httpClient), nil
+}
+
 // Get fetches a single secret's plaintext value by name, decoding the
 // fleet response envelope's data.value. It never logs or embeds the
 // secret value in any returned error.
@@ -72,6 +127,9 @@ func (c *Client) Get(ctx context.Context, name string) (string, error) {
 	}
 	if c.baseURL == "" {
 		return "", fmt.Errorf("secrets: base URL unset")
+	}
+	if !validSecretName(name) {
+		return "", errors.New("secrets: name must be a simple identifier")
 	}
 	url := c.baseURL + "/secrets/" + name
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -104,4 +162,32 @@ func (c *Client) Get(ctx context.Context, name string) (string, error) {
 		return "", fmt.Errorf("secrets: %q present but value is empty", name)
 	}
 	return data.Value, nil
+}
+
+func validSecretName(name string) bool {
+	if name == "" || len(name) > 128 {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-", r)) {
+			return false
+		}
+	}
+	return true
+}
+
+func readProtectedFile(path string, limit int) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return "", errors.New("not a protected regular file")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 || len(data) > limit {
+		return "", errors.New("file is unreadable, empty, or oversized")
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return "", errors.New("file is empty")
+	}
+	return value, nil
 }
