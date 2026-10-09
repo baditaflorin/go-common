@@ -49,6 +49,15 @@ func WithTimeout(d time.Duration) Option {
 	return func(c *Client) { c.timeout = d }
 }
 
+// WithMaxBodyBytes limits the response body bytes retained by the client.
+// A non-positive value keeps the historical unlimited behavior. Consumers
+// that parse only a bounded prefix can use this to cap memory for both cache
+// responses and direct fallback responses. Larger bodies are truncated
+// without turning an otherwise successful fetch into an error.
+func WithMaxBodyBytes(n int64) Option {
+	return func(c *Client) { c.maxBodyBytes = n }
+}
+
 // WithFallbackOnTimeout makes a slow cache (a cache request that
 // exceeds the client timeout) fall back to a direct SSRF-safe fetch,
 // the same as a dead cache. Off by default: a timeout usually means

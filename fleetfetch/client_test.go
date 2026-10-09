@@ -60,6 +60,41 @@ func TestGet_ProxyConnectForbiddenAfterCache502IsTargetUnreachable(t *testing.T)
 	}
 }
 
+func TestWithMaxBodyBytesLimitsCacheAndDirectResponses(t *testing.T) {
+	const body = "abcdefgh"
+	const limit = 4
+
+	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-FetchCache-Fetched-At", time.Now().UTC().Format(time.RFC3339))
+		w.Header().Set("X-FetchCache-Final-Url", "https://target.example/")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer cacheSrv.Close()
+
+	cacheClient := NewClient(WithCacheURL(cacheSrv.URL), WithTimeout(2*time.Second), WithMaxBodyBytes(limit))
+	cacheResponse, err := cacheClient.Get(context.Background(), "https://target.example/")
+	if err != nil {
+		t.Fatalf("cached Get() error = %v", err)
+	}
+	if got := string(cacheResponse.Body); got != body[:limit] {
+		t.Fatalf("cached body = %q, want %q", got, body[:limit])
+	}
+
+	directSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer directSrv.Close()
+
+	directClient := NewClient(WithoutCache(), WithTimeout(2*time.Second), WithMaxBodyBytes(limit), WithFallbackClient(directSrv.Client()))
+	directResponse, err := directClient.Get(context.Background(), directSrv.URL)
+	if err != nil {
+		t.Fatalf("direct Get() error = %v", err)
+	}
+	if got := string(directResponse.Body); got != body[:limit] {
+		t.Fatalf("direct body = %q, want %q", got, body[:limit])
+	}
+}
+
 func TestGet_ProxyConnect403WithoutTargetPolicyMarkerRemainsError(t *testing.T) {
 	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)

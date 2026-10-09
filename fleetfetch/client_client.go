@@ -35,6 +35,10 @@ type Client struct {
 	// process default (SetDefaultCaller) then env; see resolveCaller.
 	caller string
 
+	// maxBodyBytes bounds the bytes retained from a response body. Zero means
+	// unlimited, preserving the historical behavior for existing callers.
+	maxBodyBytes int64
+
 	// defaultHeaders are sent on every Get; per-request headers passed
 	// to GetWithHeaders are merged on top (per-request wins).
 	defaultHeaders http.Header
@@ -312,7 +316,7 @@ func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readBody(resp.Body)
 	if err != nil {
 		if archiveOnly {
 			c.errs.Add(1)
@@ -443,7 +447,7 @@ func (c *Client) directFetch(ctx context.Context, targetURL string, headers http
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := c.readBody(resp.Body)
 	if err != nil {
 		c.errs.Add(1)
 		return nil, fmt.Errorf("fleetfetch: fallback body (cache=%v): %w", cacheErr, err)
@@ -462,6 +466,13 @@ func (c *Client) directFetch(ctx context.Context, targetURL string, headers http
 		ViaFallback: true,
 		FetchedAt:   time.Now().UTC(),
 	}, nil
+}
+
+func (c *Client) readBody(body io.Reader) ([]byte, error) {
+	if c.maxBodyBytes > 0 {
+		return io.ReadAll(io.LimitReader(body, c.maxBodyBytes))
+	}
+	return io.ReadAll(body)
 }
 
 func (c *Client) Stats() Stats {
