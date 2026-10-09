@@ -20,14 +20,15 @@ import (
 // with transparent fallback to a SSRF-safe direct fetch when the cache
 // is unreachable. Safe for concurrent use.
 type Client struct {
-	cacheURL    string
-	apiKey      string
-	apiKeyErr   error
-	cacheClient *http.Client // HTTP client used to talk to the cache itself
-	fallback    *http.Client // SSRF-safe client used when cache is down
-	timeout     time.Duration
-	render      string // "" | "js" | "html"; forwarded as ?render=<mode>
-	source      Source // "" (live) | "commoncrawl"; forwarded as ?source=<source>
+	cacheURL       string
+	apiKey         string
+	apiKeyErr      error
+	cacheClient    *http.Client // HTTP client used to talk to the cache itself
+	fallback       *http.Client // SSRF-safe client used when cache is down
+	timeout        time.Duration
+	render         string // "" | "js" | "html"; forwarded as ?render=<mode>
+	source         Source // "" (live) | "commoncrawl"; forwarded as ?source=<source>
+	sourceExplicit bool   // true when WithSource pins this client over request context
 
 	// caller is the X-Fleet-Caller value this client sends to the cache,
 	// identifying the calling service so downstream renderers (go-js-proxy)
@@ -147,7 +148,13 @@ func (c *Client) FetchNetwork(ctx context.Context, targetURL string) (*Response,
 
 // fetch is the shared implementation behind Get/GetWithMaxAge/GetWithHeaders.
 func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Duration, perReqHeaders http.Header, render string) (fetchRes *Response, retErr error) {
-	return c.fetchSource(ctx, targetURL, maxAge, perReqHeaders, render, c.source)
+	source := c.source
+	if !c.sourceExplicit {
+		if requestSource, ok := RequestSourceFromContext(ctx); ok {
+			source = requestSource
+		}
+	}
+	return c.fetchSource(ctx, targetURL, maxAge, perReqHeaders, render, source)
 }
 
 func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.Duration, perReqHeaders http.Header, render string, source Source) (fetchRes *Response, retErr error) {
