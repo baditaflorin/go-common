@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.102.39] - 2026-10-09
+
+### Added
+
+- Start the opt-in Pyroscope profiler automatically from the shared server
+  lifecycle, using the stable public service slug and stopping it on shutdown.
+  Keep explicit `profiling.StartFromEnv` callers compatible through one
+  idempotent process-wide profiler.
+
 ## [0.102.38] - 2026-10-09
 
 ### Added

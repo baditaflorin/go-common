@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/baditaflorin/go-common/secrets"
@@ -34,6 +35,20 @@ const (
 // to call more than once.
 type StopFunc func()
 
+var processProfiler struct {
+	sync.Mutex
+	serviceName string
+	stop        StopFunc
+}
+
+var startProfiler = func(config pyroscope.Config) (StopFunc, error) {
+	profiler, err := pyroscope.Start(config)
+	if err != nil {
+		return nil, err
+	}
+	return func() { _ = profiler.Stop() }, nil
+}
+
 // StartFromEnv starts profiling for serviceName when
 // PYROSCOPE_SERVER_ADDRESS is configured. The endpoint is required to use
 // HTTPS, except for localhost development. Remote endpoints require separate
@@ -43,6 +58,15 @@ func StartFromEnv(serviceName string) (StopFunc, error) {
 	address := strings.TrimSpace(os.Getenv(serverAddressEnv))
 	if address == "" {
 		return func() {}, nil
+	}
+
+	processProfiler.Lock()
+	defer processProfiler.Unlock()
+	if processProfiler.stop != nil {
+		if processProfiler.serviceName != serviceName {
+			return nil, fmt.Errorf("profiling: already started for service %q", processProfiler.serviceName)
+		}
+		return processProfiler.stop, nil
 	}
 
 	user, password, err := loadBasicAuth(os.Getenv, func(name string) (string, error) {
@@ -69,11 +93,15 @@ func StartFromEnv(serviceName string) (StopFunc, error) {
 		return nil, err
 	}
 
-	profiler, err := pyroscope.Start(config)
+	stopProfiler, err := startProfiler(config)
 	if err != nil {
 		return nil, fmt.Errorf("profiling: start Pyroscope client: %w", err)
 	}
-	return func() { _ = profiler.Stop() }, nil
+	var stopOnce sync.Once
+	stop := func() { stopOnce.Do(stopProfiler) }
+	processProfiler.serviceName = serviceName
+	processProfiler.stop = stop
+	return stop, nil
 }
 
 // loadBasicAuth resolves either protected file mounts or service-scoped
@@ -89,6 +117,9 @@ func loadBasicAuth(getenv func(string) string, getSecret func(string) (string, e
 	}
 	if (userSecret != "" || passwordSecret != "") && (userFile != "" || passwordFile != "") {
 		return "", "", fmt.Errorf("profiling: configure basic-auth credentials using either secret names or files")
+	}
+	if userSecret == "" && passwordSecret == "" && userFile == "" && passwordFile == "" {
+		return "", "", nil
 	}
 	if userSecret != "" {
 		if getSecret == nil {
