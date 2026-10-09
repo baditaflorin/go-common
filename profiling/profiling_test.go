@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	pyroscope "github.com/grafana/pyroscope-go"
 )
 
 func TestMakeConfigRequiresStableIdentityAndSecureRemoteEndpoint(t *testing.T) {
@@ -86,6 +88,52 @@ func TestStartFromEnvWithoutEndpointIsNoop(t *testing.T) {
 		t.Fatalf("StartFromEnv without endpoint: %v", err)
 	}
 	stop()
+}
+
+func TestStartFromEnvSharesOneProfilerPerService(t *testing.T) {
+	processProfiler.Lock()
+	previousService, previousStop := processProfiler.serviceName, processProfiler.stop
+	processProfiler.serviceName, processProfiler.stop = "", nil
+	processProfiler.Unlock()
+	t.Cleanup(func() {
+		processProfiler.Lock()
+		processProfiler.serviceName, processProfiler.stop = previousService, previousStop
+		processProfiler.Unlock()
+	})
+
+	t.Setenv(serverAddressEnv, "http://127.0.0.1:4040")
+	t.Setenv(userFileEnv, "")
+	t.Setenv(passwordFileEnv, "")
+	t.Setenv(userSecretEnv, "")
+	t.Setenv(passwordSecretEnv, "")
+
+	startCalls, stopCalls := 0, 0
+	previousStart := startProfiler
+	startProfiler = func(pyroscope.Config) (StopFunc, error) {
+		startCalls++
+		return func() { stopCalls++ }, nil
+	}
+	t.Cleanup(func() { startProfiler = previousStart })
+
+	firstStop, err := StartFromEnv("catalog-api")
+	if err != nil {
+		t.Fatalf("first StartFromEnv: %v", err)
+	}
+	secondStop, err := StartFromEnv("catalog-api")
+	if err != nil {
+		t.Fatalf("second StartFromEnv: %v", err)
+	}
+	if startCalls != 1 {
+		t.Fatalf("profiler starts = %d, want 1", startCalls)
+	}
+	firstStop()
+	secondStop()
+	if stopCalls != 1 {
+		t.Fatalf("profiler stops = %d, want 1", stopCalls)
+	}
+	if _, err := StartFromEnv("another-service"); err == nil {
+		t.Fatal("second service identity unexpectedly reused the process profiler")
+	}
 }
 
 func TestLoadBasicAuthFromFleetSecrets(t *testing.T) {

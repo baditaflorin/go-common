@@ -1,9 +1,12 @@
 # Opt-in Go profiling
 
-`profiling.StartFromEnv(serviceName)` starts the official Pyroscope Go SDK when
-`PYROSCOPE_SERVER_ADDRESS` is set. An empty address returns a safe no-op, so
-service binaries can adopt the package before a central profile endpoint is
-enabled.
+The shared `server.Server.Start` lifecycle starts the official Pyroscope Go
+SDK automatically when `PYROSCOPE_SERVER_ADDRESS` is set, using the service's
+stable public slug and stopping the profiler during shutdown. An empty address
+returns a safe no-op, so binaries can adopt this library release before a
+central profile endpoint is enabled. Services with custom server lifecycles
+can call `profiling.StartFromEnv(serviceName)` themselves; both paths share one
+idempotent process-wide profiler.
 
 Remote endpoints must use HTTPS and HTTP Basic credentials. Credentials can be
 mounted as protected files:
