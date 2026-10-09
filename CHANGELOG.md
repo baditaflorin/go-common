@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.102.37] - 2026-10-09
+
+### Added
+
+- Add `fleetfetch.WithMaxBodyBytes` to bound memory for cached and direct
+  response reads.
+
 ## [0.102.36] - 2026-10-09
 
 ### Added
