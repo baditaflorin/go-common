@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.38] - 2026-10-09
+
+### Added
+
+- Allow opt-in Pyroscope Basic Auth credentials to be fetched by service-scoped
+  Fleet Secrets names, using the shared protected-key client and approved HTTPS
+  endpoint. Keep mounted credential files supported.
+
 ## [0.102.37] - 2026-10-09
 
 ### Added

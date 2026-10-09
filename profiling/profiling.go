@@ -4,6 +4,7 @@
 package profiling
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -12,18 +13,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baditaflorin/go-common/secrets"
 	pyroscope "github.com/grafana/pyroscope-go"
 )
 
 const (
-	serverAddressEnv = "PYROSCOPE_SERVER_ADDRESS"
-	uploadRateEnv    = "PYROSCOPE_UPLOAD_RATE"
-	environmentEnv   = "APP_ENVIRONMENT"
-	versionEnv       = "APP_VERSION"
-	userFileEnv      = "PYROSCOPE_BASIC_AUTH_USER_FILE"
-	passwordFileEnv  = "PYROSCOPE_BASIC_AUTH_PASSWORD_FILE"
-	maxSecretBytes   = 8 << 10
-	defaultUpload    = 15 * time.Second
+	serverAddressEnv  = "PYROSCOPE_SERVER_ADDRESS"
+	uploadRateEnv     = "PYROSCOPE_UPLOAD_RATE"
+	environmentEnv    = "APP_ENVIRONMENT"
+	versionEnv        = "APP_VERSION"
+	userFileEnv       = "PYROSCOPE_BASIC_AUTH_USER_FILE"
+	passwordFileEnv   = "PYROSCOPE_BASIC_AUTH_PASSWORD_FILE"
+	userSecretEnv     = "PYROSCOPE_BASIC_AUTH_USER_SECRET"
+	passwordSecretEnv = "PYROSCOPE_BASIC_AUTH_PASSWORD_SECRET"
+	maxSecretBytes    = 8 << 10
+	defaultUpload     = 15 * time.Second
 )
 
 // StopFunc stops the profiler and flushes its last profile batch. It is safe
@@ -41,11 +45,13 @@ func StartFromEnv(serviceName string) (StopFunc, error) {
 		return func() {}, nil
 	}
 
-	user, err := readSecretFile(userFileEnv)
-	if err != nil {
-		return nil, err
-	}
-	password, err := readSecretFile(passwordFileEnv)
+	user, password, err := loadBasicAuth(os.Getenv, func(name string) (string, error) {
+		client, err := secrets.NewFromEnv(os.Getenv, nil)
+		if err != nil {
+			return "", err
+		}
+		return client.Get(context.Background(), name)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +74,45 @@ func StartFromEnv(serviceName string) (StopFunc, error) {
 		return nil, fmt.Errorf("profiling: start Pyroscope client: %w", err)
 	}
 	return func() { _ = profiler.Stop() }, nil
+}
+
+// loadBasicAuth resolves either protected file mounts or service-scoped
+// Fleet Secrets names. Secret lookup is lazy: services without the profiling
+// endpoint configured do not need vault access.
+func loadBasicAuth(getenv func(string) string, getSecret func(string) (string, error)) (string, string, error) {
+	userSecret := strings.TrimSpace(getenv(userSecretEnv))
+	passwordSecret := strings.TrimSpace(getenv(passwordSecretEnv))
+	userFile := strings.TrimSpace(getenv(userFileEnv))
+	passwordFile := strings.TrimSpace(getenv(passwordFileEnv))
+	if (userSecret == "") != (passwordSecret == "") || (userFile == "") != (passwordFile == "") {
+		return "", "", fmt.Errorf("profiling: basic-auth user and password must both be configured")
+	}
+	if (userSecret != "" || passwordSecret != "") && (userFile != "" || passwordFile != "") {
+		return "", "", fmt.Errorf("profiling: configure basic-auth credentials using either secret names or files")
+	}
+	if userSecret != "" {
+		if getSecret == nil {
+			return "", "", fmt.Errorf("profiling: Fleet Secrets reader is unavailable")
+		}
+		user, err := getSecret(userSecret)
+		if err != nil {
+			return "", "", fmt.Errorf("profiling: could not load basic-auth user from Fleet Secrets")
+		}
+		password, err := getSecret(passwordSecret)
+		if err != nil {
+			return "", "", fmt.Errorf("profiling: could not load basic-auth password from Fleet Secrets")
+		}
+		return strings.TrimSpace(user), strings.TrimSpace(password), nil
+	}
+	user, err := readSecretFilePath(userFile)
+	if err != nil {
+		return "", "", fmt.Errorf("profiling: could not load basic-auth user file")
+	}
+	password, err := readSecretFilePath(passwordFile)
+	if err != nil {
+		return "", "", fmt.Errorf("profiling: could not load basic-auth password file")
+	}
+	return user, password, nil
 }
 
 func makeConfig(serviceName, address, environment, version, user, password, uploadRate string) (pyroscope.Config, error) {
@@ -129,17 +174,25 @@ func readSecretFile(envName string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
+	return readSecretFilePath(path)
+}
+
+func readSecretFilePath(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("profiling: secret file is unavailable or has unsafe permissions")
+	}
 	f, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("profiling: open %s: %w", envName, err)
+		return "", fmt.Errorf("profiling: secret file could not be opened")
 	}
 	defer f.Close()
 	value, err := io.ReadAll(io.LimitReader(f, maxSecretBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("profiling: read %s: %w", envName, err)
+		return "", fmt.Errorf("profiling: secret file could not be read")
 	}
 	if len(value) > maxSecretBytes {
-		return "", fmt.Errorf("profiling: %s exceeds the %d-byte limit", envName, maxSecretBytes)
+		return "", fmt.Errorf("profiling: secret file exceeds the %d-byte limit", maxSecretBytes)
 	}
 	return strings.TrimSpace(string(value)), nil
 }
