@@ -112,7 +112,7 @@ type Server struct {
 // for callers that want to embed the server in a non-stdlib
 // listener. Start() uses this internally.
 func (s *Server) Handler() http.Handler {
-	return telemetry.HTTPMiddleware(s.wrapDefaults(middleware.Chain(s.Mux, s.Middlewares...)))
+	return telemetry.HTTPMiddleware(s.wrapDefaults(fetchSourceMiddleware(middleware.Chain(s.Mux, s.Middlewares...))))
 }
 
 // buildHTTPServer constructs the *http.Server with the resolved
