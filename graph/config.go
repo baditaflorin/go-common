@@ -267,6 +267,25 @@ func validGraphServiceID(serviceID string) bool {
 	return strings.HasPrefix(serviceID, "fleet-") && validGraphLabel(serviceID)
 }
 
+// configuredServiceID prefers the canonical registry ID supplied by the
+// fleet-rendered Compose overlay. Many Go binaries use a legacy package name
+// such as "go_example_service" as their server identity, while the Graph
+// writer credential is scoped to the canonical registry ID. The explicit
+// override keeps the authenticated batch identity and event owner identical.
+// An invalid override fails closed so events are not attributed to a different
+// service than the credential authorizes.
+func configuredServiceID(defaultID string) string {
+	raw := strings.TrimSpace(os.Getenv("GRAPH_SERVICE_ID"))
+	if raw == "" {
+		return defaultID
+	}
+	serviceID := strings.ToLower(raw)
+	if !validGraphLabel(serviceID) {
+		return ""
+	}
+	return serviceID
+}
+
 // validGraphLabel accepts the conservative lowercase DNS-label subset used by
 // fleet service IDs. Callers lowercase before validation so operator-provided
 // aliases remain canonical while punctuation, paths, ports, and domains cannot

@@ -228,6 +228,61 @@ func TestInitUpdatesSenderIdentity(t *testing.T) {
 	}
 }
 
+func TestInitUsesCanonicalGraphServiceIDOverride(t *testing.T) {
+	resetState(t)
+	var got Batch
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/events" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode batch: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("GRAPH_ENABLED", "true")
+	t.Setenv("GRAPH_COLLECTOR_URL", srv.URL)
+	t.Setenv("GRAPH_API_KEY", "writer-test-key")
+	t.Setenv("GRAPH_SERVICE_ID", "Website-Carbon")
+
+	Init("go_website_carbon", "2.6.15")
+	defer Shutdown()
+	if got := ServiceID(); got != "website-carbon" {
+		t.Fatalf("ServiceID() = %q, want canonical registry ID", got)
+	}
+	Record(Event{Direction: "out", Target: "go-infrastructure-fetch-cache", Method: http.MethodGet, Status: http.StatusOK})
+	ensureInit().sender.flush()
+	if got.Service != "website-carbon" {
+		t.Fatalf("batch service = %q, want canonical registry ID", got.Service)
+	}
+	if len(got.Events) != 1 || got.Events[0].Caller != "website-carbon" {
+		t.Fatalf("batch events = %+v, want one event owned by website-carbon", got.Events)
+	}
+}
+
+func TestInvalidGraphServiceIDOverrideFailsClosed(t *testing.T) {
+	resetState(t)
+	t.Setenv("GRAPH_ENABLED", "true")
+	t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
+	t.Setenv("GRAPH_API_KEY", "writer-test-key")
+	t.Setenv("GRAPH_SERVICE_ID", "website_carbon")
+
+	Init("go_website_carbon", "2.6.15")
+	defer Shutdown()
+	if Enabled() {
+		t.Fatal("Graph emission enabled with an invalid canonical service identity")
+	}
+	if got := ServiceID(); got != "" {
+		t.Fatalf("ServiceID() = %q, want empty to fail closed", got)
+	}
+	Record(Event{Direction: "out", Target: "example.com", Method: http.MethodGet, Status: http.StatusOK})
+	if got := Stats().EventsRecorded; got != 0 {
+		t.Fatalf("recorded %d events with invalid service identity, want none", got)
+	}
+}
+
 func TestLookupCachesPositive(t *testing.T) {
 	resetState(t)
 	var hits int64

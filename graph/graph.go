@@ -34,6 +34,7 @@ type pkgState struct {
 // If the package was already initialised (e.g. via an earlier Record
 // from a probe) the existing ring and sender are preserved.
 func Init(serviceID, version string) {
+	serviceID = configuredServiceID(serviceID)
 	stateOnce.Do(func() {
 		stateMu.Lock()
 		state = bootstrap(serviceID, version)
@@ -101,6 +102,9 @@ func Record(e Event) {
 	stateMu.RLock()
 	serviceID := s.serviceID
 	stateMu.RUnlock()
+	if serviceID == "" {
+		return
+	}
 	// Sampling: roll once per event. EventsSampled counts the *kept*
 	// after-sampling events (so it equals EventsRecorded at rate 1.0).
 	if s.cfg.sampleRate < 1.0 {
@@ -155,7 +159,10 @@ func ServiceID() string {
 // in hot paths that want to skip Event allocation.
 func Enabled() bool {
 	s := ensureInit()
-	return s.cfg.eventEmissionEnabled()
+	stateMu.RLock()
+	serviceID := s.serviceID
+	stateMu.RUnlock()
+	return serviceID != "" && s.cfg.eventEmissionEnabled()
 }
 
 // Shutdown stops the background sender and flushes pending events.

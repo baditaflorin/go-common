@@ -36,6 +36,9 @@
 // Configuration is env-driven, read once at first use:
 //
 //	GRAPH_ENABLED        — default "false". Event emission is opt-in.
+//	GRAPH_SERVICE_ID     — optional canonical registry ID supplied by the
+//	                       fleet-rendered Compose overlay. It overrides a
+//	                       legacy Go package name for writer identity.
 //	GRAPH_COLLECTOR_URL  — exactly "https://fleet-graph.0exec.com" for a
 //	                       remote collector. HTTP/HTTPS loopback endpoints
 //	                       are allowed only for local development and tests.
