@@ -8,7 +8,7 @@
 
 # Changelog
 
-## Unreleased
+## [0.102.41] - 2026-10-10
 
 ### Fixed
 
