@@ -31,24 +31,48 @@ const fetchCacheHopHeader = "X-Fetch-Cache-Hop"
 // safehttp for its SSRF-safe fallback, and the reverse import would
 // create a cycle.
 //
-// On a fleetfetch error (cache unreachable AND its own direct fallback
-// failed) we return the error, which safehttp's extrasTransport treats
-// as "fall through to direct egress" — so a cache outage degrades to
-// the pre-cache behavior rather than failing the request.
+// For live fetches, a fleetfetch error is returned and safehttp's
+// extrasTransport falls through to direct egress. Common Crawl is
+// archive-only: returning an error there would make safehttp fetch the live
+// origin, so the adapter turns archive failures into a synthetic 502 response.
 type fetchCacheDelegate struct{ c *fleetfetch.Client }
 
 func (d fetchCacheDelegate) FetchGet(ctx context.Context, target string, h http.Header) (*safehttp.FetchResult, error) {
+	archiveOnly := d.c != nil && d.c.SourceForRequest(ctx) == fleetfetch.SourceCommonCrawl
+	archiveFailure := func() (*safehttp.FetchResult, error) {
+		if !archiveOnly {
+			return nil, fmt.Errorf("fetch-cache: unable to serve %q", target)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return commonCrawlUnavailableResult(), nil
+	}
+
 	// Skip-self: a request that already targets the cache host must not be
 	// routed through the cache (that would wrap a cache call in the cache).
-	// Returning an error makes extrasTransport fall through to direct egress.
+	// Live requests fall through to direct egress; archive-only requests fail
+	// closed so an explicit Common Crawl request cannot escape to the origin.
 	if targetIsCacheHost(target) {
-		return nil, fmt.Errorf("fetch-cache: target %q is the cache host; serving direct", target)
+		return archiveFailure()
 	}
 	r, err := d.c.GetWithHeaders(ctx, target, withHopHeader(h))
 	if err != nil {
-		return nil, err
+		return archiveFailure()
 	}
 	return &safehttp.FetchResult{Status: r.Status, Header: r.Header, Body: r.Body}, nil
+}
+
+// commonCrawlUnavailableResult is deliberately an HTTP response, not a
+// delegate error: safehttp interprets delegate errors as permission to fetch
+// the live origin. The generic body avoids leaking cache credentials or
+// internal transport details to the service handler.
+func commonCrawlUnavailableResult() *safehttp.FetchResult {
+	return &safehttp.FetchResult{
+		Status: http.StatusBadGateway,
+		Header: http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}},
+		Body:   []byte("Common Crawl archive fetch unavailable"),
+	}
 }
 
 // withHopHeader returns a copy of h carrying the one-hop marker, never

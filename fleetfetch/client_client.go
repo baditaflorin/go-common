@@ -148,13 +148,23 @@ func (c *Client) FetchNetwork(ctx context.Context, targetURL string) (*Response,
 
 // fetch is the shared implementation behind Get/GetWithMaxAge/GetWithHeaders.
 func (c *Client) fetch(ctx context.Context, targetURL string, maxAge time.Duration, perReqHeaders http.Header, render string) (fetchRes *Response, retErr error) {
-	source := c.source
+	return c.fetchSource(ctx, targetURL, maxAge, perReqHeaders, render, c.SourceForRequest(ctx))
+}
+
+// SourceForRequest returns the source this client will use for ctx, applying
+// explicit client configuration before a request-scoped override and the
+// environment-derived default. It lets adapters preserve source-specific
+// failure semantics without duplicating fleetfetch's precedence rules.
+func (c *Client) SourceForRequest(ctx context.Context) Source {
+	if c == nil {
+		return SourceLive
+	}
 	if !c.sourceExplicit {
 		if requestSource, ok := RequestSourceFromContext(ctx); ok {
-			source = requestSource
+			return requestSource
 		}
 	}
-	return c.fetchSource(ctx, targetURL, maxAge, perReqHeaders, render, source)
+	return c.source
 }
 
 func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.Duration, perReqHeaders http.Header, render string, source Source) (fetchRes *Response, retErr error) {
