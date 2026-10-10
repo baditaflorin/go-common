@@ -34,7 +34,7 @@ type pkgState struct {
 // If the package was already initialised (e.g. via an earlier Record
 // from a probe) the existing ring and sender are preserved.
 func Init(serviceID, version string) {
-	serviceID = configuredServiceID(serviceID)
+	serviceID, overrideSet := configuredServiceID(serviceID)
 	stateOnce.Do(func() {
 		stateMu.Lock()
 		state = bootstrap(serviceID, version)
@@ -42,7 +42,7 @@ func Init(serviceID, version string) {
 	})
 	stateMu.Lock()
 	if state != nil {
-		if serviceID != "" {
+		if serviceID != "" || overrideSet {
 			state.serviceID = serviceID
 		}
 		if version != "" {

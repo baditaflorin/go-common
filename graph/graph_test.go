@@ -267,8 +267,10 @@ func TestInvalidGraphServiceIDOverrideFailsClosed(t *testing.T) {
 	t.Setenv("GRAPH_ENABLED", "true")
 	t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
 	t.Setenv("GRAPH_API_KEY", "writer-test-key")
-	t.Setenv("GRAPH_SERVICE_ID", "website_carbon")
+	t.Setenv("GRAPH_SERVICE_ID", "")
 
+	Init("go_website_carbon", "2.6.15")
+	t.Setenv("GRAPH_SERVICE_ID", "website_carbon")
 	Init("go_website_carbon", "2.6.15")
 	defer Shutdown()
 	if Enabled() {

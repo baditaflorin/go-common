@@ -274,16 +274,16 @@ func validGraphServiceID(serviceID string) bool {
 // override keeps the authenticated batch identity and event owner identical.
 // An invalid override fails closed so events are not attributed to a different
 // service than the credential authorizes.
-func configuredServiceID(defaultID string) string {
+func configuredServiceID(defaultID string) (string, bool) {
 	raw := strings.TrimSpace(os.Getenv("GRAPH_SERVICE_ID"))
 	if raw == "" {
-		return defaultID
+		return defaultID, false
 	}
 	serviceID := strings.ToLower(raw)
 	if !validGraphLabel(serviceID) {
-		return ""
+		return "", true
 	}
-	return serviceID
+	return serviceID, true
 }
 
 // validGraphLabel accepts the conservative lowercase DNS-label subset used by
