@@ -1,12 +1,12 @@
-## [0.102.40] - 2026-10-09
-
-### Added
-
-- Carry request-level source selection through standard Go Common servers into
-  fleetfetch. Requests can choose live or archive-only Common Crawl without
-  changing process defaults; explicitly pinned clients retain precedence.
-
 # Changelog
+
+## [0.102.42] - 2026-10-11
+
+### Fixed
+
+- Allow the fleet-rendered `GRAPH_SERVICE_ID` to bind Graph event batches to
+  the canonical registry identity instead of a legacy Go package name. Invalid
+  overrides fail closed without affecting application requests.
 
 ## [0.102.41] - 2026-10-10
 
@@ -14,6 +14,14 @@
 
 - Keep Common Crawl requests archive-only when the fetch-cache delegate fails;
   live requests retain their existing direct-egress fallback.
+
+## [0.102.40] - 2026-10-09
+
+### Added
+
+- Carry request-level source selection through standard Go Common servers into
+  fleetfetch. Requests can choose live or archive-only Common Crawl without
+  changing process defaults; explicitly pinned clients retain precedence.
 
 ## [0.102.39] - 2026-10-09
 

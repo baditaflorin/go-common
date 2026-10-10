@@ -50,9 +50,7 @@ func newSender(cfg config, serviceID, version string, r *ring, c *atomicCounters
 func (s *sender) setIdentity(serviceID, version string) {
 	s.identityMu.Lock()
 	defer s.identityMu.Unlock()
-	if serviceID != "" {
-		s.serviceID = serviceID
-	}
+	s.serviceID = serviceID
 	if version != "" {
 		s.version = version
 	}
