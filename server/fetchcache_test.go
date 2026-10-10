@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -103,5 +104,82 @@ func TestDefaultFetchDelegate_Cache403FallsThroughDirectAndOpensCircuit(t *testi
 	}
 	if originHits != 2 {
 		t.Fatalf("outer safehttp did not fall through direct: origin hits=%d, want 2", originHits)
+	}
+}
+
+// Common Crawl errors must stop at the archive boundary. A delegate error
+// normally tells safehttp to fetch the live origin, which is correct for
+// source=live but violates the archive-only contract.
+func TestDefaultFetchDelegate_CommonCrawlFailureDoesNotFetchOrigin(t *testing.T) {
+	safehttp.SetDefaultFetchDelegate(nil)
+	t.Cleanup(func() { safehttp.SetDefaultFetchDelegate(nil) })
+	safehttp.SetAllowedPrivateIPs([]net.IP{net.ParseIP("127.0.0.1")})
+	t.Cleanup(func() { safehttp.SetAllowedPrivateIPs(nil) })
+
+	cacheHits := 0
+	cache := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		cacheHits++
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(cache.Close)
+	// The skip-self guard compares hostnames, so keep this cache hostname
+	// distinct from the 127.0.0.1 origin while still resolving locally.
+	cacheURL := strings.Replace(cache.URL, "127.0.0.1", "localhost", 1)
+	t.Setenv(fleetfetch.EnvCacheURL, cacheURL)
+	t.Setenv(fleetfetch.EnvAPIKey, "rejected-test-key")
+	t.Setenv(fleetfetch.EnvSource, "live")
+
+	originHits := 0
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		originHits++
+		_, _ = io.WriteString(w, "live origin")
+	}))
+	t.Cleanup(origin.Close)
+
+	srv := server.New(&config.Config{AppName: "go_fetchcache_commoncrawl_fail_closed_test", Version: "0.0.0", Port: "0"})
+	srv.Mux.HandleFunc("/probe", func(w http.ResponseWriter, r *http.Request) {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, r.URL.Query().Get("target"), nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		resp, err := safehttp.NewClient(safehttp.WithTimeout(2 * time.Second)).Do(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	})
+	handler := srv.Handler()
+	request := func(source string) *httptest.ResponseRecorder {
+		q := url.Values{"target": []string{origin.URL}, "source": []string{source}}
+		req := httptest.NewRequest(http.MethodGet, "/probe?"+q.Encode(), nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	archive := request("commoncrawl")
+	if archive.Code != http.StatusBadGateway || archive.Body.String() != "Common Crawl archive fetch unavailable" {
+		t.Fatalf("archive response = %d %q, want synthetic 502", archive.Code, archive.Body.String())
+	}
+	if originHits != 0 {
+		t.Fatalf("Common Crawl failure reached live origin %d times", originHits)
+	}
+	if cacheHits != 1 {
+		t.Fatalf("cache hits = %d, want one archive attempt", cacheHits)
+	}
+
+	// A live request remains allowed to degrade to the origin when cache
+	// authentication fails; the safehttp delegate's fail-open behavior stays
+	// intact for the existing production path.
+	live := request("live")
+	if live.Code != http.StatusOK || live.Body.String() != "live origin" {
+		t.Fatalf("live response = %d %q, want origin 200", live.Code, live.Body.String())
+	}
+	if originHits != 1 {
+		t.Fatalf("live fallback origin hits = %d, want one", originHits)
 	}
 }

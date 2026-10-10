@@ -50,6 +50,24 @@ func TestRequestSourceCommonCrawlOverridesLiveEnvironment(t *testing.T) {
 	}
 }
 
+func TestClientSourceForRequestPrecedence(t *testing.T) {
+	t.Setenv(EnvSource, "commoncrawl")
+	client := NewClient()
+	if got := client.SourceForRequest(context.Background()); got != SourceCommonCrawl {
+		t.Fatalf("environment source = %q, want %q", got, SourceCommonCrawl)
+	}
+
+	liveRequest := WithRequestSource(context.Background(), SourceLive)
+	if got := client.SourceForRequest(liveRequest); got != SourceLive {
+		t.Fatalf("request source = %q, want explicit live override", got)
+	}
+
+	pinned := NewClient(WithSource(SourceCommonCrawl))
+	if got := pinned.SourceForRequest(liveRequest); got != SourceCommonCrawl {
+		t.Fatalf("pinned source = %q, want %q", got, SourceCommonCrawl)
+	}
+}
+
 func TestExplicitClientSourceOverridesRequestContext(t *testing.T) {
 	var seen string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

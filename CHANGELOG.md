@@ -8,6 +8,13 @@
 
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Keep Common Crawl requests archive-only when the fetch-cache delegate fails;
+  live requests retain their existing direct-egress fallback.
+
 ## [0.102.39] - 2026-10-09
 
 ### Added
