@@ -1,11 +1,15 @@
 package graph
 
 import (
+	"context"
+	"errors"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+const shutdownFlushTimeout = 5 * time.Second
 
 // Package-level state. Initialised lazily on the first Init call (or
 // the first Record if Init was never called).
@@ -165,15 +169,25 @@ func Enabled() bool {
 	return serviceID != "" && s.cfg.eventEmissionEnabled()
 }
 
-// Shutdown stops the background sender and flushes pending events.
-// Intended for tests and graceful-shutdown paths; normal services
-// run for the life of the process.
-func Shutdown() {
+// Shutdown stops the background sender and makes a final best-effort flush.
+// The optional caller context can shorten the five-second maximum; omitting
+// it preserves compatibility with existing callers while remaining bounded.
+func Shutdown(contexts ...context.Context) error {
+	if len(contexts) > 1 {
+		return errors.New("graph shutdown accepts at most one context")
+	}
+	parent := context.Background()
+	if len(contexts) == 1 && contexts[0] != nil {
+		parent = contexts[0]
+	}
+	ctx, cancel := context.WithTimeout(parent, shutdownFlushTimeout)
+	defer cancel()
+
 	stateMu.RLock()
 	s := state
 	stateMu.RUnlock()
 	if s == nil || s.sender == nil {
-		return
+		return nil
 	}
-	s.sender.shutdown()
+	return s.sender.shutdown(ctx)
 }

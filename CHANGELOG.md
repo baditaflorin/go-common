@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.102.43] - 2026-10-11
+
+### Added
+
+- Add a validated, context-scoped logical target override for Fleet Graph so
+  calls through shared internal addresses retain the canonical service ID.
+- Bound Fleet Graph shutdown flushes by the caller context and wire the shared
+  server lifecycle to perform that bounded flush.
+
 ## [0.102.42] - 2026-10-11
 
 ### Fixed

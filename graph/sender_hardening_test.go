@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,44 @@ import (
 	"testing"
 	"time"
 )
+
+func TestShutdownHonorsCallerDeadline(t *testing.T) {
+	resetState(t)
+	started := make(chan struct{}, 1)
+	t.Setenv("GRAPH_ENABLED", "true")
+	t.Setenv("GRAPH_COLLECTOR_URL", "http://127.0.0.1:1234")
+	t.Setenv("GRAPH_API_KEY", "writer-test-key")
+	Init("caller", "test")
+	ensureInit().sender.client.Transport = graphBlockingRoundTripper{started: started}
+	Record(Event{Direction: "out", Target: "technology-stack", Method: http.MethodGet})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := Shutdown(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown error = %v, want context deadline exceeded", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown flush did not start")
+	}
+	select {
+	case <-ensureInit().sender.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("sender did not stop after the flush deadline")
+	}
+}
+
+type graphBlockingRoundTripper struct {
+	started chan<- struct{}
+}
+
+func (t graphBlockingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.started <- struct{}{}
+	<-req.Context().Done()
+	return nil, req.Context().Err()
+}
 
 func newTestSender(cfg config, batchSize int) (*sender, *ring, *atomicCounters) {
 	r := newRing(16)
