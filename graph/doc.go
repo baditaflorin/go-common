@@ -27,8 +27,11 @@
 // observations as topology evidence; its volume is not a unique-request,
 // user, prompt, or LLM-invocation count.
 //
-// Both call Record under the hood. Services do not import this
-// package directly; bumping go-common@vX.Y.Z is the entire rollout.
+// Both call Record under the hood. Services get automatic coverage by using
+// the standard go-common server and safehttp client. An outbound caller that
+// addresses a catalogued service through an ambiguous shared IP should attach
+// graph.WithTarget(ctx, serviceID) to that request context so the emitted
+// edge keeps its canonical logical destination.
 //
 // Identity comes from server.Run via Init(serviceID, version). If
 // Init is not called the package falls back to "unknown".
@@ -82,4 +85,8 @@
 //     internal Docker aliases. It never rewrites a request, accepts no URL,
 //     port, path, or domain, and malformed entries retain ordinary external
 //     target classification.
+//   - Context-aware identity: WithTarget annotates only the graph event for
+//     one request. It does not rewrite the URL or affect request routing.
+//   - Bounded shutdown: Shutdown accepts an optional context and caps the
+//     final flush at five seconds; callers may impose a shorter deadline.
 package graph

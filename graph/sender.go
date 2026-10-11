@@ -31,6 +31,8 @@ type sender struct {
 	client            *http.Client
 	stop              chan struct{}
 	stopped           chan struct{}
+	stopOnce          sync.Once
+	shutdownCtx       context.Context
 	authCooldownUntil int64 // unix nanos; accessed atomically
 }
 
@@ -69,19 +71,26 @@ func (s *sender) run() {
 	for {
 		select {
 		case <-s.stop:
-			s.flush() // best-effort final flush
+			s.flush(s.shutdownCtx) // bounded best-effort final flush
 			return
 		case <-tick.C:
-			s.flush()
+			s.flush(context.Background())
 		}
 	}
 }
 
-func (s *sender) flush() {
+func (s *sender) flush(contexts ...context.Context) {
+	ctx := context.Background()
+	if len(contexts) > 0 && contexts[0] != nil {
+		ctx = contexts[0]
+	}
 	if !s.canWriteAt(time.Now()) {
 		return
 	}
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		events := s.pending
 		if len(events) == 0 {
 			events = s.ring.drain(s.cfg.flushBatch)
@@ -89,7 +98,7 @@ func (s *sender) flush() {
 		if len(events) == 0 {
 			return
 		}
-		if !s.send(events) {
+		if !s.send(ctx, events) {
 			// One failed batch must not turn into a burst that drains the
 			// remainder of the ring. Preserve the failed batch separately
 			// and leave every later batch queued in the ring for a later tick.
@@ -106,7 +115,7 @@ func (s *sender) flush() {
 // send returns true only when the collector accepted the batch. The result
 // drives flush's fail-closed pacing: after one failure, no more batches leave
 // this process until a later scheduled flush.
-func (s *sender) send(events []Event) bool {
+func (s *sender) send(parent context.Context, events []Event) bool {
 	if !s.canWriteAt(time.Now()) {
 		return false
 	}
@@ -126,7 +135,7 @@ func (s *sender) send(events []Event) bool {
 		atomic.AddInt64(&s.counters.BatchesFailed, 1)
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.collectorURL+"/events", bytes.NewReader(body))
 	if err != nil {
@@ -185,9 +194,20 @@ func newGraphHTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
-func (s *sender) shutdown() {
-	close(s.stop)
-	<-s.stopped
+func (s *sender) shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.stopOnce.Do(func() {
+		s.shutdownCtx = ctx
+		close(s.stop)
+	})
+	select {
+	case <-s.stopped:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // atomicCounters holds Counters with atomic accessors. We keep the

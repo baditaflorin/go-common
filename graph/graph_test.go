@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,12 +21,9 @@ func resetState(t *testing.T) {
 	stateMu.Lock()
 	if state != nil && state.sender != nil {
 		// Best-effort shutdown; ignore if already stopped.
-		select {
-		case <-state.sender.stopped:
-		default:
-			close(state.sender.stop)
-			<-state.sender.stopped
-		}
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownFlushTimeout)
+		_ = state.sender.shutdown(ctx)
+		cancel()
 	}
 	state = nil
 	stateOnce = sync.Once{}
@@ -352,7 +350,15 @@ func TestRoundTripperRecordsOutbound(t *testing.T) {
 	}))
 	defer target.Close()
 	c := &http.Client{Transport: RoundTripper(http.DefaultTransport)}
-	resp, err := c.Get(target.URL + "/api/users/42")
+	graphCtx, err := WithTarget(context.Background(), "technology-stack")
+	if err != nil {
+		t.Fatalf("WithTarget: %v", err)
+	}
+	req, err := http.NewRequestWithContext(graphCtx, http.MethodGet, target.URL+"/api/users/42", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+	resp, err := c.Do(req)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -375,6 +381,20 @@ func TestRoundTripperRecordsOutbound(t *testing.T) {
 	}
 	if e.Caller != "caller_svc" {
 		t.Errorf("Caller=%q; want caller_svc", e.Caller)
+	}
+	if e.Target != "technology-stack" {
+		t.Errorf("Target=%q; want context-selected technology-stack", e.Target)
+	}
+}
+
+func TestWithTargetRejectsInvalidServiceIDs(t *testing.T) {
+	for _, target := range []string{"", "external:example.com", "bad/service", "service.example.com", "-leading"} {
+		if _, err := WithTarget(context.Background(), target); err == nil {
+			t.Errorf("WithTarget(%q) succeeded; want validation error", target)
+		}
+	}
+	if _, err := WithTarget(nil, "technology-stack"); err == nil {
+		t.Fatal("WithTarget(nil, ...) succeeded; want context error")
 	}
 }
 

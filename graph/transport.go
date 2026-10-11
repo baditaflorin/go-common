@@ -41,11 +41,14 @@ func (t *observingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	}
 	target := "external:unknown"
 	if req.URL != nil {
-		aliases := map[string]string(nil)
-		if s := ensureInit(); s != nil {
-			aliases = s.cfg.targetAliases
+		target = targetFromContext(req.Context())
+		if target == "" {
+			aliases := map[string]string(nil)
+			if s := ensureInit(); s != nil {
+				aliases = s.cfg.targetAliases
+			}
+			target = targetFromHostWithAliases(req.URL.Host, aliases)
 		}
-		target = targetFromHostWithAliases(req.URL.Host, aliases)
 	}
 	method := req.Method
 	if method == "" {
