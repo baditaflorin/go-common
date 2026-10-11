@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.44] - 2026-10-12
+
+### Fixed
+
+- Allow the Common Crawl staging profile's local probe key only when both the
+  service environment is staging and the fetch source is Common Crawl. Keep
+  production and live-mode requests keystore-gated.
+
 ## [0.102.43] - 2026-10-11
 
 ### Added

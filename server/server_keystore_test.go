@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/baditaflorin/go-common/config"
+	"github.com/baditaflorin/go-common/fleetfetch"
 	"github.com/baditaflorin/go-common/header"
 )
 
@@ -95,5 +96,57 @@ func TestWithKeystoreAuthTierTrustedProxyNoCacheRechecksOneUse(t *testing.T) {
 	}
 	if got := verifyCalls.Load(); got != 2 {
 		t.Fatalf("direct requests must each call authoritative verify: got %d calls, want 2", got)
+	}
+}
+
+func TestWithKeystoreAuthAcceptsCommonCrawlStageKeyOnlyInIsolatedStaging(t *testing.T) {
+	var verifyCalls atomic.Int32
+	keystore := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		verifyCalls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer keystore.Close()
+	t.Setenv("APIKEY_SERVICE_URL", keystore.URL)
+	t.Setenv("COMMONCRAWL_STAGE_API_KEY", "stage-probe-key")
+
+	for _, tc := range []struct {
+		name        string
+		environment string
+		source      string
+		wantStatus  int
+		wantVerify  int32
+	}{
+		{name: "isolated archive staging", environment: "staging", source: "commoncrawl", wantStatus: http.StatusNoContent, wantVerify: 0},
+		{name: "live staging", environment: "staging", source: "live", wantStatus: http.StatusUnauthorized, wantVerify: 1},
+		{name: "production archive source", environment: "production", source: "commoncrawl", wantStatus: http.StatusUnauthorized, wantVerify: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("FLEET_ENVIRONMENT", tc.environment)
+			t.Setenv(fleetfetch.EnvSource, tc.source)
+			cfg := &config.Config{AppName: "test", Version: "0.0.0", Port: "0"}
+			srv := New(cfg, WithKeystoreAuth())
+			srv.Mux.HandleFunc("/protected", func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+			protected := httptest.NewServer(srv.Handler())
+			defer protected.Close()
+
+			req, err := http.NewRequest(http.MethodGet, protected.URL+"/protected", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set(header.APIKey, "stage-probe-key")
+			resp, err := protected.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != tc.wantStatus {
+				t.Fatalf("status=%d want=%d", resp.StatusCode, tc.wantStatus)
+			}
+			if got := verifyCalls.Load(); got != tc.wantVerify {
+				t.Fatalf("keystore verify calls=%d want=%d", got, tc.wantVerify)
+			}
+		})
 	}
 }
