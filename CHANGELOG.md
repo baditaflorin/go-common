@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.102.45] - 2026-10-12
+
+### Added
+
+- Add the opt-in `bootgate` package: `Wait`/`Go` spread heavy boot-time work
+  with a deterministic per-host (FNV-1a of hostname) jitter and back off while
+  the host 1-minute load average is above a ceiling, bounded by a max wait.
+  Configured via `BOOT_BASE_DELAY`, `BOOT_JITTER_MAX`, `BOOT_MAX_LOAD`,
+  `BOOT_MAX_WAIT`, `BOOT_POLL_EVERY`; everything defaults to disabled, so
+  nothing changes until a service calls `Wait` and an operator sets env.
+
 ## [0.102.44] - 2026-10-12
 
 ### Fixed
