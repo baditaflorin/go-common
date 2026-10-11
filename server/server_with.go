@@ -2,10 +2,13 @@ package server
 
 import (
 	"embed"
+	"os"
+	"strings"
 
 	"github.com/baditaflorin/go-common/agent"
 	"github.com/baditaflorin/go-common/apikey"
 	"github.com/baditaflorin/go-common/depcheck"
+	"github.com/baditaflorin/go-common/fleetfetch"
 	"github.com/baditaflorin/go-common/middleware"
 	openapipkg "github.com/baditaflorin/go-common/openapi"
 	"github.com/baditaflorin/go-common/promx"
@@ -92,6 +95,21 @@ func WithServerTimeouts(read, write, idle time.Duration) Option {
 	}
 }
 
+// commonCrawlStageLocalTokens adds the isolated staging probe credential only
+// to Common Crawl profiles. The staging runner keeps the app on an internal-only
+// network with no published host port; production and live-mode requests never
+// accept this credential.
+func commonCrawlStageLocalTokens(localTokens []string) []string {
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("FLEET_ENVIRONMENT")), "staging") ||
+		!strings.EqualFold(strings.TrimSpace(os.Getenv(fleetfetch.EnvSource)), string(fleetfetch.SourceCommonCrawl)) {
+		return localTokens
+	}
+	if token := strings.TrimSpace(os.Getenv("COMMONCRAWL_STAGE_API_KEY")); token != "" {
+		return append(localTokens, token)
+	}
+	return localTokens
+}
+
 // WithKeystoreAuth mounts the canonical fleet auth middleware
 // (middleware.TokenAuthKeystore) wired up to the keystore via
 // apikey.New() + apikey.Cache. Suitable for every 0exec service —
@@ -101,6 +119,9 @@ func WithServerTimeouts(read, write, idle time.Duration) Option {
 // localTokens are optional service-owned credentials accepted without a
 // keystore lookup. Avoid public or shared fallback values; use a real
 // keystore-issued credential for callers and pass none for keystore-only auth.
+// The staging runner's COMMONCRAWL_STAGE_API_KEY is a narrowly gated test key:
+// it is considered only when FLEET_ENVIRONMENT=staging and
+// FLEET_FETCH_SOURCE=commoncrawl. Never configure that key in production.
 //
 // Reads APIKEY_SERVICE_URL + APIKEY_SERVICE_ADMIN_TOKEN from env (with
 // sane defaults). Failures are deferred to first /verify call — the
@@ -119,7 +140,7 @@ func WithKeystoreAuth(localTokens ...string) Option {
 		}
 		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
 			Verifier:    ks,
-			LocalTokens: localTokens,
+			LocalTokens: commonCrawlStageLocalTokens(localTokens),
 			Observer:    s.PromAuthCollectors,
 		}))
 	}
@@ -141,7 +162,7 @@ func WithKeystoreAuthMesh(localTokens ...string) Option {
 		}
 		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
 			Verifier:         ks,
-			LocalTokens:      localTokens,
+			LocalTokens:      commonCrawlStageLocalTokens(localTokens),
 			Observer:         s.PromAuthCollectors,
 			TrustPrivateMesh: true,
 		}))
@@ -172,7 +193,7 @@ func WithKeystoreAuthTier(requiredTier string, enforce bool, localTokens ...stri
 		}
 		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
 			Verifier:     ks,
-			LocalTokens:  localTokens,
+			LocalTokens:  commonCrawlStageLocalTokens(localTokens),
 			Observer:     s.PromAuthCollectors,
 			RequiredTier: requiredTier,
 			TierEnforce:  enforce,
@@ -216,7 +237,7 @@ func WithKeystoreAuthTierTrustedProxyNoCache(requiredTier string, enforce bool, 
 func withKeystoreAuthTierTrustedProxy(s *Server, verifier apikey.Verifier, requiredTier string, enforce bool, trustedGatewayCIDRs []string, localTokens []string) {
 	s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
 		Verifier:            verifier,
-		LocalTokens:         localTokens,
+		LocalTokens:         commonCrawlStageLocalTokens(localTokens),
 		Observer:            s.PromAuthCollectors,
 		RequiredTier:        requiredTier,
 		TierEnforce:         enforce,
