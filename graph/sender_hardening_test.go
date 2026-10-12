@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -57,6 +58,38 @@ func newTestSender(cfg config, batchSize int) (*sender, *ring, *atomicCounters) 
 		cfg.flushBatch = batchSize
 	}
 	return newSender(cfg, "go-test-sender", "test", r, counters), r, counters
+}
+
+func TestGraphHTTPClientUsesConfiguredProxyDespiteNoProxy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://graph-proxy.example.test:8080")
+	t.Setenv("https_proxy", "")
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("http_proxy", "")
+	t.Setenv("NO_PROXY", ".0exec.com")
+	t.Setenv("no_proxy", "")
+
+	client := newGraphHTTPClient(time.Second)
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type = %T, want *http.Transport", client.Transport)
+	}
+	req := &http.Request{URL: &url.URL{Scheme: "https", Host: "fleet-graph.0exec.com"}}
+	proxy, err := transport.Proxy(req)
+	if err != nil {
+		t.Fatalf("resolve graph proxy: %v", err)
+	}
+	if proxy == nil || proxy.String() != "http://graph-proxy.example.test:8080" {
+		t.Fatalf("graph proxy = %v, want configured HTTPS proxy despite NO_PROXY", proxy)
+	}
+
+	loopback := &http.Request{URL: &url.URL{Scheme: "http", Host: "127.0.0.1:8090"}}
+	proxy, err = transport.Proxy(loopback)
+	if err != nil {
+		t.Fatalf("resolve loopback proxy: %v", err)
+	}
+	if proxy != nil {
+		t.Fatalf("loopback proxy = %v, want direct local development traffic", proxy)
+	}
 }
 
 func TestSenderUsesRotatedFileBackedWriterKeyPerBatch(t *testing.T) {
