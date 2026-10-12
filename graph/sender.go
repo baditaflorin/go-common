@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -186,6 +187,7 @@ func (s *sender) canWriteAt(now time.Time) bool {
 func newGraphHTTPClient(timeout time.Duration) *http.Client {
 	proxyConfig := httpproxy.FromEnvironment()
 	proxyConfig.NoProxy = ""
+	proxyForURL := proxyConfig.ProxyFunc()
 
 	return &http.Client{
 		Timeout: timeout,
@@ -193,7 +195,9 @@ func newGraphHTTPClient(timeout time.Duration) *http.Client {
 			return http.ErrUseLastResponse
 		},
 		Transport: &http.Transport{
-			Proxy:               proxyConfig.ProxyFunc(),
+			Proxy: func(req *http.Request) (*url.URL, error) {
+				return proxyForURL(req.URL)
+			},
 			MaxIdleConns:        4,
 			MaxIdleConnsPerHost: 2,
 			IdleConnTimeout:     60 * time.Second,
