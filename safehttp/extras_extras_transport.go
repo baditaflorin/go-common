@@ -108,6 +108,7 @@ func (t *extrasTransport) logFetchCacheDebug(format string, args ...any) {
 
 func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	host := req.URL.Hostname()
+	requireFetchCache := RequiredFetchCacheFromContext(req.Context())
 
 	// Fetch-cache routing: a plain GET (no request body, no Range
 	// header) is eligible to be served by the fetch-cache delegate
@@ -121,17 +122,20 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// client opted out via WithoutProxy / WithoutFetchCache), so package-
 	// level var clients built before server.New still route through it.
 	delegate := t.fetchDelegate
-	if delegate == nil && t.useDefaultFetchCache {
+	if delegate == nil && (t.useDefaultFetchCache || requireFetchCache) {
 		delegate = DefaultFetchDelegate()
 	}
 	// Per-request opt-out: WithoutFetchCacheContext(ctx) bypasses the
 	// process-wide default delegate (e.g. selftest probes validating the
 	// real origin path). An explicit per-client WithFetchDelegate was wired
 	// on purpose, so it still wins over the context flag.
-	if t.fetchDelegate == nil && fetchCacheDisabledByContext(req.Context()) {
+	if t.fetchDelegate == nil && fetchCacheDisabledByContext(req.Context()) && !requireFetchCache {
 		delegate = nil
 	}
 	eligibleGet := req.Method == http.MethodGet && req.Body == nil && req.Header.Get("Range") == ""
+	if requireFetchCache && eligibleGet && delegate == nil {
+		return requiredFetchCacheUnavailable(req), nil
+	}
 	if fetchCacheDebug && eligibleGet {
 		t.logFetchCacheDebug("decision host=%s perClientDelegate=%v useDefaultFetchCache=%v defaultDelegateInstalled=%v willRoute=%v",
 			host, t.fetchDelegate != nil, t.useDefaultFetchCache, DefaultFetchDelegate() != nil, delegate != nil)
@@ -171,6 +175,9 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				ProtoMajor:    1,
 				ProtoMinor:    1,
 			}, nil
+		}
+		if requireFetchCache {
+			return requiredFetchCacheUnavailable(req), nil
 		}
 		// delegate error / nil → fall through to direct egress.
 		if fetchCacheDebug {
@@ -304,6 +311,21 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	return resp, err
+}
+
+func requiredFetchCacheUnavailable(req *http.Request) *http.Response {
+	body := []byte("required fetch cache unavailable")
+	return &http.Response{
+		StatusCode:    http.StatusBadGateway,
+		Status:        http.StatusText(http.StatusBadGateway),
+		Header:        http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}},
+		Body:          io.NopCloser(bytes.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Request:       req,
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+	}
 }
 
 func (t *extrasTransport) appendDegraded(host string) {

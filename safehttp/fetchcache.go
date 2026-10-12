@@ -17,9 +17,8 @@ type FetchResult struct {
 
 // FetchDelegate routes a plain GET through an alternate fetcher (e.g.
 // the fleet fetch-cache). Implementations MUST be safe for concurrent
-// use. A non-nil error signals "I couldn't serve this" — the caller
-// (extrasTransport) falls through to the normal direct egress path, so
-// a delegate outage never breaks the request.
+// use. A non-nil error normally falls through to direct egress; requests
+// marked with RequireFetchCacheContext fail closed instead.
 //
 // The concrete fleet-fetch-cache-backed adapter lives in go-common/
 // server (which imports both safehttp and fleetfetch). safehttp itself
@@ -89,7 +88,8 @@ func WithFetchDelegate(d FetchDelegate) Option {
 // when a process-wide DefaultFetchDelegate is installed. Use for clients
 // that must observe real origin behavior (SSRF probers, smuggling
 // detectors, latency/availability monitors) but that don't otherwise set
-// WithoutProxy. An explicit WithFetchDelegate still wins over this flag.
+// WithoutProxy. An explicit WithFetchDelegate or a context marked by
+// RequireFetchCacheContext still wins over this flag.
 //
 // Note: WithForceHTTP2() implies this same bypass automatically (see
 // that option's doc comment) — you don't need to also pass
@@ -107,9 +107,16 @@ func WithoutFetchCache() Option {
 // WithoutFetchCache() option.
 type ctxKeyNoFetchCache struct{}
 
+// ctxKeyRequireFetchCache marks a request whose explicit source requires the
+// fetch-cache path. It takes precedence over the ordinary client and context
+// opt-outs below; otherwise a Common Crawl request could silently fetch the
+// live origin instead of the archive.
+type ctxKeyRequireFetchCache struct{}
+
 // WithoutFetchCacheContext returns a child context that disables fetch-cache
 // delegate routing for any safehttp request made with it. Eligible GETs go
-// direct to origin instead of through the process-wide DefaultFetchDelegate.
+// direct to origin instead of through the process-wide DefaultFetchDelegate,
+// unless the context is also marked with RequireFetchCacheContext.
 //
 // This is a per-request override that works even on clients built before
 // server.New installed the default delegate, and even on the package-level
@@ -132,6 +139,19 @@ func WithoutFetchCacheContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, ctxKeyNoFetchCache{}, true)
 }
 
+// RequireFetchCacheContext marks a request that must be served by the
+// process-wide fetch-cache delegate. This is used for explicit archive-only
+// requests, such as source=commoncrawl. It overrides WithoutFetchCache and
+// WithoutFetchCacheContext so callers cannot accidentally escape to the live
+// origin. If no delegate can serve the request, safehttp returns a synthetic
+// 502 response instead of making a direct request.
+func RequireFetchCacheContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, ctxKeyRequireFetchCache{}, true)
+}
+
 // fetchCacheDisabledByContext reports whether ctx carries the
 // WithoutFetchCacheContext opt-out flag.
 func fetchCacheDisabledByContext(ctx context.Context) bool {
@@ -139,5 +159,16 @@ func fetchCacheDisabledByContext(ctx context.Context) bool {
 		return false
 	}
 	v, _ := ctx.Value(ctxKeyNoFetchCache{}).(bool)
+	return v
+}
+
+// RequiredFetchCacheFromContext reports whether ctx requires outbound GETs to
+// use a fetch-cache delegate. This is exposed so server middleware and tests can
+// verify that an explicit archive source cannot fall through to the origin.
+func RequiredFetchCacheFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(ctxKeyRequireFetchCache{}).(bool)
 	return v
 }

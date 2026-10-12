@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/baditaflorin/go-common/config"
 	"github.com/baditaflorin/go-common/fleetfetch"
 	"github.com/baditaflorin/go-common/safehttp"
 )
@@ -64,9 +65,9 @@ func (d *recordingDelegate) FetchGet(_ context.Context, _ string, _ http.Header)
 	return &safehttp.FetchResult{Status: 599, Body: []byte("from-delegate")}, nil
 }
 
-// TestWrapDefaults_LoopGuard: an inbound request carrying the one-hop marker
-// must disable fetch-cache delegation for safehttp GETs made while handling
-// it (loop broken at one hop); a request without it routes normally.
+// TestWrapDefaults_LoopGuard: the one-hop marker disables fetch-cache
+// delegation only inside the cache service. Other services ignore caller-
+// supplied copies of the header.
 func TestWrapDefaults_LoopGuard(t *testing.T) {
 	del := &recordingDelegate{}
 	safehttp.SetDefaultFetchDelegate(del)
@@ -83,7 +84,7 @@ func TestWrapDefaults_LoopGuard(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	s := &Server{Mux: http.NewServeMux()}
+	s := &Server{Config: &config.Config{AppName: fetchCacheServiceAppName}, Mux: http.NewServeMux()}
 	s.Mux.Handle("/x", handler)
 	wrapped := s.wrapDefaults(s.Mux)
 
@@ -101,5 +102,16 @@ func TestWrapDefaults_LoopGuard(t *testing.T) {
 	wrapped.ServeHTTP(httptest.NewRecorder(), req)
 	if del.called {
 		t.Error("with hop header: delegate was called, want bypassed (loop guard)")
+	}
+
+	// A regular service must not trust a caller-supplied copy of the internal
+	// header, because it would disable an explicit Common Crawl cache route.
+	s.Config.AppName = "go_test_service"
+	del.called = false
+	req = httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set(fetchCacheHopHeader, "1")
+	wrapped.ServeHTTP(httptest.NewRecorder(), req)
+	if !del.called {
+		t.Error("ordinary service trusted caller hop header and bypassed delegate")
 	}
 }

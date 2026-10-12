@@ -79,10 +79,9 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// process transparently routes its eligible outbound GETs through the
 	// fleet fetch cache (server-side singleflight + caching), with zero
 	// per-service code changes. Clients that need real direct egress
-	// (WithoutProxy SSRF probers, or explicit WithoutFetchCache) are not
-	// affected — see safehttp.NewClient delegate resolution. Live-source
-	// requests fall through to direct egress on cache failure; Common Crawl
-	// requests return an archive-unavailable response and never fetch live.
+	// (WithoutProxy SSRF probers, or explicit WithoutFetchCache) remain direct
+	// for live-source requests. An explicit Common Crawl source overrides those
+	// opt-outs, and archive requests fail closed rather than fetching live.
 	if cacheURL := os.Getenv(fleetfetch.EnvCacheURL); cacheURL != "" {
 		ff := fleetfetch.NewClient() // reads FLEET_FETCH_CACHE_URL + API key from env
 		safehttp.SetDefaultFetchDelegate(fetchCacheDelegate{ff})
