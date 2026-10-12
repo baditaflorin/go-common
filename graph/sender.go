@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/baditaflorin/go-common/header"
+	"golang.org/x/net/http/httpproxy"
 )
 
 const graphAuthFailureCooldown = time.Minute
@@ -178,15 +180,24 @@ func (s *sender) canWriteAt(now time.Time) bool {
 }
 
 // newGraphHTTPClient is shared by event writes and read-only lookups. It
-// never follows redirects, keeping X-API-Key bound to the configured
-// canonical endpoint instead of a Location header supplied by a server.
+// routes the public graph collector through the configured egress proxy even
+// when the fleet-wide NO_PROXY suffix also matches .0exec.com. The proxy
+// package still keeps loopback-only development collectors direct. Redirects
+// remain disabled so X-API-Key stays bound to the canonical endpoint.
 func newGraphHTTPClient(timeout time.Duration) *http.Client {
+	proxyConfig := httpproxy.FromEnvironment()
+	proxyConfig.NoProxy = ""
+	proxyForURL := proxyConfig.ProxyFunc()
+
 	return &http.Client{
 		Timeout: timeout,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 		Transport: &http.Transport{
+			Proxy: func(req *http.Request) (*url.URL, error) {
+				return proxyForURL(req.URL)
+			},
 			MaxIdleConns:        4,
 			MaxIdleConnsPerHost: 2,
 			IdleConnTimeout:     60 * time.Second,
