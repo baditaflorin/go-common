@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.102.48] - 2026-10-12
+
+### Fixed
+
+- `telemetry.Init` no longer leaves tracing off for the life of the process when
+  the one-shot read of the OpenObserve ingestion credential fails transiently.
+  v0.102.47 deliberately kept a single 2 s attempt, and a direct read on a
+  loaded host was measured once at 2.1 s: enough to disable tracing until the
+  next restart. A transient failure (timeout, connection error, HTTP 5xx, 408
+  or 429) now starts one bounded background retry that installs the tracer
+  provider when the credential is finally read.
+  - `Init` is unchanged for the caller: the same single attempt with the same
+    2 s limit, then it returns. It never waits for the retry.
+  - Bounded: at most 6 further attempts after waits of 2, 4, 8, 16, 32 and 64 s
+    (about two minutes in all; each wait is shortened by up to 20% so services
+    restarting together do not meet the vault in lockstep), every attempt with
+    the same 2 s limit, so the worst case is about 2.3 minutes. One retry runs
+    per process: a later `Init` shares it, and it stands down without another
+    vault read if a later `Init` has already brought tracing up.
+  - Only transient failures are retried. A 401, 403 or 404, and every other
+    answer the vault gave on purpose (any other 4xx, a redirect, an empty
+    value, an unusable body), is a configuration error: it is reported once,
+    exactly as before, and is never retried. A retry that meets one stops at
+    once.
+  - Every attempt repeats exactly the read that failed: the same validated
+    vault URL and API key (the environment and key files are not read again),
+    the same direct, redirect-free client, the same 2 s limit. A success goes
+    through the same credential, endpoint and provider code as a start-time
+    success, and the approved-host checks still decide whether any read or
+    install can happen. Neither the API key nor the credential can reach a log
+    line or an error: failure reasons come from a fixed vocabulary (`timeout`,
+    `connection error`, `HTTP 503`, ...), never from error text.
+  - `Config.Shutdown` cancels the retry, aborts an attempt in flight and waits
+    for the goroutine, so no provider is installed after `Shutdown` returns; a
+    provider the retry installed earlier is shut down like any other.
+  - One line is logged when tracing comes up late (`telemetry: OpenObserve
+    credential loaded on retry N of 6, ...; tracing is now enabled`) and one
+    error line, through the OpenTelemetry error handler like the start-time
+    failure, when the retry gives up (`... still unavailable after 6 retries
+    ...` or `... non-retryable error on retry N (HTTP 403) ...`). A retry
+    cancelled by `Shutdown`, or made redundant by another `Init`, is silent.
+  - Behaviour change for pinned endpoints: when `OTEL_EXPORTER_OTLP_ENDPOINT`
+    names an approved OTLP host and the credential read fails transiently,
+    `Init` no longer installs a provider that exports without credentials (it
+    could never authenticate, and it would occupy the process's one provider);
+    it waits for the retry. A non-transient failure is handled exactly as
+    before.
+  - Verification: tests with a fake vault that fails N times then succeeds,
+    that never succeeds, and that answers 401, 403 and 404 (plus a retry that
+    meets a 403); Shutdown while waiting, during an attempt, and racing the
+    install; shared and stand-down behaviour across `Init` calls; the real
+    `readOpenObserveToken` against timeouts, refused connections, 5xx and
+    redirects. They fail against a build with the retry disabled (negative
+    control) and pass with it; `gofmt`, `go vet`, `go build` and
+    `go test ./...` pass, and the telemetry tests were run repeatedly under
+    `go test -race` with several `GOMAXPROCS` values.
+
+### Added
+
+- `secrets.StatusError`: `Client.Get` returns it for a non-200 status, carrying
+  the secret name and the numeric status and never the response body, so a
+  caller can tell an outage worth retrying (5xx) from a configuration error
+  (401, 403, 404) with `errors.As` instead of parsing text. The error message is
+  unchanged.
+
 ## [0.102.47] - 2026-10-12
 
 ### Fixed

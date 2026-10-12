@@ -23,6 +23,18 @@
 // for a protected network. Trace context propagation uses W3C traceparent only;
 // baggage is not propagated by default.
 //
+// The ingestion credential is read once, before Init returns, with a 2 s limit.
+// If that read fails transiently (a timeout, a connection error, or a 5xx, 408
+// or 429 answer), Init still returns at once and a bounded background retry
+// installs the tracer provider when the credential is finally read: at most six
+// more attempts after waits of 2, 4, 8, 16, 32 and 64 s (about two minutes, each
+// wait shortened by up to 20% so that services restarting together do not meet
+// the vault in lockstep), each with the same 2 s limit. A 401, 403 or 404, and
+// any other answer the vault gave on purpose, is a configuration error: it is
+// reported once and never retried, and tracing stays off. Config.Shutdown
+// cancels the retry. One line is logged if tracing comes up late and one error
+// line if the attempts run out; neither contains a credential.
+//
 // HTTP spans intentionally omit URLs, query strings, headers, and bodies.
 // Application-created spans should also use low-cardinality names and avoid
 // user data, credentials, raw SQL, and other secrets in attributes.
