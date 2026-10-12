@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -133,14 +134,16 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		delegate = nil
 	}
 	eligibleGet := req.Method == http.MethodGet && req.Body == nil && req.Header.Get("Range") == ""
-	if requireFetchCache && eligibleGet && delegate == nil {
+	archiveHead := requireFetchCache && req.Method == http.MethodHead && req.Body == nil && req.Header.Get("Range") == ""
+	eligibleFetch := eligibleGet || archiveHead
+	if requireFetchCache && eligibleFetch && delegate == nil {
 		return requiredFetchCacheUnavailable(req), nil
 	}
-	if fetchCacheDebug && eligibleGet {
+	if fetchCacheDebug && eligibleFetch {
 		t.logFetchCacheDebug("decision host=%s perClientDelegate=%v useDefaultFetchCache=%v defaultDelegateInstalled=%v willRoute=%v",
 			host, t.fetchDelegate != nil, t.useDefaultFetchCache, DefaultFetchDelegate() != nil, delegate != nil)
 	}
-	if delegate != nil && eligibleGet {
+	if delegate != nil && eligibleFetch {
 		res, err := delegate.FetchGet(req.Context(), req.URL.String(), req.Header)
 		if err == nil && res != nil {
 			if fetchCacheDebug {
@@ -153,23 +156,37 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			// server-side), so bytes are exact with no counting wrapper
 			// needed here, unlike the live-network path below.
 			if obs := t.resolveObserver(); obs != nil {
+				responseBytes := len(res.Body)
+				if archiveHead {
+					responseBytes = 0
+				}
 				obs.ObserveEgress(EgressEvent{
 					Method:  req.Method,
 					Host:    host,
 					Scheme:  req.URL.Scheme,
 					Path:    req.URL.Path,
 					Status:  res.Status,
-					Bytes:   int64(len(res.Body)),
+					Bytes:   int64(responseBytes),
 					Channel: "cache_hit",
 					Outcome: classifyOutcome(res.Status, nil),
 				})
+			}
+			body := res.Body
+			contentLength := int64(len(body))
+			if archiveHead {
+				body = nil
+				if rawLength := res.Header.Get("Content-Length"); rawLength != "" {
+					if parsed, err := strconv.ParseInt(rawLength, 10, 64); err == nil && parsed >= 0 {
+						contentLength = parsed
+					}
+				}
 			}
 			return &http.Response{
 				StatusCode:    res.Status,
 				Status:        http.StatusText(res.Status),
 				Header:        cloneOrEmptyHeader(res.Header),
-				Body:          io.NopCloser(bytes.NewReader(res.Body)),
-				ContentLength: int64(len(res.Body)),
+				Body:          io.NopCloser(bytes.NewReader(body)),
+				ContentLength: contentLength,
 				Request:       req,
 				Proto:         "HTTP/1.1",
 				ProtoMajor:    1,
@@ -315,12 +332,16 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func requiredFetchCacheUnavailable(req *http.Request) *http.Response {
 	body := []byte("required fetch cache unavailable")
+	contentLength := int64(len(body))
+	if req.Method == http.MethodHead {
+		body = nil
+	}
 	return &http.Response{
 		StatusCode:    http.StatusBadGateway,
 		Status:        http.StatusText(http.StatusBadGateway),
 		Header:        http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}},
 		Body:          io.NopCloser(bytes.NewReader(body)),
-		ContentLength: int64(len(body)),
+		ContentLength: contentLength,
 		Request:       req,
 		Proto:         "HTTP/1.1",
 		ProtoMajor:    1,

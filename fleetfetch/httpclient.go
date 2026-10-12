@@ -7,14 +7,16 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // NewHTTPClient returns a standard *http.Client whose RoundTripper
-// routes every GET through the fleet fetch cache. Non-GET requests
-// fall through to the default transport so the caller can keep using
-// the same client for HEAD/POST/PUT without a code path split.
+// routes every GET through the fleet fetch cache. For Common Crawl source,
+// HEAD is represented by an archive GET and its body is suppressed. Other
+// non-GET requests fall through to the default transport so the caller can
+// keep using the same client for POST/PUT without a code path split.
 //
 // This is the drop-in retrofit shape for services that currently use
 // safehttp.NewClient or net/http.Client.Get + .Do(req): swap the
@@ -62,17 +64,18 @@ func NewHTTPClient(opts ...Option) *http.Client {
 	}
 }
 
-// fetchCacheTransport is the RoundTripper that intercepts every
-// outbound request and routes GETs through the fleet fetch cache.
-// Other methods fall through to http.DefaultTransport so the same
-// client can be used for the rare non-GET upstream call without a
-// per-call branch in user code.
+// fetchCacheTransport routes GETs through the fleet fetch cache. A HEAD
+// request in Common Crawl mode is replayed as an archive GET because the
+// archive stores captured responses, not live HEAD measurements. Other
+// methods fall through to http.DefaultTransport for non-page API calls.
 type fetchCacheTransport struct {
 	client *Client
 }
 
 func (t *fetchCacheTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if !strings.EqualFold(req.Method, http.MethodGet) {
+	archiveHead := t.client.SourceForRequest(req.Context()) == SourceCommonCrawl &&
+		req.Method == http.MethodHead && req.Body == nil && req.Header.Get("Range") == ""
+	if !strings.EqualFold(req.Method, http.MethodGet) && !archiveHead {
 		// Pass non-GETs through the default transport — the cache
 		// doesn't accept them anyway, and round-tripping them via
 		// fleetfetch would just produce confusing errors.
@@ -153,6 +156,16 @@ func (t *fetchCacheTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	respReq := req.Clone(req.Context())
 	respReq.URL = finalURL
 
+	body := res.Body
+	contentLength := int64(len(body))
+	if archiveHead {
+		body = nil
+		if rawLength := hdr.Get("Content-Length"); rawLength != "" {
+			if parsed, err := strconv.ParseInt(rawLength, 10, 64); err == nil && parsed >= 0 {
+				contentLength = parsed
+			}
+		}
+	}
 	return &http.Response{
 		Status:        fmt.Sprintf("%d %s", res.Status, http.StatusText(res.Status)),
 		StatusCode:    res.Status,
@@ -160,8 +173,8 @@ func (t *fetchCacheTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		ProtoMajor:    1,
 		ProtoMinor:    1,
 		Header:        hdr,
-		Body:          io.NopCloser(bytes.NewReader(res.Body)),
-		ContentLength: int64(len(res.Body)),
+		Body:          io.NopCloser(bytes.NewReader(body)),
+		ContentLength: contentLength,
 		Request:       respReq,
 	}, nil
 }
