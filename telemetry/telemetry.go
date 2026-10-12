@@ -135,6 +135,12 @@ func newProvider(cfg *Config) (*sdktrace.TracerProvider, error) {
 		return nil, errors.New("telemetry: OTLP endpoint must use HTTPS; set OTEL_EXPORTER_OTLP_INSECURE=true only for a protected local network")
 	}
 	options := []otlptracehttp.Option{otlptracehttp.WithEndpointURL(endpoint.String())}
+	if isApprovedOpenObserveEndpoint(endpoint.String()) {
+		// Only the fleet's own approved hosts bypass the environment proxy;
+		// a custom collector configured through OTEL_EXPORTER_OTLP_ENDPOINT
+		// keeps the standard OpenTelemetry proxy behaviour.
+		options = append(options, otlptracehttp.WithProxy(directOTLPProxy))
+	}
 	headers := make(map[string]string, len(cfg.otlpHeaders))
 	for key, value := range cfg.otlpHeaders {
 		headers[key] = value
@@ -330,16 +336,31 @@ func configureOpenObserveFromFleetSecrets(cfg *Config, getenv func(string) strin
 	return nil
 }
 
-func readOpenObserveToken(ctx context.Context, baseURL, apiKey string) (string, error) {
-	client := &http.Client{
+// newOpenObserveTokenHTTPClient builds the client used for the one-shot vault
+// read. The vault is fleet infrastructure and must be reached directly: with
+// proxy_egress services the environment's HTTPS_PROXY is an external scraping
+// proxy, and a vault call tunnelled through it arrives from a public address
+// the vault vhost refuses (403). See secrets.DirectTransport.
+func newOpenObserveTokenHTTPClient() *http.Client {
+	return &http.Client{
 		Timeout: 2 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			// Never forward the vault API key across a redirect.
 			return http.ErrUseLastResponse
 		},
+		Transport: secrets.DirectTransport(),
 	}
-	return secrets.New(baseURL, apiKey, client).Get(ctx, openObserveTokenSecret)
 }
+
+func readOpenObserveToken(ctx context.Context, baseURL, apiKey string) (string, error) {
+	return secrets.New(baseURL, apiKey, newOpenObserveTokenHTTPClient()).Get(ctx, openObserveTokenSecret)
+}
+
+// directOTLPProxy is the exporter's proxy policy for the approved fleet
+// endpoints: never consult HTTP_PROXY/HTTPS_PROXY/NO_PROXY. Trace data and the
+// ingestion credential go straight to the fleet's own OpenObserve ingress
+// rather than through a third-party scraping proxy.
+func directOTLPProxy(*http.Request) (*url.URL, error) { return nil, nil }
 
 func normalizeEndpoint(raw string) (*url.URL, error) {
 	endpoint, err := url.Parse(strings.TrimSpace(raw))

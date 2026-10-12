@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.102.47] - 2026-10-12
+
+### Fixed
+
+- Reach the Fleet Secrets vault and the fleet's approved OpenObserve OTLP hosts
+  directly, never through `HTTP_PROXY`/`HTTPS_PROXY`. A `proxy_egress` service
+  has `HTTPS_PROXY` pointing at an external scraping proxy, and the fleet's
+  strict service-scoped bundles remove the public mesh suffixes from
+  `NO_PROXY`; the one-shot OpenObserve credential read in `telemetry.Init` was
+  therefore tunnelled through that proxy, arrived at the gateway from a public
+  address, and was refused by the vault vhost's source allowlist (403). The
+  failure was identical on every start, so affected services logged
+  `telemetry: could not load OpenObserve ingestion credential from fleet
+  secrets` and never exported traces. Observed live on both `go-proxy`
+  replicas (same image digest, different hosts, every restart); the same
+  credential read succeeds with HTTP 200 on the direct path.
+  - New `secrets.DirectTransport()` (a clone of `http.DefaultTransport` with the
+    proxy cleared) is used for the telemetry vault read and for the default
+    client of `secrets.NewFromEnv`, whose host is already pinned to
+    `fleet-secrets.0exec.com`. A caller-supplied `Doer` is used unchanged.
+  - The OTLP trace exporter opts out of the environment proxy only for the
+    approved hosts (`otlp.0exec.com`, `openobserve.0own.com`); a custom
+    `OTEL_EXPORTER_OTLP_ENDPOINT` keeps standard OpenTelemetry proxy behaviour.
+  - Unchanged: the 2 s vault read timeout, redirect refusal, the approved-host
+    checks, and the fail-closed behaviour when the credential cannot be loaded.
+  - Verification: new tests fail against the old behaviour (negative control)
+    and pass with the fix; `gofmt`, `go vet`, `go build` and `go test ./...`
+    pass.
+  - Not changed here: the credential read is still a single 2 s attempt at
+    process start. A saturated host can exceed it (a direct read measured 2.1 s
+    on a loaded host), which also leaves telemetry off until the next restart; a
+    bounded background retry is a separate follow-up.
+
 ## [0.102.46] - 2026-10-12
 
 ### Fixed
