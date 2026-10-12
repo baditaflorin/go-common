@@ -1,10 +1,16 @@
 package secrets
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -164,5 +170,85 @@ func TestNewFromEnvKeepsACallerSuppliedClient(t *testing.T) {
 	}
 	if client.http != Doer(custom) {
 		t.Fatal("a caller-supplied Doer must be used unchanged")
+	}
+}
+
+func TestGetReadsTheEnvelopeValueAndSendsTheKey(t *testing.T) {
+	var gotKey, gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey, gotPath = r.Header.Get("X-API-Key"), r.URL.Path
+		_, _ = io.WriteString(w, `{"status":"success","data":{"name":"some_secret","value":"the-value"}}`)
+	}))
+	defer server.Close()
+
+	got, err := New(server.URL+"/", "test-key", server.Client()).Get(context.Background(), "some_secret")
+	if err != nil || got != "the-value" {
+		t.Fatalf("Get = %q, %v; want the envelope value", got, err)
+	}
+	if gotKey != "test-key" || gotPath != "/secrets/some_secret" {
+		t.Fatalf("request carried key=%q path=%q", gotKey, gotPath)
+	}
+}
+
+// A caller deciding whether a failed read is worth retrying must not parse
+// error text: the status is available through errors.As, the message is the
+// one earlier releases produced, and neither the response body nor the API
+// key can reach it.
+func TestGetReportsNon200AsATypedStatusError(t *testing.T) {
+	const leakedBody = "response-body-must-not-surface"
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, leakedBody)
+			}))
+			defer server.Close()
+
+			_, err := New(server.URL, "test-key", server.Client()).Get(context.Background(), "some_secret")
+			var statusErr *StatusError
+			if !errors.As(err, &statusErr) {
+				t.Fatalf("error %v is not a *StatusError", err)
+			}
+			if statusErr.StatusCode != status || statusErr.Name != "some_secret" {
+				t.Fatalf("StatusError = %+v, want status %d for some_secret", statusErr, status)
+			}
+			if want := fmt.Sprintf("secrets: GET %q returned status %d", "some_secret", status); err.Error() != want {
+				t.Fatalf("message changed: %q, want %q", err.Error(), want)
+			}
+			if strings.Contains(err.Error(), leakedBody) || strings.Contains(err.Error(), "test-key") {
+				t.Fatalf("error leaked the body or the API key: %q", err.Error())
+			}
+			wrapped := fmt.Errorf("telemetry: load: %w", err)
+			if !errors.As(wrapped, &statusErr) || statusErr.StatusCode != status {
+				t.Fatal("the status must survive wrapping with %w")
+			}
+		})
+	}
+}
+
+// Only a non-200 status is a *StatusError. A 200 whose payload is unusable is
+// a different failure that retrying cannot cure, so callers must be able to
+// tell the two apart.
+func TestGetOnlyNon200IsAStatusError(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty value":    `{"status":"success","data":{"name":"some_secret","value":""}}`,
+		"error envelope": `{"status":"error","error":{"code":"denied","message":"no"}}`,
+		"not json":       `<html>captive portal</html>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, body)
+			}))
+			defer server.Close()
+
+			_, err := New(server.URL, "test-key", server.Client()).Get(context.Background(), "some_secret")
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			var statusErr *StatusError
+			if errors.As(err, &statusErr) {
+				t.Fatalf("a 200 response produced a StatusError: %v", err)
+			}
+		})
 	}
 }

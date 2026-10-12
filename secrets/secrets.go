@@ -71,6 +71,21 @@ func DirectTransport() *http.Transport {
 	return transport
 }
 
+// StatusError is returned by Get when the vault answers with a status other
+// than 200. It carries the numeric status and never the response body, so a
+// caller can tell an outage a later attempt may outlast (5xx) from a
+// configuration problem retrying cannot fix (401, 403, 404) with errors.As
+// instead of parsing the message. The message is unchanged from earlier
+// releases.
+type StatusError struct {
+	Name       string
+	StatusCode int
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("secrets: GET %q returned status %d", e.Name, e.StatusCode)
+}
+
 // Client reads secrets from go-fleet-secrets.
 type Client struct {
 	baseURL string
@@ -146,7 +161,7 @@ func NewFromEnv(getenv func(string) string, httpClient Doer) (*Client, error) {
 // Errors:
 //   - misconfiguration (nil client/transport, empty base URL)
 //   - transport failure
-//   - non-200 status (the status code is included; the body is not)
+//   - non-200 status (a *StatusError; the status code is included, the body is not)
 //   - envelope decode failure (via response.DecodeData; an error
 //     envelope surfaces as *response.Error)
 //   - a 200 success envelope whose value is empty
@@ -177,7 +192,7 @@ func (c *Client) Get(ctx context.Context, name string) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("secrets: GET %q returned status %d", name, resp.StatusCode)
+		return "", &StatusError{Name: name, StatusCode: resp.StatusCode}
 	}
 
 	var data struct {

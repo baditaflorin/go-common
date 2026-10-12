@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -40,12 +41,19 @@ const (
 	defaultFleetSecretsURL     = "https://fleet-secrets.0exec.com"
 	openObserveTokenSecret     = "openobserve_otlp_ingestion_token"
 	openObserveTokenFileEnv    = "OPENOBSERVE_OTLP_INGESTION_TOKEN_FILE"
+
+	// credentialReadTimeout bounds every vault read for the ingestion
+	// credential, the synchronous one in Init and each background retry.
+	credentialReadTimeout = 2 * time.Second
 )
 
 var (
 	propagatorOnce sync.Once
+	// providerMu guards sharedProvider, pendingRetry and every Config.provider.
 	providerMu     sync.Mutex
 	sharedProvider *sdktrace.TracerProvider
+	// pendingRetry is the background credential retry in flight, if any.
+	pendingRetry *credentialRetry
 )
 
 // Config describes one process's tracing configuration. A process should call
@@ -58,6 +66,10 @@ type Config struct {
 	Disabled       bool
 	provider       *sdktrace.TracerProvider
 	otlpHeaders    map[string]string
+	// retry is the background credential retry this Init deferred to. It is set
+	// before Init returns and never changed afterwards. When the retry installs
+	// the provider, it is the shared one: Shutdown finds it there.
+	retry *credentialRetry
 }
 
 // Option configures tracing initialization.
@@ -80,7 +92,41 @@ func WithDisabled() Option { return func(c *Config) { c.Disabled = true } }
 // dedicated Fleet Secrets API key to load the ingestion-only OpenObserve token
 // and export directly over HTTPS. It is safe to call repeatedly from tests and
 // from server construction; one process shares one provider/exporter.
+//
+// The credential is read once before Init returns, with a 2 s limit. If that
+// read fails transiently (timeout, connection error, 5xx, 408 or 429), Init
+// still returns at once and a bounded background retry installs the provider
+// when the credential is finally read; Shutdown cancels it. A failure that
+// retrying cannot cure, such as a 401, 403 or 404, is not retried.
 func Init(serviceName, serviceVersion string, opts ...Option) *Config {
+	return initWith(productionInitDeps(), serviceName, serviceVersion, opts...)
+}
+
+// initDeps are the external effects Init depends on. Init always runs with
+// productionInitDeps; tests substitute them to drive the credential load and
+// its background retry without the network, the process environment or real
+// sleeps.
+type initDeps struct {
+	getenv      func(string) string
+	readToken   func(ctx context.Context, baseURL, apiKey string) (string, error)
+	newProvider func(*Config) (*sdktrace.TracerProvider, error)
+	retry       retryPolicy
+	logf        func(format string, args ...any)
+	handle      func(error)
+}
+
+func productionInitDeps() initDeps {
+	return initDeps{
+		getenv:      os.Getenv,
+		readToken:   readOpenObserveToken,
+		newProvider: newProvider,
+		retry:       defaultRetryPolicy(),
+		logf:        log.Printf,
+		handle:      otel.Handle,
+	}
+}
+
+func initWith(deps initDeps, serviceName, serviceVersion string, opts ...Option) *Config {
 	propagatorOnce.Do(func() { otel.SetTextMapPropagator(propagation.TraceContext{}) })
 	cfg := &Config{ServiceName: serviceName, ServiceVersion: serviceVersion, SampleRate: 0.1}
 	for _, opt := range opts {
@@ -88,24 +134,34 @@ func Init(serviceName, serviceVersion string, opts ...Option) *Config {
 			opt(cfg)
 		}
 	}
-	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" && cfg.OTLPEndpoint == "" {
+	if endpoint := deps.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" && cfg.OTLPEndpoint == "" {
 		cfg.OTLPEndpoint = endpoint
 	}
-	if os.Getenv("OTEL_DISABLED") == "true" {
+	if deps.getenv("OTEL_DISABLED") == "true" {
 		cfg.Disabled = true
 	}
-	if err := configureOpenObserveFromFleetSecrets(cfg, os.Getenv, readOpenObserveToken); err != nil {
+	attempt := credentialAttempt{read: deps.readToken}
+	loadErr := configureOpenObserveFromFleetSecrets(cfg, deps.getenv, attempt.readToken)
+	if loadErr != nil {
 		// Export is optional. A vault or collector outage must never prevent
 		// a service from starting; without the credential we fail closed and
 		// keep W3C propagation active without exporting spans.
-		otel.Handle(err)
+		deps.handle(loadErr)
 	}
-	if raw := os.Getenv("OTEL_SAMPLE_RATE"); raw != "" {
+	if raw := deps.getenv("OTEL_SAMPLE_RATE"); raw != "" {
 		if n, err := strconv.ParseFloat(raw, 64); err == nil && n >= 0 && n <= 1 {
 			cfg.SampleRate = n
 		}
 	}
-	if cfg.Disabled || cfg.OTLPEndpoint == "" {
+	if cfg.Disabled {
+		return cfg
+	}
+	if loadErr != nil && attempt.transient() {
+		// The vault read failed in a way a later attempt may cure. Tracing
+		// stays off for now and a bounded background retry brings it up.
+		return deferToCredentialRetry(deps, cfg, attempt)
+	}
+	if cfg.OTLPEndpoint == "" {
 		return cfg
 	}
 
@@ -115,9 +171,9 @@ func Init(serviceName, serviceVersion string, opts ...Option) *Config {
 		cfg.provider = sharedProvider
 		return cfg
 	}
-	tp, err := newProvider(cfg)
+	tp, err := deps.newProvider(cfg)
 	if err != nil {
-		otel.Handle(err)
+		deps.handle(err)
 		return cfg
 	}
 	sharedProvider = tp
@@ -294,7 +350,7 @@ func configureOpenObserveFromFleetSecrets(cfg *Config, getenv func(string) strin
 	if cfg == nil || cfg.Disabled || getenv("OTEL_EXPORTER_OTLP_HEADERS") != "" {
 		return nil
 	}
-	if cfg.OTLPEndpoint != "" && !isApprovedOpenObserveEndpoint(cfg.OTLPEndpoint) {
+	if !openObserveCredentialAllowed(cfg.OTLPEndpoint) {
 		// Never send an OpenObserve ingestion credential to an arbitrary OTLP host.
 		return nil
 	}
@@ -326,6 +382,21 @@ func configureOpenObserveFromFleetSecrets(cfg *Config, getenv func(string) strin
 			return errors.New("telemetry: could not load OpenObserve ingestion credential from fleet secrets")
 		}
 	}
+	applyOpenObserveToken(cfg, token)
+	return nil
+}
+
+// openObserveCredentialAllowed reports whether the vault-backed ingestion
+// credential may be attached for this OTLP endpoint: the default one (empty) or
+// an approved fleet host, never an arbitrary collector.
+func openObserveCredentialAllowed(endpoint string) bool {
+	return endpoint == "" || isApprovedOpenObserveEndpoint(endpoint)
+}
+
+// applyOpenObserveToken points cfg at the default OpenObserve endpoint unless
+// one is set and attaches the ingestion token as OpenObserve org-token Basic
+// auth. The start-time load and the background retry both end here.
+func applyOpenObserveToken(cfg *Config, token string) {
 	if cfg.OTLPEndpoint == "" {
 		cfg.OTLPEndpoint = defaultOpenObserveEndpoint
 	}
@@ -333,17 +404,17 @@ func configureOpenObserveFromFleetSecrets(cfg *Config, getenv func(string) strin
 		"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte("default:"+token)),
 		"stream-name":   "default",
 	}
-	return nil
 }
 
-// newOpenObserveTokenHTTPClient builds the client used for the one-shot vault
-// read. The vault is fleet infrastructure and must be reached directly: with
-// proxy_egress services the environment's HTTPS_PROXY is an external scraping
-// proxy, and a vault call tunnelled through it arrives from a public address
-// the vault vhost refuses (403). See secrets.DirectTransport.
+// newOpenObserveTokenHTTPClient builds the client used for each vault read of
+// the ingestion credential, the synchronous one and every retry. The vault is
+// fleet infrastructure and must be reached directly: with proxy_egress services
+// the environment's HTTPS_PROXY is an external scraping proxy, and a vault call
+// tunnelled through it arrives from a public address the vault vhost refuses
+// (403). See secrets.DirectTransport.
 func newOpenObserveTokenHTTPClient() *http.Client {
 	return &http.Client{
-		Timeout: 2 * time.Second,
+		Timeout: credentialReadTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			// Never forward the vault API key across a redirect.
 			return http.ErrUseLastResponse
@@ -353,7 +424,11 @@ func newOpenObserveTokenHTTPClient() *http.Client {
 }
 
 func readOpenObserveToken(ctx context.Context, baseURL, apiKey string) (string, error) {
-	return secrets.New(baseURL, apiKey, newOpenObserveTokenHTTPClient()).Get(ctx, openObserveTokenSecret)
+	client := newOpenObserveTokenHTTPClient()
+	// Every attempt builds its own transport; do not leave a keep-alive
+	// connection behind for each retry.
+	defer client.CloseIdleConnections()
+	return secrets.New(baseURL, apiKey, client).Get(ctx, openObserveTokenSecret)
 }
 
 // directOTLPProxy is the exporter's proxy policy for the approved fleet
@@ -397,12 +472,32 @@ func parseHeaders(raw string) (map[string]string, error) {
 	return values, nil
 }
 
-// Shutdown flushes exported spans. The caller supplies a bounded context.
+// Shutdown flushes exported spans. If Init deferred to a background credential
+// retry, Shutdown first cancels it, aborting an attempt in flight, and waits
+// for it to exit, so no provider can be installed after Shutdown returns. The
+// caller supplies a bounded context.
 func (c *Config) Shutdown(ctx context.Context) error {
-	if c == nil || c.provider == nil {
+	if c == nil {
 		return nil
 	}
-	return c.provider.Shutdown(ctx)
+	var stopErr error
+	if c.retry != nil {
+		stopErr = c.retry.stop(ctx)
+	}
+	providerMu.Lock()
+	tp := c.provider
+	if tp == nil && c.retry != nil {
+		// The retry installed the provider after Init returned.
+		tp = sharedProvider
+	}
+	providerMu.Unlock()
+	if tp == nil {
+		return stopErr
+	}
+	if err := tp.Shutdown(ctx); err != nil {
+		return err
+	}
+	return stopErr
 }
 
 // Tracer returns a named OpenTelemetry tracer for application-level spans.
