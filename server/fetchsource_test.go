@@ -61,10 +61,15 @@ func TestFetchSourceMiddlewareDoesNotRequireCacheForLiveSelftestOrCacheService(t
 }
 
 func TestFetchSourceMiddlewareExplicitLiveOverridesDefault(t *testing.T) {
+	t.Setenv(fleetfetch.EnvSource, string(fleetfetch.SourceCommonCrawl))
 	handler := fetchSourceMiddleware("go_test_service", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		source, ok := fleetfetch.RequestSourceFromContext(r.Context())
 		if !ok || source != fleetfetch.SourceLive {
 			http.Error(w, "live override missing", http.StatusInternalServerError)
+			return
+		}
+		if safehttp.RequiredFetchCacheFromContext(r.Context()) {
+			http.Error(w, "live override retained archive-only marker", http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -93,6 +98,7 @@ func TestFetchSourceMiddlewareRejectsInvalidOrRepeatedSource(t *testing.T) {
 }
 
 func TestFetchSourceMiddlewareLeavesUnspecifiedSourceAlone(t *testing.T) {
+	t.Setenv(fleetfetch.EnvSource, string(fleetfetch.SourceLive))
 	handler := fetchSourceMiddleware("go_test_service", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := fleetfetch.RequestSourceFromContext(r.Context()); ok {
 			http.Error(w, "unexpected source override", http.StatusInternalServerError)
@@ -106,6 +112,28 @@ func TestFetchSourceMiddlewareLeavesUnspecifiedSourceAlone(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestFetchSourceMiddlewareUsesCommonCrawlEnvironmentDefault(t *testing.T) {
+	t.Setenv(fleetfetch.EnvSource, string(fleetfetch.SourceCommonCrawl))
+	handler := fetchSourceMiddleware("go_test_service", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !safehttp.RequiredFetchCacheFromContext(r.Context()) {
+			http.Error(w, "archive cache requirement missing", http.StatusInternalServerError)
+			return
+		}
+		if err := safehttp.GuardHost(r.Context(), "does-not-resolve.invalid"); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/?target=https://does-not-resolve.invalid/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusAccepted, rec.Body.String())
 	}
 }
 

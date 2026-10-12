@@ -260,6 +260,12 @@ func GuardHost(ctx context.Context, host string) error {
 	if host == "" {
 		return ErrMissingHost
 	}
+	if RequiredFetchCacheFromContext(ctx) {
+		// Archive lookups never connect to the target host, so DNS is not a
+		// prerequisite. Keep static local-name and IP checks here so archive
+		// mode cannot turn an internal target into live egress if routing regresses.
+		return guardArchiveHost(host)
+	}
 	if IsDomainDenied(host) {
 		return ErrDomainDenied
 	}
@@ -290,6 +296,25 @@ func GuardHost(ctx context.Context, host string) error {
 		}
 	}
 	defaultGuardCache.put(host, nil)
+	return nil
+}
+
+func guardArchiveHost(host string) error {
+	host = normHost(hostWithoutPort(strings.TrimSpace(host)))
+	if host == "" {
+		return ErrMissingHost
+	}
+	if IsDomainDenied(host) {
+		return ErrDomainDenied
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") ||
+		strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") ||
+		host == "home.arpa" || strings.HasSuffix(host, ".home.arpa") {
+		return ErrBlocked
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil && IsBlocked(ip) {
+		return ErrBlocked
+	}
 	return nil
 }
 
@@ -673,11 +698,11 @@ func CheckURL(ctx context.Context, rawURL string) (*url.URL, error) {
 	}
 	if RequiredFetchCacheFromContext(ctx) {
 		// Common Crawl reads a captured URL from the archive; it never opens a
-		// connection to the target host. DNS is therefore neither needed nor
-		// available in archive-only staging. Keep rejecting private IP literals
-		// so a later source-routing regression cannot turn one into live egress.
-		if ip := net.ParseIP(u.Hostname()); ip != nil && IsBlockedForHost(u.Hostname(), ip) {
-			return nil, ErrBlocked
+		// connection to the target host. DNS is neither needed nor available in
+		// archive-only staging. Apply the same static internal-target policy as
+		// GuardHost without resolving public hostnames.
+		if err := guardArchiveHost(u.Hostname()); err != nil {
+			return nil, err
 		}
 		return u, nil
 	}

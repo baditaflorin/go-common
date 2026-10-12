@@ -396,4 +396,9 @@ func TestCheckURL_ArchiveOnlySkipsDNSAndBlocksPrivateIPLiterals(t *testing.T) {
 	if _, err := safehttp.CheckURL(ctx, "http://127.0.0.1/private"); err == nil {
 		t.Fatal("archive URL with a private IP literal must remain blocked")
 	}
+	for _, raw := range []string{"http://localhost/", "http://service.local/", "http://metadata.internal/"} {
+		if _, err := safehttp.CheckURL(ctx, raw); err == nil {
+			t.Errorf("archive URL %q with a local hostname must remain blocked", raw)
+		}
+	}
 }

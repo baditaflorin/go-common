@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/baditaflorin/go-common/fleetfetch"
 	"github.com/baditaflorin/go-common/safehttp"
@@ -11,6 +12,13 @@ func fetchSourceMiddleware(appName string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		values, specified := r.URL.Query()["source"]
 		if !specified {
+			configured, err := fleetfetch.ParseSource(os.Getenv(fleetfetch.EnvSource))
+			if err == nil && configured == fleetfetch.SourceCommonCrawl &&
+				appName != fetchCacheServiceAppName && r.URL.Path != "/selftest" {
+				ctx := safehttp.RequireFetchCacheContext(r.Context())
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}

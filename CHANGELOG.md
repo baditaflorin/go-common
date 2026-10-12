@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.102.51] - 2026-10-13
+
+### Fixed
+
+- Make `safehttp.GuardHost` archive-aware so Common Crawl requests skip live DNS
+  resolution while still rejecting private IPs, localhost, local suffixes, and
+  the fleet compliance denylist.
+- Apply `FLEET_FETCH_SOURCE=commoncrawl` as the default archive-only requirement
+  in the server middleware. An explicit `source=live` request still overrides
+  that process default.
+
+
 ## [0.102.50] - 2026-10-12
 
 ### Fixed
