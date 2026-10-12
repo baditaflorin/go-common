@@ -383,3 +383,17 @@ func TestFleetRequireProxyEnv_FalsyValuesNoOp(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckURL_ArchiveOnlySkipsDNSAndBlocksPrivateIPLiterals(t *testing.T) {
+	ctx := safehttp.RequireFetchCacheContext(context.Background())
+	u, err := safehttp.CheckURL(ctx, "https://does-not-resolve.invalid/path")
+	if err != nil {
+		t.Fatalf("archive URL with an unresolved hostname: %v", err)
+	}
+	if got := u.Hostname(); got != "does-not-resolve.invalid" {
+		t.Fatalf("hostname = %q, want does-not-resolve.invalid", got)
+	}
+	if _, err := safehttp.CheckURL(ctx, "http://127.0.0.1/private"); err == nil {
+		t.Fatal("archive URL with a private IP literal must remain blocked")
+	}
+}

@@ -671,6 +671,16 @@ func CheckURL(ctx context.Context, rawURL string) (*url.URL, error) {
 	if err := ValidateURL(u); err != nil {
 		return nil, err
 	}
+	if RequiredFetchCacheFromContext(ctx) {
+		// Common Crawl reads a captured URL from the archive; it never opens a
+		// connection to the target host. DNS is therefore neither needed nor
+		// available in archive-only staging. Keep rejecting private IP literals
+		// so a later source-routing regression cannot turn one into live egress.
+		if ip := net.ParseIP(u.Hostname()); ip != nil && IsBlockedForHost(u.Hostname(), ip) {
+			return nil, ErrBlocked
+		}
+		return u, nil
+	}
 	if err := GuardHost(ctx, u.Hostname()); err != nil {
 		return nil, err
 	}

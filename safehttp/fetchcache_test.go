@@ -432,3 +432,63 @@ func TestWithFetchDelegate_PerClient(t *testing.T) {
 		t.Fatalf("explicit per-client delegate should win even with WithoutProxy")
 	}
 }
+
+func TestRequireFetchCacheContext_RoutesHeadAsArchiveGet(t *testing.T) {
+	d := &stubDelegate{status: http.StatusOK, body: "from-archive"}
+	SetDefaultFetchDelegate(d)
+	t.Cleanup(func() { SetDefaultFetchDelegate(nil) })
+
+	c := NewClient(WithoutFetchCache())
+	req, err := http.NewRequest(http.MethodHead, "https://does-not-resolve.invalid/archive", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req = req.WithContext(RequireFetchCacheContext(req.Context()))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("HEAD: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := readBody(t, resp); got != "" {
+		t.Fatalf("HEAD body = %q, want empty", got)
+	}
+	if resp.ContentLength != int64(len("from-archive")) {
+		t.Fatalf("ContentLength = %d, want %d", resp.ContentLength, len("from-archive"))
+	}
+	if len(d.seenURLs) != 1 || !strings.Contains(d.seenURLs[0], "does-not-resolve.invalid") {
+		t.Fatalf("archive delegate calls = %v, want one matching URL", d.seenURLs)
+	}
+}
+
+func TestRequireFetchCacheContext_HeadFailsClosedWithoutDelegate(t *testing.T) {
+	SetDefaultFetchDelegate(nil)
+	t.Cleanup(func() { SetDefaultFetchDelegate(nil) })
+	originHits := 0
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		originHits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(origin.Close)
+
+	c := NewClient()
+	req, err := http.NewRequest(http.MethodHead, origin.URL, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req = req.WithContext(RequireFetchCacheContext(req.Context()))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("HEAD: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+	if got := readBody(t, resp); got != "" {
+		t.Fatalf("HEAD body = %q, want empty", got)
+	}
+	if originHits != 0 {
+		t.Fatalf("origin received %d requests, want none", originHits)
+	}
+}

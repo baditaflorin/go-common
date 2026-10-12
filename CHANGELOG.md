@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.102.50] - 2026-10-12
+
+### Fixed
+
+- Common Crawl archive requests skip live DNS resolution during URL validation,
+  while private IP literals remain blocked. Archive `HEAD` probes now read the
+  captured response through Fetch Cache and suppress its body, avoiding live
+  origin egress.
+
 ## [0.102.49] - 2026-10-12
 
 ### Fixed

@@ -177,3 +177,42 @@ func TestNewHTTPClient_UserAgentNotForwarded(t *testing.T) {
 		t.Errorf("discriminating Accept-Language must still forward; saw %q", sawLang)
 	}
 }
+
+func TestNewHTTPClient_CommonCrawlHeadUsesArchive(t *testing.T) {
+	var cacheMethod, source string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cacheMethod = r.Method
+		source = r.URL.Query().Get("source")
+		w.Header().Set("X-FetchCache-Final-Url", r.URL.Query().Get("url"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "archive-body")
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(WithCacheURL(srv.URL), WithSource(SourceCommonCrawl))
+	req, err := http.NewRequest(http.MethodHead, "https://does-not-resolve.invalid/terms", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("HEAD: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if cacheMethod != http.MethodGet || source != string(SourceCommonCrawl) {
+		t.Fatalf("cache request = method %q source %q, want GET commoncrawl", cacheMethod, source)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read HEAD body: %v", err)
+	}
+	if len(body) != 0 {
+		t.Fatalf("HEAD body has %d bytes, want none", len(body))
+	}
+	if resp.ContentLength != int64(len("archive-body")) {
+		t.Fatalf("ContentLength = %d, want %d", resp.ContentLength, len("archive-body"))
+	}
+}
