@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -352,6 +353,73 @@ func TestOpenObserveEndpointAllowlistUsesApprovedHosts(t *testing.T) {
 	} {
 		if isApprovedOpenObserveEndpoint(endpoint) {
 			t.Errorf("unapproved endpoint %q was approved", endpoint)
+		}
+	}
+}
+
+// A proxy_egress service has HTTPS_PROXY set to an external scraping proxy.
+// The one-shot vault credential read must still go straight to the fleet's
+// vault: through the proxy it arrives from a public address the vault vhost
+// refuses, and telemetry stays off for the life of the process.
+func TestOpenObserveTokenClientNeverUsesTheEnvironmentProxy(t *testing.T) {
+	for _, key := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
+		t.Setenv(key, "http://user:pass@proxy.example.invalid:80")
+	}
+	client := newOpenObserveTokenHTTPClient()
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport is %T, want *http.Transport", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("the vault read must not follow HTTP_PROXY/HTTPS_PROXY/NO_PROXY")
+	}
+	if client.Timeout != 2*time.Second {
+		t.Fatalf("vault read timeout changed to %v", client.Timeout)
+	}
+	if client.CheckRedirect == nil {
+		t.Fatal("redirects must stay disabled so the API key is never forwarded")
+	}
+	req, err := http.NewRequest(http.MethodGet, "https://fleet-secrets.0exec.com/secrets/x", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CheckRedirect(req, []*http.Request{req}); err != http.ErrUseLastResponse {
+		t.Fatalf("redirect policy = %v, want ErrUseLastResponse", err)
+	}
+}
+
+func TestDirectOTLPProxyNeverReturnsAProxy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://user:pass@proxy.example.invalid:80")
+	for _, target := range []string{
+		"https://openobserve.0own.com/api/default/v1/traces",
+		"https://otlp.0exec.com/api/default/v1/traces",
+	} {
+		req, err := http.NewRequest(http.MethodPost, target, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proxy, err := directOTLPProxy(req)
+		if proxy != nil || err != nil {
+			t.Fatalf("directOTLPProxy(%s) = %v, %v; want no proxy", target, proxy, err)
+		}
+	}
+}
+
+// The direct-egress carve-out is limited to the fleet's approved hosts: a
+// collector an operator points OTEL_EXPORTER_OTLP_ENDPOINT at keeps the
+// standard OpenTelemetry proxy behaviour.
+func TestDirectEgressAppliesOnlyToApprovedEndpoints(t *testing.T) {
+	if !isApprovedOpenObserveEndpoint("https://openobserve.0own.com/api/default/v1/traces") ||
+		!isApprovedOpenObserveEndpoint("https://otlp.0exec.com/api/default/v1/traces") {
+		t.Fatal("the fleet's own OTLP hosts must be approved for direct egress")
+	}
+	for _, custom := range []string{
+		"https://collector.example.com/v1/traces",
+		"http://openobserve.0own.com/api/default/v1/traces",
+		"https://openobserve.0docker.com/api/default/v1/traces",
+	} {
+		if isApprovedOpenObserveEndpoint(custom) {
+			t.Fatalf("%s must not be treated as fleet infrastructure", custom)
 		}
 	}
 }

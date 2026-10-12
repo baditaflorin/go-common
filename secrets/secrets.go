@@ -45,6 +45,32 @@ type Doer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
+// DirectTransport returns an HTTP transport that never consults the
+// HTTP_PROXY, HTTPS_PROXY or NO_PROXY environment variables.
+//
+// Fleet-owned infrastructure (the vault itself and the approved OpenObserve
+// hosts) must be reached directly. Services that run with proxy_egress set
+// those variables to an external scraping proxy meant for third-party
+// targets, and the fleet's strict service-scoped bundles deliberately remove
+// the public mesh suffixes from NO_PROXY. A vault call that follows the
+// environment is then tunnelled through that proxy: it reaches the gateway
+// from the proxy's public address, which the vault vhost's source allowlist
+// refuses (403), and the caller's vault API key would travel via a third
+// party. The result was a one-shot credential load that failed on every
+// start of such a service, silently leaving it without telemetry.
+//
+// The transport is a clone of http.DefaultTransport with Proxy cleared, so
+// dial and TLS handshake timeouts and HTTP/2 behaviour are unchanged. Each
+// call returns a fresh transport; callers own its lifetime.
+func DirectTransport() *http.Transport {
+	transport := &http.Transport{}
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = base.Clone()
+	}
+	transport.Proxy = nil
+	return transport
+}
+
 // Client reads secrets from go-fleet-secrets.
 type Client struct {
 	baseURL string
@@ -105,6 +131,9 @@ func NewFromEnv(getenv func(string) string, httpClient Doer) (*Client, error) {
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
+			// The host is pinned to the vault above, so ignoring the
+			// environment proxy cannot widen where the key is sent.
+			Transport: DirectTransport(),
 		}
 	}
 	return New(baseURL, apiKey, httpClient), nil
