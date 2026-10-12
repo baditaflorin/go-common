@@ -113,7 +113,11 @@ type Server struct {
 // for callers that want to embed the server in a non-stdlib
 // listener. Start() uses this internally.
 func (s *Server) Handler() http.Handler {
-	return telemetry.HTTPMiddleware(s.wrapDefaults(fetchSourceMiddleware(middleware.Chain(s.Mux, s.Middlewares...))))
+	appName := ""
+	if s.Config != nil {
+		appName = s.Config.AppName
+	}
+	return telemetry.HTTPMiddleware(s.wrapDefaults(fetchSourceMiddleware(appName, middleware.Chain(s.Mux, s.Middlewares...))))
 }
 
 // buildHTTPServer constructs the *http.Server with the resolved
@@ -252,12 +256,11 @@ func (s *Server) shutdownTelemetry() {
 //	auto-rollback on services that hadn't opted in).
 func (s *Server) wrapDefaults(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Fetch-cache loop guard: a request carrying the one-hop marker is
-		// already being served on behalf of the fleet fetch-cache, so disable
-		// fetch-cache delegation for any safehttp GET issued while handling it.
-		// The fetch then goes direct to origin instead of recursing back into
-		// the cache, bounding cache->cache recursion to a single hop.
-		if r.Header.Get(fetchCacheHopHeader) != "" {
+		// Fetch-cache loop guard: only the fetch-cache service may use this
+		// internal marker to keep its own index/WARC requests from recursively
+		// delegating back to itself. Other services ignore caller-supplied
+		// copies so the marker cannot defeat an explicit archive-only request.
+		if s.Config != nil && s.Config.AppName == fetchCacheServiceAppName && r.Header.Get(fetchCacheHopHeader) != "" {
 			r = r.WithContext(safehttp.WithoutFetchCacheContext(r.Context()))
 		}
 		switch r.URL.Path {

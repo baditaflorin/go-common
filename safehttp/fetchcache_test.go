@@ -241,6 +241,63 @@ func TestWithoutFetchCache_IgnoresDefault(t *testing.T) {
 	}
 }
 
+func TestRequireFetchCacheContext_OverridesClientAndContextOptOuts(t *testing.T) {
+	SetDefaultFetchDelegate(nil)
+	t.Cleanup(func() { SetDefaultFetchDelegate(nil) })
+
+	d := &stubDelegate{status: http.StatusOK, body: "from-archive"}
+	SetDefaultFetchDelegate(d)
+	c := NewClient(WithoutFetchCache())
+	req, err := http.NewRequest(http.MethodGet, "http://does-not-resolve.invalid/archive", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	ctx := WithoutFetchCacheContext(req.Context())
+	req = req.WithContext(RequireFetchCacheContext(ctx))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK || readBody(t, resp) != "from-archive" {
+		t.Fatalf("archive response = %d, want 200 from delegate", resp.StatusCode)
+	}
+	if len(d.seenURLs) != 1 {
+		t.Fatalf("required archive request delegate calls = %d, want 1", len(d.seenURLs))
+	}
+}
+
+func TestRequireFetchCacheContextFailsClosedWithoutDelegate(t *testing.T) {
+	allowLoopback(t)
+	SetDefaultFetchDelegate(nil)
+	t.Cleanup(func() { SetDefaultFetchDelegate(nil) })
+
+	originHits := 0
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		originHits++
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "live origin")
+	}))
+	t.Cleanup(origin.Close)
+
+	c := NewClient(WithoutFetchCache())
+	req, err := http.NewRequest(http.MethodGet, origin.URL, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req = req.WithContext(RequireFetchCacheContext(req.Context()))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusBadGateway || body != "required fetch cache unavailable" {
+		t.Fatalf("response = %d %q, want fail-closed 502", resp.StatusCode, body)
+	}
+	if originHits != 0 {
+		t.Fatalf("archive-only request reached live origin %d times", originHits)
+	}
+}
+
 // Regression for the 2026-07 go_page_load_metrics incident: WithForceHTTP2
 // was added to the client's option list (verified present in the compiled
 // binary) but had ZERO observable effect in production against a real

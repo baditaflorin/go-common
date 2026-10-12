@@ -143,7 +143,10 @@ func TestDefaultFetchDelegate_CommonCrawlFailureDoesNotFetchOrigin(t *testing.T)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		resp, err := safehttp.NewClient(safehttp.WithTimeout(2 * time.Second)).Do(req)
+		// This service's target-page client deliberately bypasses the default
+		// cache for live probes. An explicit Common Crawl request must still
+		// use the archive, while source=live must retain the direct behavior.
+		resp, err := safehttp.NewClient(safehttp.WithTimeout(2*time.Second), safehttp.WithoutFetchCache()).Do(req)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -156,6 +159,11 @@ func TestDefaultFetchDelegate_CommonCrawlFailureDoesNotFetchOrigin(t *testing.T)
 	request := func(source string) *httptest.ResponseRecorder {
 		q := url.Values{"target": []string{origin.URL}, "source": []string{source}}
 		req := httptest.NewRequest(http.MethodGet, "/probe?"+q.Encode(), nil)
+		if source == "commoncrawl" {
+			// A caller-controlled copy of the internal marker must not turn an
+			// archive-only request into a direct live fetch.
+			req.Header.Set("X-Fetch-Cache-Hop", "1")
+		}
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		return rec

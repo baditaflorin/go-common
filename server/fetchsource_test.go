@@ -8,16 +8,21 @@ import (
 
 	"github.com/baditaflorin/go-common/config"
 	"github.com/baditaflorin/go-common/fleetfetch"
+	"github.com/baditaflorin/go-common/safehttp"
 )
 
 func TestFetchSourceMiddlewareAttachesSource(t *testing.T) {
-	handler := fetchSourceMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := fetchSourceMiddleware("go_test_service", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		source, ok := fleetfetch.RequestSourceFromContext(r.Context())
 		if !ok {
 			http.Error(w, "source missing", http.StatusInternalServerError)
 			return
 		}
 		if source == fleetfetch.SourceCommonCrawl {
+			if !safehttp.RequiredFetchCacheFromContext(r.Context()) {
+				http.Error(w, "archive cache requirement missing", http.StatusInternalServerError)
+				return
+			}
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
@@ -32,8 +37,31 @@ func TestFetchSourceMiddlewareAttachesSource(t *testing.T) {
 	}
 }
 
+func TestFetchSourceMiddlewareDoesNotRequireCacheForLiveSelftestOrCacheService(t *testing.T) {
+	check := func(appName, target string) {
+		t.Helper()
+		handler := fetchSourceMiddleware(appName, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if safehttp.RequiredFetchCacheFromContext(r.Context()) {
+				http.Error(w, "unexpected required-cache marker", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("app=%s GET %s status = %d, want %d; body=%q", appName, target, rec.Code, http.StatusOK, rec.Body.String())
+		}
+	}
+
+	check("go_test_service", "/?source=live")
+	check("go_test_service", "/selftest?source=commoncrawl")
+	check(fetchCacheServiceAppName, "/fetch?source=commoncrawl")
+}
+
 func TestFetchSourceMiddlewareExplicitLiveOverridesDefault(t *testing.T) {
-	handler := fetchSourceMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := fetchSourceMiddleware("go_test_service", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		source, ok := fleetfetch.RequestSourceFromContext(r.Context())
 		if !ok || source != fleetfetch.SourceLive {
 			http.Error(w, "live override missing", http.StatusInternalServerError)
@@ -51,7 +79,7 @@ func TestFetchSourceMiddlewareExplicitLiveOverridesDefault(t *testing.T) {
 }
 
 func TestFetchSourceMiddlewareRejectsInvalidOrRepeatedSource(t *testing.T) {
-	handler := fetchSourceMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := fetchSourceMiddleware("go_test_service", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	for _, target := range []string{"/?source=javascript", "/?source=live&source=commoncrawl"} {
@@ -65,7 +93,7 @@ func TestFetchSourceMiddlewareRejectsInvalidOrRepeatedSource(t *testing.T) {
 }
 
 func TestFetchSourceMiddlewareLeavesUnspecifiedSourceAlone(t *testing.T) {
-	handler := fetchSourceMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := fetchSourceMiddleware("go_test_service", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := fleetfetch.RequestSourceFromContext(r.Context()); ok {
 			http.Error(w, "unexpected source override", http.StatusInternalServerError)
 			return

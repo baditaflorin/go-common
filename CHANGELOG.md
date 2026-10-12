@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.102.49] - 2026-10-12
+
+### Fixed
+
+- Honor an explicit Common Crawl source even when a service's `safehttp` client
+  normally opts out of Fleet Fetch Cache. Archive GETs fail closed with 502 when
+  the cache is unavailable instead of silently fetching the live origin. Keep
+  live probes and the fetch-cache loop guard on their existing direct paths.
+  Verified with `go test ./...`, `go vet ./...`, and `git diff --check`.
+
 ## [0.102.48] - 2026-10-12
 
 ### Fixed

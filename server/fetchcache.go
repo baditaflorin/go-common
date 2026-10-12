@@ -24,6 +24,11 @@ import (
 // until the request times out.
 const fetchCacheHopHeader = "X-Fetch-Cache-Hop"
 
+// fetchCacheServiceAppName is the one service that intentionally receives
+// fetchCacheHopHeader and must fetch Common Crawl's own index/WARC resources
+// without recursively delegating those requests back to itself.
+const fetchCacheServiceAppName = "go_infrastructure_fetch_cache"
+
 // fetchCacheDelegate adapts a fleetfetch.Client to the
 // safehttp.FetchDelegate interface. It lives in the server package
 // (which already imports both safehttp and fleetfetch) so that
