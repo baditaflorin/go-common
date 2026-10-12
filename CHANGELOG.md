@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.102.46] - 2026-10-12
+
+### Fixed
+
+- Route Fleet Graph writes and lookups through the configured HTTPS egress proxy,
+  even when the fleet-wide `NO_PROXY` suffix matches `.0exec.com`. Keep loopback
+  development collectors direct and retain the existing no-redirect credential
+  boundary.
+
+
 ## [0.102.45] - 2026-10-12
 
 ### Added
