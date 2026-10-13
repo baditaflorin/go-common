@@ -48,6 +48,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/baditaflorin/go-common/graph"
 )
 
 // Supplier resolves the upstream proxy URL for a single outbound request.
@@ -297,41 +299,71 @@ func HTTPClient(s Supplier, timeout time.Duration) *http.Client {
 	if ka != nil && ka.KeepAliveEnabled() {
 		disableKeepAlives = false
 	}
-	return &http.Client{
-		Transport: &http.Transport{
-			// Proxy is called per-request; single-URL suppliers always return
-			// the same URL, multi-proxy suppliers pick a weighted-random one.
-			// NO_PROXY-style bypass: if the supplier's bypass rules match
-			// the request host, return nil (direct connection) — critical
-			// for intra-fleet calls that the proxy provider cannot resolve.
-			Proxy: func(req *http.Request) (*url.URL, error) {
-				if bp != nil && bp.Bypass(req.URL.Hostname()) {
-					return nil, nil
+	transport := &http.Transport{
+		// Proxy is called per-request; single-URL suppliers always return
+		// the same URL, multi-proxy suppliers pick a weighted-random one.
+		// NO_PROXY-style bypass: if the supplier's bypass rules match
+		// the request host, return nil (direct connection) — critical
+		// for intra-fleet calls that the proxy provider cannot resolve.
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			if bp != nil && bp.Bypass(req.URL.Hostname()) {
+				return nil, nil
+			}
+			// StickyKeyHeader opts THIS request into session/domain
+			// affinity (see KeyedSupplier) instead of the default
+			// round-robin. Always stripped, even when ks is nil, so it
+			// never leaks to the proxy or origin regardless of which
+			// supplier is active.
+			var raw string
+			if key := req.Header.Get(StickyKeyHeader); key != "" {
+				req.Header.Del(StickyKeyHeader)
+				if ks != nil {
+					raw = ks.ProxyURLForKey(key)
 				}
-				// StickyKeyHeader opts THIS request into session/domain
-				// affinity (see KeyedSupplier) instead of the default
-				// round-robin. Always stripped, even when ks is nil, so it
-				// never leaks to the proxy or origin regardless of which
-				// supplier is active.
-				var raw string
-				if key := req.Header.Get(StickyKeyHeader); key != "" {
-					req.Header.Del(StickyKeyHeader)
-					if ks != nil {
-						raw = ks.ProxyURLForKey(key)
-					}
-				}
-				if raw == "" {
-					raw = s.ProxyURL()
-				}
-				if raw == "" {
-					return nil, nil
-				}
-				return url.Parse(raw)
-			},
-			DisableKeepAlives: disableKeepAlives,
+			}
+			if raw == "" {
+				raw = s.ProxyURL()
+			}
+			if raw == "" {
+				return nil, nil
+			}
+			return url.Parse(raw)
 		},
-		Timeout: timeout,
+		DisableKeepAlives: disableKeepAlives,
 	}
+	// Keep proxy-supplier traffic on the same Fleet Graph observation path
+	// as safehttp.NewClient. This client is used by services that need a
+	// rotating upstream proxy, so leaving its custom transport unwrapped
+	// silently drops every proxied outbound edge from the graph.
+	observed := graph.RoundTripper(transport)
+	return &http.Client{
+		Transport: &graphObservedTransport{Transport: transport, observed: observed},
+		Timeout:   timeout,
+	}
+}
+
+// graphObservedTransport preserves access to the underlying proxy selector
+// for callers and tests that inspect the returned transport, while routing
+// every request through the graph observer.
+type graphObservedTransport struct {
+	*http.Transport
+	observed http.RoundTripper
+}
+
+func (t *graphObservedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.observed.RoundTrip(req)
+}
+
+// Proxy delegates to the configured proxy selector for compatibility with
+// callers that inspect the client transport.
+func (t *graphObservedTransport) Proxy(req *http.Request) (*url.URL, error) {
+	return t.Transport.Proxy(req)
+}
+
+// KeepAlivesDisabled reports the underlying transport's connection policy.
+// This keeps the policy inspectable without exposing the observer wrapper.
+func (t *graphObservedTransport) KeepAlivesDisabled() bool {
+	return t.Transport.DisableKeepAlives
 }
 
 // --- implementations --------------------------------------------------------

@@ -1,7 +1,6 @@
 package proxysupplier_test
 
 import (
-	"net/http"
 	"testing"
 	"time"
 
@@ -24,11 +23,7 @@ func TestHTTPClient_KeepAliveDefaultsToDisabled(t *testing.T) {
 			}
 			s := proxysupplier.NewFromConfig(cfg)
 			client := proxysupplier.HTTPClient(s, 2*time.Second)
-			tr, ok := client.Transport.(*http.Transport)
-			if !ok {
-				t.Fatal("expected *http.Transport")
-			}
-			if !tr.DisableKeepAlives {
+			if !clientKeepAlivesDisabled(t, client) {
 				t.Error("DisableKeepAlives = false, want true (default/unset KeepAliveEnabled must preserve the original fresh-connection-per-request behavior)")
 			}
 		})
@@ -55,11 +50,7 @@ func TestHTTPClient_KeepAliveEnabledOptsIn(t *testing.T) {
 			}
 			s := proxysupplier.NewFromConfig(cfg)
 			client := proxysupplier.HTTPClient(s, 2*time.Second)
-			tr, ok := client.Transport.(*http.Transport)
-			if !ok {
-				t.Fatal("expected *http.Transport")
-			}
-			if tr.DisableKeepAlives {
+			if clientKeepAlivesDisabled(t, client) {
 				t.Error("DisableKeepAlives = true, want false (Config.KeepAliveEnabled=true should reuse connections)")
 			}
 		})

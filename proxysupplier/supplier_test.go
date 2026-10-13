@@ -2,11 +2,38 @@ package proxysupplier_test
 
 import (
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/baditaflorin/go-common/proxysupplier"
 )
+
+type proxyResolver interface {
+	Proxy(*http.Request) (*url.URL, error)
+}
+
+type keepAlivePolicy interface {
+	KeepAlivesDisabled() bool
+}
+
+func clientProxyResolver(t *testing.T, client *http.Client) proxyResolver {
+	t.Helper()
+	resolver, ok := client.Transport.(proxyResolver)
+	if !ok {
+		t.Fatal("HTTPClient transport must expose a proxy resolver")
+	}
+	return resolver
+}
+
+func clientKeepAlivesDisabled(t *testing.T, client *http.Client) bool {
+	t.Helper()
+	policy, ok := client.Transport.(keepAlivePolicy)
+	if !ok {
+		t.Fatal("HTTPClient transport must expose its keep-alive policy")
+	}
+	return policy.KeepAlivesDisabled()
+}
 
 func TestNoneSupplier(t *testing.T) {
 	s := proxysupplier.NewFromConfig(proxysupplier.Config{Supplier: ""})
@@ -105,8 +132,8 @@ func TestHTTPClient_NonNilForValidSupplier(t *testing.T) {
 		t.Fatal("expected non-nil *http.Client for a valid proxy URL")
 	}
 	// Verify the transport has a proxy function configured.
-	tr, ok := client.Transport.(*http.Transport)
-	if !ok || tr.Proxy == nil {
+	tr := clientProxyResolver(t, client)
+	if tr == nil {
 		t.Fatal("Transport.Proxy should be set")
 	}
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com/", nil)
@@ -224,8 +251,8 @@ func TestMultiSupplier_HTTPClient_PerRequestProxy(t *testing.T) {
 	if client == nil {
 		t.Fatal("expected non-nil client")
 	}
-	tr, ok := client.Transport.(*http.Transport)
-	if !ok || tr.Proxy == nil {
+	tr := clientProxyResolver(t, client)
+	if tr == nil {
 		t.Fatal("Transport.Proxy should be set")
 	}
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com/", nil)
