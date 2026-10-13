@@ -88,9 +88,11 @@ func (e *StatusError) Error() string {
 
 // Client reads secrets from go-fleet-secrets.
 type Client struct {
-	baseURL string
-	apiKey  string
-	http    Doer
+	baseURL   string
+	apiKey    string
+	http      Doer
+	fallbacks []string // extra vault base URLs, tried in order after baseURL
+	cache     *diskCache
 }
 
 // New builds a Client. baseURL is the vault root (e.g.
@@ -151,12 +153,19 @@ func NewFromEnv(getenv func(string) string, httpClient Doer) (*Client, error) {
 			Transport: DirectTransport(),
 		}
 	}
-	return New(baseURL, apiKey, httpClient), nil
+	return New(baseURL, apiKey, httpClient).WithEnv(getenv), nil
 }
 
 // Get fetches a single secret's plaintext value by name, decoding the
 // fleet response envelope's data.value. It never logs or embeds the
 // secret value in any returned error.
+//
+// With fallback URLs and/or a cache configured (WithFallbacks, WithCache,
+// WithEnv) Get fails soft: an outage of the primary (transport error, 5xx,
+// 429, an undecodable or empty answer) moves on to the next URL, and when
+// every URL fails the last-known-good cached value is returned. A 401, 403
+// or 404 is a definitive answer, never retried elsewhere and never served
+// from the cache. See GetDetailed to learn where the value came from.
 //
 // Errors:
 //   - misconfiguration (nil client/transport, empty base URL)
@@ -166,16 +175,66 @@ func NewFromEnv(getenv func(string) string, httpClient Doer) (*Client, error) {
 //     envelope surfaces as *response.Error)
 //   - a 200 success envelope whose value is empty
 func (c *Client) Get(ctx context.Context, name string) (string, error) {
+	res, err := c.GetDetailed(ctx, name)
+	return res.Value, err
+}
+
+// Source says where a returned secret came from.
+type Source string
+
+const (
+	SourceLive  Source = "live"  // answered by the first (primary) URL
+	SourceAlt   Source = "alt"   // answered by a fallback URL
+	SourceCache Source = "cache" // every URL failed; last-known-good from disk
+)
+
+// Result is a secret value plus its provenance. Value is never logged by this package.
+type Result struct {
+	Value  string
+	Source Source
+	URL    string        // base URL that answered (empty for SourceCache)
+	Age    time.Duration // for SourceCache: how old the cached copy is
+}
+
+// GetDetailed is Get with provenance, so a caller can log "served from cache" without the value.
+func (c *Client) GetDetailed(ctx context.Context, name string) (Result, error) {
 	if c == nil || c.http == nil {
-		return "", fmt.Errorf("secrets: client not configured")
+		return Result{}, fmt.Errorf("secrets: client not configured")
 	}
 	if c.baseURL == "" {
-		return "", fmt.Errorf("secrets: base URL unset")
+		return Result{}, fmt.Errorf("secrets: base URL unset")
 	}
 	if !validSecretName(name) {
-		return "", errors.New("secrets: name must be a simple identifier")
+		return Result{}, errors.New("secrets: name must be a simple identifier")
 	}
-	url := c.baseURL + "/secrets/" + name
+	var lastErr error
+	for i, base := range append([]string{c.baseURL}, c.fallbacks...) {
+		v, err := c.fetch(ctx, base, name)
+		if err == nil {
+			c.cache.store(name, v, c.apiKey)
+			src := SourceLive
+			if i > 0 {
+				src = SourceAlt
+			}
+			return Result{Value: v, Source: src, URL: base}, nil
+		}
+		lastErr = err
+		var se *StatusError
+		if errors.As(err, &se) && se.StatusCode >= 400 && se.StatusCode < 500 && se.StatusCode != http.StatusTooManyRequests {
+			return Result{}, err // definitive: bad key, not allowed, no such secret
+		}
+		if ctx.Err() != nil {
+			break // out of time: do not start another network attempt
+		}
+	}
+	if v, age, ok := c.cache.load(name, c.apiKey); ok {
+		return Result{Value: v, Source: SourceCache, Age: age}, nil
+	}
+	return Result{}, lastErr
+}
+
+func (c *Client) fetch(ctx context.Context, base, name string) (string, error) {
+	url := base + "/secrets/" + name
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("secrets: build request for %q: %w", name, err)

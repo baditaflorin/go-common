@@ -428,7 +428,8 @@ func readOpenObserveToken(ctx context.Context, baseURL, apiKey string) (string, 
 	// Every attempt builds its own transport; do not leave a keep-alive
 	// connection behind for each retry.
 	defer client.CloseIdleConnections()
-	return secrets.New(baseURL, apiKey, client).Get(ctx, openObserveTokenSecret)
+	// Fail-soft: FLEET_SECRETS_FALLBACK_URLS / FLEET_SECRETS_CACHE_DIR let a restart during a vault outage still find the token.
+	return secrets.New(baseURL, apiKey, client).WithEnv(os.Getenv).Get(ctx, openObserveTokenSecret)
 }
 
 // directOTLPProxy is the exporter's proxy policy for the approved fleet
