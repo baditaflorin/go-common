@@ -848,9 +848,9 @@ filter by kind — don't deploy-all or health-check a static Pages site
 Generated from the dispatch switch in `go_fleet_runner/main.go`; `fleet-runner --help` lists fewer. Do not edit by hand.
 
 <!-- BEGIN GENERATED:verbs repo=go_fleet_runner -->
-_116 verbs, generated from the dispatch switch in `go_fleet_runner/main.go`; do not edit by hand._
+_120 verbs, generated from the dispatch switch in `go_fleet_runner/main.go`; do not edit by hand._
 
-`ai-context`, `allocate-port`, `astedit`, `astgrep`, `audit`, `audit-callers`, `audit-graph`, `audit-log`, `batch`, `branch`, `broker-canary`, `build-test`, `builder-pool`, `bump-version`, `canary-inventory`, `capacity`, `capacity-report`, `cert`, `change-receipts`, `changelog`, `classify`, `clone-missing`, `compose-heal`, `compose-image-heal`, `compose-port-prep`, `compose-ports-strip`, `compute-attribution`, `converge`, `coolify`, `ctx`, `cve-history`, `cve-root-cause`, `dep-cve`, `dep-cve-merge`, `depgraph`, `deploy`, `deploy-all`, `deploy-authorized`, `deploy-debt`, `deploy-pool`, `deps`, `diagram`, `digest`, `disk-report`, `dns-heal`, `drift`, `e2e`, `exec`, `explain`, `export-collection`, `fleetfetch-migrate`, `forecast`, `gateway-health`, `git-traffic`, `graph-context`, `grep`, `health`, `hosts-sync`, `image-gc`, `inject`, `install-fleet-access-log-conf`, `install-verify-cache-conf`, `intent`, `investigate-url`, `key`, `loadtest`, `mirror-clone`, `mirror-fetch`, `new-service`, `nginx-drift-audit`, `nginx-render`, `overrides`, `pages-audit`, `placement-check`, `placement-plan`, `playbook`, `pool-metrics-targets`, `port-heal`, `prs`, `publish-image`, `push`, `real-data-loops`, `remediate`, `render-compose`, `replay`, `rollout`, `scaffold-compose`, `scaffold-service-yaml`, `scanopy`, `scanopy-audit`, `scanopy-mcp`, `sed`, `select`, `session-summary`, `shape`, `smoke`, `spiffe-audit`, `spiffe-entries`, `split`, `stage`, `stage-batch`, `stash`, `state`, `stats`, `sweep-rollback`, `sync-deps`, `template`, `tokens`, `trl-review`, `update-dep`, `verify-image`, `whois`, `why`, `woodpecker`, `worktree-audit`, `worktree-prune`
+`ai-context`, `allocate-port`, `astedit`, `astgrep`, `audit`, `audit-callers`, `audit-graph`, `audit-log`, `batch`, `branch`, `broker-canary`, `build-test`, `builder-pool`, `bump-version`, `canary-inventory`, `capacity`, `capacity-report`, `cert`, `change-receipts`, `changelog`, `classify`, `clone-missing`, `compose-heal`, `compose-image-heal`, `compose-port-prep`, `compose-ports-strip`, `compute-attribution`, `converge`, `coolify`, `ctx`, `cve-history`, `cve-root-cause`, `dep-cve`, `dep-cve-merge`, `depgraph`, `deploy`, `deploy-all`, `deploy-authorized`, `deploy-debt`, `deploy-pool`, `deps`, `diagram`, `digest`, `disk-report`, `dns-heal`, `drift`, `e2e`, `exec`, `explain`, `export-collection`, `fleetfetch-migrate`, `forecast`, `gateway-health`, `git-traffic`, `graph-context`, `grep`, `health`, `horizon`, `hosts-sync`, `image-gc`, `inject`, `install-fleet-access-log-conf`, `install-verify-cache-conf`, `intent`, `investigate-url`, `key`, `loadtest`, `mirror-clone`, `mirror-fetch`, `new-service`, `nginx-drift-audit`, `nginx-render`, `overrides`, `pages-audit`, `placement-check`, `placement-plan`, `playbook`, `pool-guardian`, `pool-metrics-targets`, `pool-plan`, `pool-status`, `port-heal`, `prs`, `publish-image`, `push`, `real-data-loops`, `remediate`, `render-compose`, `replay`, `rollout`, `scaffold-compose`, `scaffold-service-yaml`, `scanopy`, `scanopy-audit`, `scanopy-mcp`, `sed`, `select`, `session-summary`, `shape`, `smoke`, `spiffe-audit`, `spiffe-entries`, `split`, `stage`, `stage-batch`, `stash`, `state`, `stats`, `sweep-rollback`, `sync-deps`, `template`, `tokens`, `trl-review`, `update-dep`, `verify-image`, `whois`, `why`, `woodpecker`, `worktree-audit`, `worktree-prune`
 <!-- END GENERATED:verbs -->
 
 ## Infrastructure topology
@@ -1310,8 +1310,17 @@ are resolved as of 2026-08-23:
   neither `origin/main` nor the CDN can be read, or the bytes are not
   valid JSON. A workspace root chosen with `FLEET_RUNNER_WORKSPACE_ROOT`
   is read as it is, and an explicit `--services <path>` does not steer
-  those three decisions. `clusters.json` placement is not yet verified
-  (go_fleet_runner `docs/registry-checkout-readers.md`).
+  those three decisions. Since go_fleet_runner v0.7.336 `clusters.json` is
+  read the same way by everything that acts on the host it picks
+  (`deploy`, `deploy-authorized`, `deploy-all`'s gate, `placement-plan`,
+  `nginx-render`'s pools and the pool tools, `stage`, `port-heal
+  --reconcile` (its placement half), `drift`, `render-compose`,
+  `dns-heal`, `compose-image-heal`) and, since v0.7.343, by
+  `audit compose-drift`. The file may be absent (a 404 from the CDN
+  means no placement), but a checkout that cannot be verified while the
+  CDN cannot be read stops the command. The other audit and report verbs
+  still read the working tree (go_fleet_runner
+  `docs/registry-checkout-readers.md`).
 - **Cosign signing** — restored fleet-wide; the vault's
   `cosign-signing-key`, `cosign-signing-key-password`, and
   `cosign-public-key` are all populated again (verified directly
