@@ -19,7 +19,7 @@ func TestNoProxy_BypassedHostsReturnNil(t *testing.T) {
 		t.Fatalf("want env, got %q", s.Name())
 	}
 	client := proxysupplier.HTTPClient(s, 2*time.Second)
-	tr := client.Transport.(*http.Transport)
+	tr := clientProxyResolver(t, client)
 
 	check := func(url string, wantProxy bool) {
 		t.Helper()
@@ -56,7 +56,7 @@ func TestNoProxy_WildcardBypassesEverything(t *testing.T) {
 	}
 	s := proxysupplier.NewFromConfig(cfg)
 	client := proxysupplier.HTTPClient(s, 2*time.Second)
-	tr := client.Transport.(*http.Transport)
+	tr := clientProxyResolver(t, client)
 	req, _ := http.NewRequest(http.MethodGet, "https://duckduckgo.com/", nil)
 	got, _ := tr.Proxy(req)
 	if got != nil {
@@ -72,7 +72,7 @@ func TestNoProxy_EmptyMeansEverythingProxied(t *testing.T) {
 	}
 	s := proxysupplier.NewFromConfig(cfg)
 	client := proxysupplier.HTTPClient(s, 2*time.Second)
-	tr := client.Transport.(*http.Transport)
+	tr := clientProxyResolver(t, client)
 	req, _ := http.NewRequest(http.MethodGet, "http://localhost:8080/", nil)
 	got, _ := tr.Proxy(req)
 	if got == nil {
@@ -92,7 +92,7 @@ func TestNoProxy_AppliesToMultiSupplier(t *testing.T) {
 		t.Fatalf("want multi, got %q", s.Name())
 	}
 	client := proxysupplier.HTTPClient(s, 2*time.Second)
-	tr := client.Transport.(*http.Transport)
+	tr := clientProxyResolver(t, client)
 
 	req, _ := http.NewRequest(http.MethodGet, "https://phone-extractor.0crawl.com/", nil)
 	got, _ := tr.Proxy(req)
@@ -115,7 +115,7 @@ func TestNoProxy_CaseInsensitive(t *testing.T) {
 	}
 	s := proxysupplier.NewFromConfig(cfg)
 	client := proxysupplier.HTTPClient(s, 2*time.Second)
-	tr := client.Transport.(*http.Transport)
+	tr := clientProxyResolver(t, client)
 
 	// Hostname-with-uppercase should still bypass.
 	req, _ := http.NewRequest(http.MethodGet, "https://Phone-Extractor.0crawl.com/", nil)
@@ -132,7 +132,7 @@ func TestNoProxy_LowercaseEnvVarFallback(t *testing.T) {
 	t.Setenv("EXTERNAL_PROXY_URL", "http://p.example.com:80")
 	s := proxysupplier.New()
 	client := proxysupplier.HTTPClient(s, 2*time.Second)
-	tr := client.Transport.(*http.Transport)
+	tr := clientProxyResolver(t, client)
 	req, _ := http.NewRequest(http.MethodGet, "https://x.0crawl.com/", nil)
 	got, _ := tr.Proxy(req)
 	if got != nil {

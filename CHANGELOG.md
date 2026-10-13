@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.102.53] - 2026-10-13
+
+### Fixed
+
+- Instrument `proxysupplier.HTTPClient` with the Fleet Graph observer so outbound requests using rotating proxy suppliers are recorded like `safehttp.NewClient` requests.
+
 ## [0.102.52] - 2026-10-13
 
 ### Added

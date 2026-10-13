@@ -150,7 +150,7 @@ func TestHTTPClient_StickyKeyHeaderSelectsPinnedProxy(t *testing.T) {
 	want := ks.ProxyURLForKey("pinned-session")
 
 	client := HTTPClient(s, 2*time.Second)
-	tr := client.Transport.(*http.Transport)
+	tr := client.Transport.(*graphObservedTransport)
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.invalid/", nil)
 	req.Header.Set(StickyKeyHeader, "pinned-session")
@@ -177,7 +177,7 @@ func TestHTTPClient_StickyKeyHeaderSelectsPinnedProxy(t *testing.T) {
 func TestHTTPClient_StickyKeyHeaderIgnoredForNonKeyedSupplier(t *testing.T) {
 	s := NewFromConfig(Config{Supplier: "plain_proxies", Host: "proxy.example", Port: "8080", Username: "u", Password: "p"})
 	client := HTTPClient(s, 2*time.Second)
-	tr := client.Transport.(*http.Transport)
+	tr := client.Transport.(*graphObservedTransport)
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.invalid/", nil)
 	req.Header.Set(StickyKeyHeader, "whatever")
