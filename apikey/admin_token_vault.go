@@ -60,7 +60,7 @@ func ResolveAdminToken(ctx context.Context, vaultBaseURL, vaultAPIKey string) st
 	vctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	client := secrets.New(vaultBaseURL, vaultAPIKey, &http.Client{Timeout: 3 * time.Second})
+	client := secrets.New(vaultBaseURL, vaultAPIKey, &http.Client{Timeout: 3 * time.Second}).WithEnv(os.Getenv)
 	val, err := client.Get(vctx, DefaultAdminTokenSecretName)
 	if err != nil || val == "" {
 		return envFallback

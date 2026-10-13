@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.102.52] - 2026-10-13
+
+### Added
+
+- `secrets.Client` fails soft, so a service can start while the primary vault host is down (Tier-0 resilience, step 5).
+  `WithFallbacks(urls...)` / `FLEET_SECRETS_FALLBACK_URLS` is an ordered list of extra vault base URLs (a follower on another site),
+  tried after the primary on an outage-type failure (transport error, 5xx, 429, undecodable or empty answer). Environment URLs must be
+  https on an approved `fleet-secrets*` host (0exec/0mcp/0own/0docker); anything else is dropped so the API key never travels there.
+  `WithCache(dir, maxAge)` / `FLEET_SECRETS_CACHE_DIR` + `FLEET_SECRETS_CACHE_MAX_AGE` (default 168h) keeps an encrypted last-known-good copy
+  (AES-256-GCM under a key derived from the caller's own API key, 0600 files in a 0700 directory) and serves it only when every URL failed.
+  401/403/404 are definitive: never retried elsewhere and never answered from the cache, so a revoked key or a deleted secret is not resurrected.
+- `GetDetailed` returns provenance (`live`, `alt`, `cache`, plus URL and cache age) without exposing the value in logs.
+- `NewFromEnv`, the telemetry OpenObserve token read and `apikey.ResolveAdminToken` pick the new variables up through `WithEnv`;
+  with none set, behaviour is unchanged.
+
 ## [0.102.51] - 2026-10-13
 
 ### Fixed
