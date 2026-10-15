@@ -24,6 +24,7 @@ type IssueRequest struct {
 // IssueResult is what /issue returns.
 type IssueResult struct {
 	Key       string `json:"key"`
+	KeyID     string `json:"key_id,omitempty"` // stable non-secret id (keystore >= 0.4.9); see KeyID
 	User      string `json:"user"`
 	Scope     string `json:"scope"`
 	Name      string `json:"name"`

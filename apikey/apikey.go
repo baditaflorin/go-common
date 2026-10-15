@@ -35,6 +35,8 @@ package apikey
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -69,7 +71,15 @@ type VerifyResult struct {
 
 // KeyMeta is one row returned by /list.
 type KeyMeta struct {
-	Key        string `json:"key"`
+	// Key is the full value. Deprecated: keystores that store keys hashed
+	// (keystore mesh, Phase 1) leave it empty. Identify a key by KeyID and
+	// show KeyPrefix; revoke with RevokeID.
+	Key string `json:"key"`
+	// KeyID is the stable, non-secret id of the key ("kid_..."), computable
+	// from the value with KeyID(key). Empty from keystores older than 0.4.9.
+	KeyID string `json:"key_id,omitempty"`
+	// KeyPrefix is the first 8 characters of the key plus "…", for display.
+	KeyPrefix  string `json:"key_prefix,omitempty"`
 	User       string `json:"user"`
 	Scope      string `json:"scope"`
 	Name       string `json:"name,omitempty"`
@@ -123,4 +133,12 @@ type Verifier interface {
 type cacheEntry struct {
 	result   VerifyResult
 	verified time.Time
+}
+
+// KeyID returns the stable, non-secret id the keystore uses for a key:
+// "kid_" plus the first 24 hex characters of SHA-256(key). It is the same
+// value the keystore returns as KeyMeta.KeyID and IssueResult.KeyID.
+func KeyID(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return "kid_" + hex.EncodeToString(sum[:])[:24]
 }

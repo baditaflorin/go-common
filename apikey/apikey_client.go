@@ -111,6 +111,26 @@ func (c *Client) Revoke(ctx context.Context, key string) (bool, error) {
 	return out.Revoked, nil
 }
 
+// RevokeID revokes the key with the given id (KeyMeta.KeyID or KeyID(value)).
+// It needs a keystore that supports ids (go_apikey_service >= 0.4.9).
+func (c *Client) RevokeID(ctx context.Context, keyID string) (bool, error) {
+	if c.AdminToken == "" {
+		return false, ErrAdminTokenMissing
+	}
+	keyID = strings.TrimSpace(keyID)
+	if !strings.HasPrefix(keyID, "kid_") {
+		return false, errors.New("apikey: RevokeID needs a key id (kid_...)")
+	}
+	body, _ := json.Marshal(map[string]string{"key_id": keyID})
+	var out struct {
+		Revoked bool `json:"revoked"`
+	}
+	if err := c.adminCall(ctx, http.MethodPost, "/revoke", body, &out); err != nil {
+		return false, err
+	}
+	return out.Revoked, nil
+}
+
 // List returns all known keys (capped at 500 by the server).
 func (c *Client) List(ctx context.Context) ([]KeyMeta, error) {
 	if c.AdminToken == "" {

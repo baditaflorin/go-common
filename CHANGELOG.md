@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.102.55] - 2026-10-16
+
+### Added
+
+- `apikey.KeyID(key)`, `KeyMeta.KeyID` / `KeyMeta.KeyPrefix`, `IssueResult.KeyID` and `Client.RevokeID(ctx, keyID)`: the keystore's stable,
+  non-secret key id (`kid_` + 24 hex of SHA-256; go_apikey_service >= 0.4.9). Keystore mesh Phase 0: callers stop needing a key's value
+  back from the keystore before keys are stored hashed. `RevokeID` refuses anything that is not a `kid_` id, so a raw key is never sent as one.
+
+### Deprecated
+
+- `KeyMeta.Key` (the full value from `/list`): a keystore that stores keys hashed leaves it empty.
+
 ## [0.102.54] - 2026-10-16
 
 ### Added
