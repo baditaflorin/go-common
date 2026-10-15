@@ -17,7 +17,15 @@ import (
 // Client is a minimal, timeout-bounded HTTP client for the keystore.
 // Construct one per process and reuse — don't churn HTTPClient instances.
 type Client struct {
-	BaseURL    string       // default from APIKEY_SERVICE_URL
+	BaseURL string // default from APIKEY_SERVICE_URL (the first of APIKEY_SERVICE_URLS when that is set)
+	// Endpoints (optional) is the ordered list of keystore nodes, own host
+	// first. Empty means BaseURL alone. See endpoints.go.
+	Endpoints []string
+	// HedgeDelay (optional) is how long Verify waits for one endpoint before
+	// also asking the next; default DefaultHedgeDelay.
+	HedgeDelay time.Duration
+	// VerifyObs (optional) receives one VerifyEvent per Verify call.
+	VerifyObs  VerifyObserver
 	AdminToken string       // default from APIKEY_SERVICE_ADMIN_TOKEN
 	HTTPClient *http.Client // default: 5s timeout, no redirects
 	UserAgent  string       // default: "go-common/apikey"
@@ -30,31 +38,48 @@ type Client struct {
 
 // Verify checks the key against the keystore. Returns ErrInvalidKey for
 // definitive rejections (401), ErrKeystoreUnavailable for transient
-// failures the caller may want to degrade through.
+// failures the caller may want to degrade through. With several Endpoints
+// it asks the nearest healthy one and hedges to the next (endpoints.go).
 func (c *Client) Verify(ctx context.Context, key string) (*VerifyResult, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/verify", nil)
+	return c.verifyAcross(ctx, key)
+}
+
+// verifyOnce asks one endpoint and records the outcome on its breaker.
+func (c *Client) verifyOnce(ctx context.Context, base, key string) verifyOutcome {
+	out := verifyOutcome{endpoint: base}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/verify", nil)
 	if err != nil {
-		return nil, fmt.Errorf("apikey verify: build req: %w", err)
+		out.err = fmt.Errorf("apikey verify: build req: %w", err)
+		return out
 	}
 	req.Header.Set(header.VerifyKey, key)
 	req.Header.Set("User-Agent", c.UserAgent)
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrKeystoreUnavailable, err)
+		// A request we cancelled ourselves (another endpoint answered first)
+		// says nothing about this endpoint's health.
+		if ctx.Err() == nil {
+			breakerFor(base).record(false, time.Now())
+		}
+		out.err = fmt.Errorf("%w: %v", ErrKeystoreUnavailable, err)
+		return out
 	}
 	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	breakerFor(base).record(resp.StatusCode < 500, time.Now())
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return &VerifyResult{
+		out.result = &VerifyResult{
 			User:  resp.Header.Get(header.AuthUser),
 			Scope: resp.Header.Get(header.AuthScope),
 			Tier:  resp.Header.Get(header.AuthTier),
-		}, nil
+		}
 	case http.StatusUnauthorized:
-		return nil, ErrInvalidKey
+		out.err = ErrInvalidKey
 	default:
-		return nil, fmt.Errorf("%w: HTTP %d", ErrKeystoreUnavailable, resp.StatusCode)
+		out.err = fmt.Errorf("%w: HTTP %d", ErrKeystoreUnavailable, resp.StatusCode)
 	}
+	return out
 }
 
 // Issue mints a new key. Requires AdminToken.
@@ -150,24 +175,37 @@ func (c *Client) adminCall(ctx context.Context, method, path string, body []byte
 		}
 	}()
 
-	var rdr io.Reader
-	if body != nil {
-		rdr = bytes.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, rdr)
-	if err != nil {
-		result = "client_error"
-		return fmt.Errorf("apikey %s %s: %w", method, path, err)
-	}
-	req.Header.Set(header.AdminToken, c.AdminToken)
-	req.Header.Set("User-Agent", c.UserAgent)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		result = "transport_error"
-		return fmt.Errorf("%w: %v", ErrKeystoreUnavailable, err)
+	// Admin calls go to the first endpoint that accepts a connection. Only an
+	// idempotent call moves on after any transport error; a non-idempotent one
+	// (issue) moves on only when the request never reached the server (dial
+	// error), so a slow node can never make it mint two keys. An HTTP answer
+	// of any status is final.
+	idempotent := adminOpFromPath(path) != "issue"
+	var resp *http.Response
+	for i, base := range c.endpointList() {
+		var rdr io.Reader
+		if body != nil {
+			rdr = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, base+path, rdr)
+		if err != nil {
+			result = "client_error"
+			return fmt.Errorf("apikey %s %s: %w", method, path, err)
+		}
+		req.Header.Set(header.AdminToken, c.AdminToken)
+		req.Header.Set("User-Agent", c.UserAgent)
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err = c.HTTPClient.Do(req)
+		if err == nil {
+			break
+		}
+		last := i == len(c.endpointList())-1
+		if last || ctx.Err() != nil || (!idempotent && !isDialError(err)) {
+			result = "transport_error"
+			return fmt.Errorf("%w: %v", ErrKeystoreUnavailable, err)
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 500 {

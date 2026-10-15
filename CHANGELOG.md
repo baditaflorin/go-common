@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.102.54] - 2026-10-16
+
+### Added
+
+- `apikey.Client` can talk to several keystore nodes (keystore mesh, Phase 0: claude_team/KEYSTORE-MESH-PLAN-2026-10-15.md). `Endpoints` /
+  `APIKEY_SERVICE_URLS` is an ordered list, the node on the caller's own host first. `Verify` asks the first healthy endpoint and, if it has
+  not answered within `HedgeDelay` (default 300 ms, `APIKEY_SERVICE_HEDGE_MS`), also asks the next; the first definitive answer wins. A
+  refused connection, a transport error or a 5xx moves on at once; a 401 is definitive and is never re-asked elsewhere. A per-endpoint
+  breaker (3 consecutive failures, 30 s) moves a failing node to the back of the order without dropping it, and a request the client
+  cancelled itself (because another node answered first) never counts against a node. Environment URLs are accepted only as plain http to a
+  loopback, RFC 1918, tailnet (100.64/10), `host.docker.internal` or single-label container address, or https to the fleet's own domains,
+  with no credentials, path, query or fragment; anything else is dropped and logged, so a presented key is never sent elsewhere.
+- Admin calls (`Issue`, `Revoke`, `List`, `ListExact`, `Purge`) move to the next endpoint after a transport error. `Issue` moves on only when
+  the connection was refused (the request never reached a node), so it can never mint two keys; any HTTP answer is final.
+- `VerifyObserver` / `VerifyEvent` (endpoint used, result, attempts, hedged, duration) for metrics.
+
+With one endpoint (no `APIKEY_SERVICE_URLS`) behaviour is unchanged: one request, the same errors.
+
 ## [0.102.53] - 2026-10-13
 
 ### Fixed
