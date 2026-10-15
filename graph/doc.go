@@ -33,8 +33,17 @@
 // graph.WithTarget(ctx, serviceID) to that request context so the emitted
 // edge keeps its canonical logical destination.
 //
-// Identity comes from server.Run via Init(serviceID, version). If
-// Init is not called the package falls back to "unknown".
+// Identity comes from server.Run via Init(serviceID, version), or from
+// GRAPH_SERVICE_ID when that is set. Events recorded before either has
+// supplied it (a secrets lookup or poller started ahead of server.New) are
+// held without an owner and stamped with the identity when they are sent; the
+// sender ships nothing until the identity is known. If Init is never called
+// those events are never sent, because the collector rejects a whole batch
+// containing an event that does not belong to the authenticated writer.
+//
+// A batch the collector refuses for its content (403, 400, 413, 415, 422) is
+// dropped and counted in Counters.BatchesRejected instead of being retried
+// forever; 401, 408, 429 and 5xx keep the batch for a later flush.
 //
 // Configuration is env-driven, read once at first use:
 //

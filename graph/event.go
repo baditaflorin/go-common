@@ -11,7 +11,7 @@ const SchemaVersion = 1
 // user, prompt, or LLM-invocation total.
 type Event struct {
 	Direction string `json:"dir"`    // "out" or "in"
-	Caller    string `json:"caller"` // service slug (or "unknown" / "external:<host>")
+	Caller    string `json:"caller"` // service slug (or "unknown" for an unverified inbound caller / "external:<host>")
 	Target    string `json:"target"` // service slug (or "external:<host>")
 	Path      string `json:"path"`   // templatised, no query string
 	Method    string `json:"method"`
@@ -48,4 +48,8 @@ type Counters struct {
 	EventsSampled  int64 `json:"events_sampled"`
 	BatchesSent    int64 `json:"batches_sent"`
 	BatchesFailed  int64 `json:"batches_failed"`
+	// BatchesRejected is the subset of BatchesFailed the collector refused
+	// for the batch's own content (403, 400, 413, 415, 422). Those batches are
+	// dropped, not retried, so a nonzero value means events were lost.
+	BatchesRejected int64 `json:"batches_rejected"`
 }
