@@ -267,7 +267,14 @@ func TestSenderStopsFlushAfterFirstFailedBatch(t *testing.T) {
 }
 
 func TestSenderAuthFailuresCooldown(t *testing.T) {
+	// 401 keeps the batch (a rotated key can deliver it); 403 means the
+	// collector refused the batch itself, so it is dropped and counted.
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		wantPending := 1
+		wantRejected := int64(0)
+		if status == http.StatusForbidden {
+			wantPending, wantRejected = 0, 1
+		}
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			var hits int64
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -297,11 +304,14 @@ func TestSenderAuthFailuresCooldown(t *testing.T) {
 			if got := r.len(); got != 1 {
 				t.Fatalf("ring length = %d during cooldown; want 1 pending event", got)
 			}
-			if got := len(s.pending); got != 1 {
-				t.Fatalf("failed batch length = %d during cooldown; want 1 preserved event", got)
+			if got := len(s.pending); got != wantPending {
+				t.Fatalf("pending batch length = %d during cooldown; want %d", got, wantPending)
 			}
 			if got := atomic.LoadInt64(&counters.BatchesFailed); got != 1 {
 				t.Fatalf("BatchesFailed = %d, want 1", got)
+			}
+			if got := atomic.LoadInt64(&counters.BatchesRejected); got != wantRejected {
+				t.Fatalf("BatchesRejected = %d, want %d", got, wantRejected)
 			}
 		})
 	}

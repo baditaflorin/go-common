@@ -22,12 +22,18 @@ var (
 type pkgState struct {
 	cfg       config
 	serviceID string
-	version   string
-	ring      *ring
-	sender    *sender
-	counters  *atomicCounters
-	rng       *rand.Rand
-	rngMu     sync.Mutex
+	// identified is true once Init (or GRAPH_SERVICE_ID at bootstrap) has
+	// decided the identity, including the fail-closed decision for an invalid
+	// override (serviceID "" with identified true). While it is false the
+	// identity is only not yet known: events are held without an owner and
+	// stamped when they are sent.
+	identified bool
+	version    string
+	ring       *ring
+	sender     *sender
+	counters   *atomicCounters
+	rng        *rand.Rand
+	rngMu      sync.Mutex
 }
 
 // Init configures the package with the calling service's identity.
@@ -41,13 +47,14 @@ func Init(serviceID, version string) {
 	serviceID, overrideSet := configuredServiceID(serviceID)
 	stateOnce.Do(func() {
 		stateMu.Lock()
-		state = bootstrap(serviceID, version)
+		state = bootstrap(serviceID, version, serviceID != "" || overrideSet)
 		stateMu.Unlock()
 	})
 	stateMu.Lock()
 	if state != nil {
 		if serviceID != "" || overrideSet {
 			state.serviceID = serviceID
+			state.identified = true
 		}
 		if version != "" {
 			state.version = version
@@ -59,9 +66,12 @@ func Init(serviceID, version string) {
 	stateMu.Unlock()
 }
 
-// ensureInit makes Record safe to call before Init. The fallback
-// identity is "unknown"; once a later Init lands, future events get
-// the right slug.
+// ensureInit makes Record safe to call before Init. Until an identity is
+// known (GRAPH_SERVICE_ID, resolved here, or a later Init) events are held in
+// the ring without a caller/target and the sender does not ship them; once the
+// identity lands they are stamped with it. A placeholder identity must never
+// reach the collector: it rejects a whole batch whose events do not belong to
+// the authenticated writer.
 func ensureInit() *pkgState {
 	stateMu.RLock()
 	s := state
@@ -71,7 +81,8 @@ func ensureInit() *pkgState {
 	}
 	stateOnce.Do(func() {
 		stateMu.Lock()
-		state = bootstrap("unknown", "")
+		serviceID, overrideSet := configuredServiceID("")
+		state = bootstrap(serviceID, "", serviceID != "" || overrideSet)
 		stateMu.Unlock()
 	})
 	stateMu.RLock()
@@ -79,17 +90,18 @@ func ensureInit() *pkgState {
 	return state
 }
 
-func bootstrap(serviceID, version string) *pkgState {
+func bootstrap(serviceID, version string, identified bool) *pkgState {
 	cfg := loadConfig()
 	counters := &atomicCounters{}
 	r := newRing(cfg.bufferSize)
 	s := &pkgState{
-		cfg:       cfg,
-		serviceID: serviceID,
-		version:   version,
-		ring:      r,
-		counters:  counters,
-		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		cfg:        cfg,
+		serviceID:  serviceID,
+		identified: identified,
+		version:    version,
+		ring:       r,
+		counters:   counters,
+		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 	s.sender = newSender(cfg, serviceID, version, r, counters)
 	go s.sender.run()
@@ -104,10 +116,10 @@ func Record(e Event) {
 		return
 	}
 	stateMu.RLock()
-	serviceID := s.serviceID
+	serviceID, identified := s.serviceID, s.identified
 	stateMu.RUnlock()
-	if serviceID == "" {
-		return
+	if serviceID == "" && identified {
+		return // invalid GRAPH_SERVICE_ID: fail closed
 	}
 	// Sampling: roll once per event. EventsSampled counts the *kept*
 	// after-sampling events (so it equals EventsRecorded at rate 1.0).
@@ -125,7 +137,8 @@ func Record(e Event) {
 	}
 	// Fill in caller from package identity if the caller didn't set
 	// it (the safehttp transport always knows itself; the inbound
-	// middleware infers caller from User-Agent).
+	// middleware infers caller from User-Agent). Before the identity is
+	// known it stays blank and the sender stamps it (see stampOwnIdentity).
 	if e.Direction == "out" && e.Caller == "" {
 		e.Caller = serviceID
 	}
@@ -148,7 +161,9 @@ func Stats() Counters {
 }
 
 // ServiceID returns the configured identity, useful for callers
-// that want to tag custom events.
+// that want to tag custom events. It is empty until Init (or
+// GRAPH_SERVICE_ID) has supplied one; an Event left without Caller/Target is
+// stamped with the identity when it is sent.
 func ServiceID() string {
 	_ = ensureInit()
 	stateMu.RLock()
@@ -164,9 +179,9 @@ func ServiceID() string {
 func Enabled() bool {
 	s := ensureInit()
 	stateMu.RLock()
-	serviceID := s.serviceID
+	serviceID, identified := s.serviceID, s.identified
 	stateMu.RUnlock()
-	return serviceID != "" && s.cfg.eventEmissionEnabled()
+	return (serviceID != "" || !identified) && s.cfg.eventEmissionEnabled()
 }
 
 // Shutdown stops the background sender and makes a final best-effort flush.

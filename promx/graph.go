@@ -1,0 +1,56 @@
+package promx
+
+import (
+	"github.com/baditaflorin/go-common/graph"
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+// GraphCollectors exports the Fleet Graph sender's own counters, read from
+// graph.Stats() at scrape time.
+//
+// Metrics exposed (all counters, labelled service):
+//
+//	fleet_graph_events_recorded_total
+//	fleet_graph_events_dropped_total    ring overflow, oldest event evicted
+//	fleet_graph_batches_sent_total
+//	fleet_graph_batches_failed_total    every non-delivered batch (includes rejected)
+//	fleet_graph_batches_rejected_total  batches the collector refused for their
+//	                                    content (403, 400, 413, 415, 422) and
+//	                                    that were dropped, so events were lost
+//
+// A service whose telemetry silently stops arriving shows up here as
+// batches_failed/batches_rejected rising while batches_sent stays flat.
+type GraphCollectors struct {
+	service string
+}
+
+// NewGraphCollectors registers the graph counters on reg. Registration is
+// best-effort: a name already registered (a service with its own fleet_graph_*
+// metric) is skipped rather than failing start-up.
+func NewGraphCollectors(reg prometheus.Registerer, serviceID string) *GraphCollectors {
+	if serviceID == "" {
+		serviceID = "_unknown"
+	}
+	c := &GraphCollectors{service: serviceID}
+	if reg == nil {
+		return c
+	}
+	for _, m := range []struct {
+		name, help string
+		read       func(graph.Counters) int64
+	}{
+		{"fleet_graph_events_recorded_total", "Fleet Graph events recorded into the send ring.", func(s graph.Counters) int64 { return s.EventsRecorded }},
+		{"fleet_graph_events_dropped_total", "Fleet Graph events evicted from the full send ring before being sent.", func(s graph.Counters) int64 { return s.EventsDropped }},
+		{"fleet_graph_batches_sent_total", "Fleet Graph batches the collector accepted.", func(s graph.Counters) int64 { return s.BatchesSent }},
+		{"fleet_graph_batches_failed_total", "Fleet Graph batches that were not delivered (includes rejected batches).", func(s graph.Counters) int64 { return s.BatchesFailed }},
+		{"fleet_graph_batches_rejected_total", "Fleet Graph batches the collector refused for their content and that were dropped, so their events are lost.", func(s graph.Counters) int64 { return s.BatchesRejected }},
+	} {
+		read := m.read
+		_ = reg.Register(prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Name:        m.name,
+			Help:        m.help,
+			ConstLabels: prometheus.Labels{"service": serviceID},
+		}, func() float64 { return float64(read(graph.Stats())) }))
+	}
+	return c
+}

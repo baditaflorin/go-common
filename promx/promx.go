@@ -58,6 +58,7 @@ var (
 	autoBackoffCoord *BackoffCoordCollectors
 	autoWebshare     *WebshareDirectCollectors
 	autoCgroup       *CgroupCollectors
+	autoGraph        *GraphCollectors
 	autoBoundReg     *prometheus.Registry // the registry the singletons are bound to
 )
 

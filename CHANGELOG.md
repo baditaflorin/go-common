@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.102.56] - 2026-10-16
+
+### Fixed
+
+- `graph`: a service that made outbound calls (secrets lookups, a poller) before `graph.Init` / `server.New` got HTTP 403 on every Graph batch and
+  never delivered an event, until restart, and again after the restart. Two causes, both fixed:
+  - Events recorded while the identity was still unknown carried caller `unknown`, and the collector rejects the whole batch when one event does
+    not belong to the authenticated writer. Now `GRAPH_SERVICE_ID` is resolved when the package bootstraps (before `Init`); without it, such
+    events are held in the ring with no owner, the sender ships nothing until the identity is known, and the held events are stamped with it
+    when they are sent (the service's own side only: caller of an outbound event, target of an inbound one). `graph.ServiceID()` returns `""`
+    instead of `"unknown"` before the identity is known, and `graph.Enabled()` is true before `Init` when writer config is complete (an invalid
+    `GRAPH_SERVICE_ID` still fails closed).
+  - The sender kept a failed batch in `pending` and resent that exact batch on every flush, so one rejected batch blocked all later ones. A batch
+    the collector refuses for its content (403, 400, 413, 415, 422) is now dropped and counted in `Counters.BatchesRejected`
+    (`fleet_graph_batches_rejected_total`), and the next batch goes out on the next tick. 403 still starts the 60 s cooldown. 401 (expired key),
+    408, 429, 5xx and transport errors keep the batch for a later flush, as before.
+
+### Added
+
+- `graph.Counters.BatchesRejected` (a subset of `BatchesFailed`) and promx collectors for the Graph sender counters, registered by `promx.AutoWire`:
+  `fleet_graph_events_recorded_total`, `fleet_graph_events_dropped_total`, `fleet_graph_batches_sent_total`, `fleet_graph_batches_failed_total`,
+  `fleet_graph_batches_rejected_total` (label `service`). A name a service already registers itself is skipped, not a start-up error.
+
 ## [0.102.55] - 2026-10-16
 
 ### Added
