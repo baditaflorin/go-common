@@ -25,6 +25,9 @@
 // Environment
 //
 //	APIKEY_SERVICE_URL          base URL (default: http://localhost:18021)
+//	APIKEY_SERVICE_URLS         optional ordered list of keystore nodes, own host
+//	                            first; replaces APIKEY_SERVICE_URL (endpoints.go)
+//	APIKEY_SERVICE_HEDGE_MS     optional hedge delay for Verify (default 300)
 //	APIKEY_SERVICE_ADMIN_TOKEN  the admin token; required for admin ops
 //
 // Production URL + admin token live in private fleet-state/OPS.md.
