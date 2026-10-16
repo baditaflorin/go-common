@@ -17,9 +17,15 @@ import (
 //	fleet_graph_batches_rejected_total  batches the collector refused for their
 //	                                    content (403, 400, 413, 415, 422) and
 //	                                    that were dropped, so events were lost
+//	fleet_graph_events_dropped_invalid_identity_total
+//	                                    events dropped because GRAPH_SERVICE_ID is
+//	                                    set but invalid (identity fails closed, so
+//	                                    the service emits nothing until fixed)
 //
 // A service whose telemetry silently stops arriving shows up here as
-// batches_failed/batches_rejected rising while batches_sent stays flat.
+// batches_failed/batches_rejected rising while batches_sent stays flat, or, for
+// a malformed GRAPH_SERVICE_ID, as events_dropped_invalid_identity rising while
+// events_recorded stays at zero.
 type GraphCollectors struct {
 	service string
 }
@@ -44,6 +50,7 @@ func NewGraphCollectors(reg prometheus.Registerer, serviceID string) *GraphColle
 		{"fleet_graph_batches_sent_total", "Fleet Graph batches the collector accepted.", func(s graph.Counters) int64 { return s.BatchesSent }},
 		{"fleet_graph_batches_failed_total", "Fleet Graph batches that were not delivered (includes rejected batches).", func(s graph.Counters) int64 { return s.BatchesFailed }},
 		{"fleet_graph_batches_rejected_total", "Fleet Graph batches the collector refused for their content and that were dropped, so their events are lost.", func(s graph.Counters) int64 { return s.BatchesRejected }},
+		{"fleet_graph_events_dropped_invalid_identity_total", "Fleet Graph events dropped because GRAPH_SERVICE_ID is set but is not a valid service ID, so Graph emission is off for the process.", func(s graph.Counters) int64 { return s.EventsDroppedInvalidIdentity }},
 	} {
 		read := m.read
 		_ = reg.Register(prometheus.NewCounterFunc(prometheus.CounterOpts{

@@ -52,4 +52,10 @@ type Counters struct {
 	// for the batch's own content (403, 400, 413, 415, 422). Those batches are
 	// dropped, not retried, so a nonzero value means events were lost.
 	BatchesRejected int64 `json:"batches_rejected"`
+	// EventsDroppedInvalidIdentity counts events that would have been recorded
+	// (Graph emission is configured) but were dropped because GRAPH_SERVICE_ID
+	// is set and is not a valid lowercase DNS label, so the identity fails
+	// closed. A nonzero, rising value means the service emits nothing until
+	// the variable is fixed or unset.
+	EventsDroppedInvalidIdentity int64 `json:"events_dropped_invalid_identity"`
 }

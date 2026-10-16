@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"errors"
+	"log"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,10 @@ var (
 	stateMu   sync.RWMutex
 	state     *pkgState
 	stateOnce sync.Once
+
+	// invalidIdentityLogOnce keeps the invalid-GRAPH_SERVICE_ID warning to one
+	// line per process however many times Init runs.
+	invalidIdentityLogOnce sync.Once
 )
 
 type pkgState struct {
@@ -51,6 +56,7 @@ func Init(serviceID, version string) {
 		stateMu.Unlock()
 	})
 	stateMu.Lock()
+	s := state
 	if state != nil {
 		if serviceID != "" || overrideSet {
 			state.serviceID = serviceID
@@ -64,6 +70,27 @@ func Init(serviceID, version string) {
 		}
 	}
 	stateMu.Unlock()
+	if s != nil && serviceID == "" && overrideSet {
+		warnInvalidServiceID(s.cfg)
+	}
+}
+
+// warnInvalidServiceID logs, once per process, that an invalid GRAPH_SERVICE_ID
+// has switched Graph emission off. It runs from Init and from the bootstrap
+// Record triggers before Init, never from Record itself, so the hot path does
+// not log. It stays silent when Graph is not configured to emit anyway, where
+// a bad identity changes nothing. It names the variable only: no key or
+// secret, and not the rejected value either.
+func warnInvalidServiceID(cfg config) {
+	if !cfg.eventEmissionConfigured() {
+		return
+	}
+	invalidIdentityLogOnce.Do(func() {
+		log.Printf("graph: GRAPH_SERVICE_ID is set but is not a valid lowercase DNS label " +
+			"([a-z0-9-], at most 63 characters, no leading or trailing '-'): Fleet Graph event emission is OFF " +
+			"for this process and every event is dropped (counted in fleet_graph_events_dropped_invalid_identity_total); " +
+			"fix or unset GRAPH_SERVICE_ID")
+	})
 }
 
 // ensureInit makes Record safe to call before Init. Until an identity is
@@ -83,7 +110,11 @@ func ensureInit() *pkgState {
 		stateMu.Lock()
 		serviceID, overrideSet := configuredServiceID("")
 		state = bootstrap(serviceID, "", serviceID != "" || overrideSet)
+		cfg := state.cfg
 		stateMu.Unlock()
+		if serviceID == "" && overrideSet {
+			warnInvalidServiceID(cfg)
+		}
 	})
 	stateMu.RLock()
 	defer stateMu.RUnlock()
@@ -119,7 +150,10 @@ func Record(e Event) {
 	serviceID, identified := s.serviceID, s.identified
 	stateMu.RUnlock()
 	if serviceID == "" && identified {
-		return // invalid GRAPH_SERVICE_ID: fail closed
+		// Invalid GRAPH_SERVICE_ID: fail closed, but visibly. One atomic add,
+		// no logging here (see warnInvalidServiceID).
+		atomic.AddInt64(&s.counters.EventsDroppedInvalidIdentity, 1)
+		return
 	}
 	// Sampling: roll once per event. EventsSampled counts the *kept*
 	// after-sampling events (so it equals EventsRecorded at rate 1.0).
@@ -178,10 +212,32 @@ func ServiceID() string {
 // in hot paths that want to skip Event allocation.
 func Enabled() bool {
 	s := ensureInit()
+	return !s.identityInvalid() && s.cfg.eventEmissionEnabled()
+}
+
+// identityInvalid reports the fail-closed state: GRAPH_SERVICE_ID is set but
+// is not a valid label, so no event may be attributed to any service.
+func (s *pkgState) identityInvalid() bool {
 	stateMu.RLock()
-	serviceID, identified := s.serviceID, s.identified
-	stateMu.RUnlock()
-	return (serviceID != "" || !identified) && s.cfg.eventEmissionEnabled()
+	defer stateMu.RUnlock()
+	return s.serviceID == "" && s.identified
+}
+
+// observing is the per-call check of the instrumentation chokepoints
+// (RoundTripper, Middleware). It answers like Enabled and additionally counts
+// the call as a dropped event when the only thing stopping emission is an
+// invalid GRAPH_SERVICE_ID: those chokepoints return before Record, so
+// without this the counter would stay at zero for the services it exists for.
+// Enabled itself stays a side-effect-free query.
+func observing() bool {
+	s := ensureInit()
+	if s.identityInvalid() {
+		if s.cfg.eventEmissionConfigured() {
+			atomic.AddInt64(&s.counters.EventsDroppedInvalidIdentity, 1)
+		}
+		return false
+	}
+	return s.cfg.eventEmissionEnabled()
 }
 
 // Shutdown stops the background sender and makes a final best-effort flush.

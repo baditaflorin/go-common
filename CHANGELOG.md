@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.102.57] - 2026-10-16
+
+### Added
+
+- `graph`: a fail-closed `GRAPH_SERVICE_ID` is now observable. When `GRAPH_SERVICE_ID` is set but is not a lowercase DNS label (`[a-z0-9-]`, at
+  most 63 characters, no leading or trailing `-`; a legacy underscored package name such as `go_example_service` fails), the service still emits
+  nothing, as before, but no longer silently:
+  - `graph.Counters.EventsDroppedInvalidIdentity` (JSON `events_dropped_invalid_identity`) counts every event dropped for it, exported by
+    `promx.AutoWire` / `promx.NewGraphCollectors` as `fleet_graph_events_dropped_invalid_identity_total` (label `service`, best-effort
+    registration like the other `fleet_graph_*` collectors). It counts in `Record` and in the `RoundTripper` / `Middleware` chokepoints, which
+    return before `Record` while `Enabled()` is false; `Enabled()` itself stays side-effect free. It only counts while Graph is otherwise configured
+    to emit, so a service with Graph off sees 0.
+  - One log line per process (standard library `log`; `graph` cannot import `server`) when `Init` or the pre-`Init` bootstrap resolves the invalid
+    value: it names `GRAPH_SERVICE_ID` and says Graph emission is off. It never prints a key, a secret or the rejected value, and `Record` still
+    never logs (one atomic add on the hot path).
+
 ## [0.102.56] - 2026-10-16
 
 ### Fixed

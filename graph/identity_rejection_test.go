@@ -272,6 +272,39 @@ func TestInvalidGraphServiceIDBeforeInitFailsClosed(t *testing.T) {
 	}
 }
 
+// The incident path: a service records (or asks Enabled) before Init, so the
+// bootstrap is what resolves the invalid GRAPH_SERVICE_ID. It must still log
+// once and count, and a later Init must not log a second line.
+func TestInvalidGraphServiceIDBeforeInitIsLoggedOnceAndCounted(t *testing.T) {
+	resetState(t)
+	buf := captureLog(t)
+	setGraphEnv(t, "https://fleet-graph.0exec.com")
+	t.Setenv("GRAPH_SERVICE_ID", "not_a_label")
+
+	if Enabled() {
+		t.Fatal("Enabled() = true with an invalid GRAPH_SERVICE_ID before Init")
+	}
+	if got := len(logLines(buf)); got != 1 {
+		t.Fatalf("got %d log lines from the bootstrap, want 1:\n%s", got, buf.String())
+	}
+	if got := Stats().EventsDroppedInvalidIdentity; got != 0 {
+		t.Fatalf("Enabled() counted %d drops, want 0 (it is a query)", got)
+	}
+	Record(Event{Direction: "out", Target: "example.com", Method: http.MethodGet, Status: 200})
+	Record(Event{Direction: "in", Caller: "x", Method: http.MethodGet, Status: 200})
+	Init("go_domain_example", "1.0.0")
+	defer Shutdown()
+	if got := Stats().EventsDroppedInvalidIdentity; got != 2 {
+		t.Fatalf("EventsDroppedInvalidIdentity = %d, want 2", got)
+	}
+	if got := Stats().EventsRecorded; got != 0 {
+		t.Fatalf("recorded %d events with an invalid identity, want none", got)
+	}
+	if got := len(logLines(buf)); got != 1 {
+		t.Fatalf("got %d log lines after Init, want still 1:\n%s", got, buf.String())
+	}
+}
+
 func TestEnabledStaysOffBeforeInitWithoutWriterConfig(t *testing.T) {
 	resetState(t)
 	t.Setenv("GRAPH_ENABLED", "")

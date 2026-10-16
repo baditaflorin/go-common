@@ -305,15 +305,19 @@ type atomicCounters struct {
 	// BatchesRejected counts batches the collector refused for their content
 	// and that were dropped (a subset of BatchesFailed).
 	BatchesRejected int64
+	// EventsDroppedInvalidIdentity counts events dropped because an invalid
+	// GRAPH_SERVICE_ID makes the identity fail closed.
+	EventsDroppedInvalidIdentity int64
 }
 
 func (c *atomicCounters) snapshot() Counters {
 	return Counters{
-		EventsRecorded:  atomic.LoadInt64(&c.EventsRecorded),
-		EventsDropped:   atomic.LoadInt64(&c.EventsDropped),
-		EventsSampled:   atomic.LoadInt64(&c.EventsSampled),
-		BatchesSent:     atomic.LoadInt64(&c.BatchesSent),
-		BatchesFailed:   atomic.LoadInt64(&c.BatchesFailed),
-		BatchesRejected: atomic.LoadInt64(&c.BatchesRejected),
+		EventsRecorded:               atomic.LoadInt64(&c.EventsRecorded),
+		EventsDropped:                atomic.LoadInt64(&c.EventsDropped),
+		EventsSampled:                atomic.LoadInt64(&c.EventsSampled),
+		BatchesSent:                  atomic.LoadInt64(&c.BatchesSent),
+		BatchesFailed:                atomic.LoadInt64(&c.BatchesFailed),
+		BatchesRejected:              atomic.LoadInt64(&c.BatchesRejected),
+		EventsDroppedInvalidIdentity: atomic.LoadInt64(&c.EventsDroppedInvalidIdentity),
 	}
 }
