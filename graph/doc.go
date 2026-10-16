@@ -84,6 +84,11 @@
 //	                       Docker hostnames; it changes telemetry only.
 //	GRAPH_TRUSTED_CALLER_IPS — optional comma-separated literal IP allowlist
 //	                            for custom gateways stamping X-Auth-User.
+//	GRAPH_USE_EGRESS_PROXY — default "false": batches and lookups connect to
+//	                       the collector directly and ignore HTTP(S)_PROXY. Set
+//	                       "true" on a host with no direct route out to send them
+//	                       through the configured egress proxy (NO_PROXY is
+//	                       ignored for the collector in that mode).
 //	GRAPH_BUFFER_SIZE    — ring capacity (default 10000 events).
 //	GRAPH_FLUSH_INTERVAL — flush cadence in seconds (default 10).
 //	GRAPH_FLUSH_BATCH    — max events per flush (default 500).
