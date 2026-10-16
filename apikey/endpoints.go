@@ -30,6 +30,13 @@ const (
 	// also asks the next one.
 	DefaultHedgeDelay = 300 * time.Millisecond
 
+	// HedgeHeader is set to "1" on a verify sent while an earlier attempt for
+	// the same check is still in flight. The keystore (go_apikey_service >=
+	// 0.7.5) answers such a request for a use-limited key with 409, which is
+	// not definitive here, instead of spending a use the first attempt may
+	// spend too. A failover after an attempt failed is sent without it.
+	HedgeHeader = "X-Keystore-Hedge"
+
 	breakerThreshold = 3                // consecutive transport failures that open an endpoint's breaker
 	breakerCooldown  = 30 * time.Second // how long an open endpoint is tried only after the healthy ones
 )
@@ -109,7 +116,7 @@ func (c *Client) verifyAcross(ctx context.Context, key string) (*VerifyResult, e
 
 	if len(eps) == 1 {
 		ev.Attempts = 1
-		out := c.verifyOnce(ctx, eps[0], key)
+		out := c.verifyOnce(ctx, eps[0], key, false)
 		ev.Endpoint, ev.Result = out.endpoint, resultLabel(out.err)
 		return out.result, out.err
 	}
@@ -120,10 +127,14 @@ func (c *Client) verifyAcross(ctx context.Context, key string) (*VerifyResult, e
 	next, inflight := 0, 0
 	launch := func() {
 		ep := eps[next]
+		// An attempt sent while another is still in flight is a hedge: both
+		// may reach a node that would spend a use of a limited key, so the
+		// hedge says so and the keystore answers it without claiming.
+		hedge := inflight > 0
 		next++
 		inflight++
 		ev.Attempts++
-		go func() { results <- c.verifyOnce(ctx, ep, key) }()
+		go func() { results <- c.verifyOnce(ctx, ep, key, hedge) }()
 	}
 	timer := time.NewTimer(c.hedgeDelay())
 	defer timer.Stop()

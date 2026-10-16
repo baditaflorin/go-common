@@ -45,7 +45,7 @@ func (c *Client) Verify(ctx context.Context, key string) (*VerifyResult, error) 
 }
 
 // verifyOnce asks one endpoint and records the outcome on its breaker.
-func (c *Client) verifyOnce(ctx context.Context, base, key string) verifyOutcome {
+func (c *Client) verifyOnce(ctx context.Context, base, key string, hedge bool) verifyOutcome {
 	out := verifyOutcome{endpoint: base}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/verify", nil)
 	if err != nil {
@@ -54,6 +54,9 @@ func (c *Client) verifyOnce(ctx context.Context, base, key string) verifyOutcome
 	}
 	req.Header.Set(header.VerifyKey, key)
 	req.Header.Set("User-Agent", c.UserAgent)
+	if hedge {
+		req.Header.Set(HedgeHeader, "1")
+	}
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		// A request we cancelled ourselves (another endpoint answered first)

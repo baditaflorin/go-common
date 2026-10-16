@@ -347,3 +347,70 @@ func TestNewReadsTheEndpointList(t *testing.T) {
 		t.Fatalf("a list with no acceptable entry must not replace APIKEY_SERVICE_URL: %+v", c)
 	}
 }
+
+// hedgeAware is a fake keystore node that remembers the hedge header of the
+// requests it saw and, like go_apikey_service >= 0.7.5 for a use-limited key,
+// answers a hedged check with 409.
+func hedgeAware(t *testing.T, user string) (*httptest.Server, *[]string, *sync.Mutex) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get(HedgeHeader))
+		mu.Unlock()
+		if r.Header.Get(HedgeHeader) == "1" {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		w.Header().Set(header.AuthUser, user)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &seen, &mu
+}
+
+func TestVerify_HedgeIsMarkedFailoverIsNot(t *testing.T) {
+	resetBreakers()
+	slow := newNode(t, 200, 700*time.Millisecond, "first")
+	peer, seen, mu := hedgeAware(t, "peer")
+	c := meshClient(slow.srv.URL, peer.URL)
+	res, err := c.Verify(context.Background(), "ak_limited")
+	if err != nil || res.User != "first" {
+		t.Fatalf("a hedge answered 409 must leave the decision to the first node: %+v %v", res, err)
+	}
+	mu.Lock()
+	got := append([]string(nil), *seen...)
+	mu.Unlock()
+	if len(got) != 1 || got[0] != "1" {
+		t.Fatalf("the hedge must carry %s: 1, peer saw %q", HedgeHeader, got)
+	}
+
+	resetBreakers()
+	sick := newNode(t, 503, 0, "")
+	peer2, seen2, mu2 := hedgeAware(t, "peer")
+	c = meshClient(sick.srv.URL, peer2.URL)
+	if res, err := c.Verify(context.Background(), "ak_limited"); err != nil || res.User != "peer" {
+		t.Fatalf("a failover after a 5xx claims normally: %+v %v", res, err)
+	}
+	mu2.Lock()
+	defer mu2.Unlock()
+	if len(*seen2) != 1 || (*seen2)[0] != "" {
+		t.Fatalf("a failover (nothing else in flight) must not be marked as a hedge: %q", *seen2)
+	}
+}
+
+func TestVerify_HedgeConflictDoesNotTripTheBreaker(t *testing.T) {
+	resetBreakers()
+	slow := newNode(t, 200, 400*time.Millisecond, "first")
+	peer, _, _ := hedgeAware(t, "peer")
+	c := meshClient(slow.srv.URL, peer.URL)
+	for i := 0; i < breakerThreshold+1; i++ {
+		if _, err := c.Verify(context.Background(), "ak_limited"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if breakerFor(peer.URL).isOpen(time.Now()) {
+		t.Fatal("409 answers to hedges must not open the node's breaker")
+	}
+}

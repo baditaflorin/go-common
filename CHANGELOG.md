@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.102.58] - 2026-10-16
+
+### Fixed
+
+- `apikey`: a hedged `Verify` can no longer spend a use of a limited key that the first attempt also spends. An attempt sent while another is
+  still in flight now carries `X-Keystore-Hedge: 1` (`apikey.HedgeHeader`); go_apikey_service >= 0.7.5 answers such a check for a use-limited
+  key with 409, which is not definitive here and does not count against the node's breaker, so the first attempt's answer decides. Before, the
+  first node could spend the use but answer last while the second, its forwarded claim refused, answered 401 first: the caller was refused
+  with the use gone. A failover after an attempt failed (nothing else in flight) is sent without the header and claims as before. Older
+  keystores ignore the header.
+
 ## [0.102.57] - 2026-10-16
 
 ### Added
