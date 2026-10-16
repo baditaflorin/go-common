@@ -1,8 +1,10 @@
 package graph
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,10 +29,33 @@ func resetState(t *testing.T) {
 	}
 	state = nil
 	stateOnce = sync.Once{}
+	invalidIdentityLogOnce = sync.Once{}
 	stateMu.Unlock()
 	lookupMu.Lock()
 	lookupTable = map[string]lookupEntry{}
 	lookupMu.Unlock()
+}
+
+// captureLog sends the standard logger's output to the returned buffer for the
+// rest of the test. The graph package logs nothing from goroutines, so the
+// buffer needs no lock.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &buf
+}
+
+func logLines(buf *bytes.Buffer) []string {
+	var lines []string
+	for _, l := range strings.Split(buf.String(), "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines
 }
 
 func TestTemplatisePath(t *testing.T) {
@@ -280,6 +305,148 @@ func TestInvalidGraphServiceIDOverrideFailsClosed(t *testing.T) {
 	Record(Event{Direction: "out", Target: "example.com", Method: http.MethodGet, Status: http.StatusOK})
 	if got := Stats().EventsRecorded; got != 0 {
 		t.Fatalf("recorded %d events with invalid service identity, want none", got)
+	}
+}
+
+func TestInvalidGraphServiceIDIsCountedAndLoggedOnce(t *testing.T) {
+	resetState(t)
+	buf := captureLog(t)
+	t.Setenv("GRAPH_ENABLED", "true")
+	t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
+	t.Setenv("GRAPH_API_KEY", "writer-test-key")
+	t.Setenv("GRAPH_SERVICE_ID", "go_domain_example")
+
+	Init("go_domain_example", "1.0.0")
+	Init("go_domain_example", "1.0.0")
+	defer Shutdown()
+	lines := logLines(buf)
+	if len(lines) != 1 {
+		t.Fatalf("got %d log lines after two Init calls, want exactly 1:\n%s", len(lines), buf.String())
+	}
+	for _, want := range []string{"GRAPH_SERVICE_ID", "OFF", "fleet_graph_events_dropped_invalid_identity_total"} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("log line %q does not mention %q", lines[0], want)
+		}
+	}
+	for _, secret := range []string{"writer-test-key", "go_domain_example"} {
+		if strings.Contains(buf.String(), secret) {
+			t.Errorf("log line leaks %q: %s", secret, buf.String())
+		}
+	}
+
+	for i := 0; i < 100; i++ {
+		Record(Event{Direction: "out", Target: "example.com", Method: http.MethodGet, Status: http.StatusOK})
+	}
+	st := Stats()
+	if st.EventsDroppedInvalidIdentity != 100 {
+		t.Fatalf("EventsDroppedInvalidIdentity = %d, want 100", st.EventsDroppedInvalidIdentity)
+	}
+	if st.EventsRecorded != 0 || st.EventsDropped != 0 {
+		t.Fatalf("recorded=%d ring-dropped=%d, want 0/0: the fail-closed behaviour must not change", st.EventsRecorded, st.EventsDropped)
+	}
+	if got := len(logLines(buf)); got != 1 {
+		t.Fatalf("Record logged: %d log lines after 100 dropped events, want still 1", got)
+	}
+	raw, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"events_dropped_invalid_identity":100`) {
+		t.Fatalf("Stats JSON = %s, want events_dropped_invalid_identity:100", raw)
+	}
+}
+
+// The standard chokepoints return before Record when Enabled() is false, so the
+// counter has to be fed there too or it stays zero for exactly the services it
+// exists for. Traffic must still pass through untouched (fail-open).
+func TestInvalidGraphServiceIDIsCountedAtTheChokepoints(t *testing.T) {
+	resetState(t)
+	captureLog(t)
+	t.Setenv("GRAPH_ENABLED", "true")
+	t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
+	t.Setenv("GRAPH_API_KEY", "writer-test-key")
+	t.Setenv("GRAPH_SERVICE_ID", "not_a_label")
+	Init("go_domain_example", "1.0.0")
+	defer Shutdown()
+
+	var calls int
+	rt := RoundTripper(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: http.StatusTeapot, Body: http.NoBody}, nil
+	}))
+	for i := 0; i < 2; i++ {
+		req, _ := http.NewRequest(http.MethodGet, "http://example.com/x", nil)
+		resp, err := rt.RoundTrip(req)
+		if err != nil || resp.StatusCode != http.StatusTeapot {
+			t.Fatalf("outbound call changed: resp=%v err=%v", resp, err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("downstream transport called %d times, want 2", calls)
+	}
+
+	h := Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/widgets/42", nil))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("inbound status = %d, want 201 passed through", rec.Code)
+	}
+
+	if got := Stats().EventsDroppedInvalidIdentity; got != 3 {
+		t.Fatalf("EventsDroppedInvalidIdentity = %d, want 3 (2 outbound + 1 inbound)", got)
+	}
+	// Enabled() is a query: asking must not move the counter.
+	for i := 0; i < 5; i++ {
+		if Enabled() {
+			t.Fatal("Enabled() = true with an invalid identity")
+		}
+	}
+	if got := Stats().EventsDroppedInvalidIdentity; got != 3 {
+		t.Fatalf("EventsDroppedInvalidIdentity = %d after Enabled() calls, want still 3", got)
+	}
+}
+
+// With Graph not configured to emit, a bad GRAPH_SERVICE_ID changes nothing, so
+// there is nothing to warn about and nothing to count. A valid ID neither.
+func TestInvalidIdentitySignalsStayQuietWhenNothingWouldEmit(t *testing.T) {
+	cases := map[string]func(t *testing.T){
+		"graph disabled, invalid id": func(t *testing.T) {
+			t.Setenv("GRAPH_ENABLED", "")
+			t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
+			t.Setenv("GRAPH_API_KEY", "writer-test-key")
+			t.Setenv("GRAPH_SERVICE_ID", "not_a_label")
+		},
+		"no writer key, invalid id": func(t *testing.T) {
+			t.Setenv("GRAPH_ENABLED", "true")
+			t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
+			t.Setenv("GRAPH_API_KEY", "")
+			t.Setenv("GRAPH_SERVICE_ID", "not_a_label")
+		},
+		"fully configured, valid id": func(t *testing.T) {
+			t.Setenv("GRAPH_ENABLED", "true")
+			t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
+			t.Setenv("GRAPH_API_KEY", "writer-test-key")
+			t.Setenv("GRAPH_SERVICE_ID", "domain-example")
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			resetState(t)
+			buf := captureLog(t)
+			setup(t)
+			Init("go_domain_example", "1.0.0")
+			defer Shutdown()
+			Record(Event{Direction: "out", Target: "example.com", Method: http.MethodGet, Status: http.StatusOK})
+			_ = observing()
+			if got := Stats().EventsDroppedInvalidIdentity; got != 0 {
+				t.Errorf("EventsDroppedInvalidIdentity = %d, want 0", got)
+			}
+			if buf.Len() != 0 {
+				t.Errorf("unexpected log output: %s", buf.String())
+			}
+		})
 	}
 }
 

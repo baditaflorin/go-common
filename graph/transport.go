@@ -29,7 +29,7 @@ func (t *observingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	if isCollectorURL(req) {
 		return t.next.RoundTrip(req)
 	}
-	if !Enabled() {
+	if !observing() {
 		return t.next.RoundTrip(req)
 	}
 	start := time.Now()

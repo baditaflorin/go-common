@@ -41,6 +41,21 @@
 // those events are never sent, because the collector rejects a whole batch
 // containing an event that does not belong to the authenticated writer.
 //
+// An invalid GRAPH_SERVICE_ID (set, but not a lowercase DNS label: [a-z0-9-],
+// at most 63 characters, no leading or trailing '-', so a legacy name such as
+// "go_example_service" fails) makes the identity fail closed: Graph emits
+// nothing for the process, and the collector sees no error because nothing is
+// sent. That state is observable without changing it. Every event dropped for
+// it, whether Record was reached or the RoundTripper / Middleware stopped the
+// call first, is counted in Counters.EventsDroppedInvalidIdentity
+// (fleet_graph_events_dropped_invalid_identity_total), but only while Graph is
+// otherwise configured to emit (GRAPH_ENABLED, a valid collector URL, a writer
+// key). The first time Init or the pre-Init bootstrap resolves the invalid value
+// the package logs one line per process through the standard library logger
+// (graph cannot import the server package, which imports it), naming the
+// variable and saying emission is off; it never logs a key, secret or the
+// rejected value, and Record itself never logs: it does one atomic add.
+//
 // A batch the collector refuses for its content (403, 400, 413, 415, 422) is
 // dropped and counted in Counters.BatchesRejected instead of being retried
 // forever; 401, 408, 429 and 5xx keep the batch for a later flush.
@@ -50,7 +65,9 @@
 //	GRAPH_ENABLED        — default "false". Event emission is opt-in.
 //	GRAPH_SERVICE_ID     — optional canonical registry ID supplied by the
 //	                       fleet-rendered Compose overlay. It overrides a
-//	                       legacy Go package name for writer identity.
+//	                       legacy Go package name for writer identity. If set
+//	                       it must be a lowercase DNS label; an invalid value
+//	                       turns emission off (logged once, counted).
 //	GRAPH_COLLECTOR_URL  — exactly "https://fleet-graph.0exec.com" for a
 //	                       remote collector. HTTP/HTTPS loopback endpoints
 //	                       are allowed only for local development and tests.

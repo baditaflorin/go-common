@@ -51,7 +51,7 @@ func Middleware(next http.Handler) http.Handler {
 			attribute.String("fleet.caller.id", caller),
 			attribute.Bool("fleet.caller.verified", caller != "unknown"),
 		)
-		if !Enabled() {
+		if !observing() {
 			next.ServeHTTP(w, r)
 			return
 		}
