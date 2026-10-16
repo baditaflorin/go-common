@@ -60,7 +60,50 @@ func newTestSender(cfg config, batchSize int) (*sender, *ring, *atomicCounters) 
 	return newSender(cfg, "go-test-sender", "test", r, counters), r, counters
 }
 
+func setProxyEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("HTTPS_PROXY", "http://graph-proxy.example.test:8080")
+	t.Setenv("https_proxy", "")
+	t.Setenv("HTTP_PROXY", "http://graph-proxy.example.test:8080")
+	t.Setenv("http_proxy", "")
+	t.Setenv("ALL_PROXY", "http://graph-proxy.example.test:8080")
+	t.Setenv("all_proxy", "")
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+}
+
+// The collector is reached directly by default, whatever proxy variables the
+// environment carries; this is the path batches and lookups both use.
+func TestGraphHTTPClientIsDirectByDefault(t *testing.T) {
+	for _, value := range []string{"", "false", "0", "off", "garbage"} {
+		t.Run("GRAPH_USE_EGRESS_PROXY="+value, func(t *testing.T) {
+			setProxyEnv(t)
+			t.Setenv("GRAPH_USE_EGRESS_PROXY", value)
+			t.Setenv("NO_PROXY", "")
+
+			client := newGraphHTTPClient(time.Second)
+			transport, ok := client.Transport.(*http.Transport)
+			if !ok {
+				t.Fatalf("transport type = %T, want *http.Transport", client.Transport)
+			}
+			if transport.Proxy != nil {
+				for _, host := range []string{"fleet-graph.0exec.com", "127.0.0.1:8090"} {
+					req := &http.Request{URL: &url.URL{Scheme: "https", Host: host}}
+					if proxy, err := transport.Proxy(req); err != nil || proxy != nil {
+						t.Fatalf("proxy for %s = %v, %v; want a direct connection", host, proxy, err)
+					}
+				}
+				t.Fatal("transport.Proxy set by default; want nil (direct)")
+			}
+			if client.CheckRedirect == nil {
+				t.Fatal("redirects must stay disabled so the writer key stays bound to the collector")
+			}
+		})
+	}
+}
+
 func TestGraphHTTPClientUsesConfiguredProxyDespiteNoProxy(t *testing.T) {
+	t.Setenv("GRAPH_USE_EGRESS_PROXY", "true")
 	t.Setenv("HTTPS_PROXY", "http://graph-proxy.example.test:8080")
 	t.Setenv("https_proxy", "")
 	t.Setenv("HTTP_PROXY", "")

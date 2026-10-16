@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.102.59] - 2026-10-17
+
+### Changed
+
+- **Behaviour change:** `graph` connects to the collector directly (batches and lookups) instead of through the egress proxy, and ignores
+  `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` for that traffic. This reverses the routing added in 0.102.46 (#149). Measured on pool replicas the
+  proxy hop cost 18-27% failed batches (api-first 294 sent / 66 failed, domain-deployment-fingerprint 1555 / 226, ad-density 1307 / 173; the
+  collector side showed 499 client timeouts and no 401/403), while a direct POST to `fleet-graph.0exec.com` answers in 18-87 ms from all five pool
+  hosts and in about 50 ms from inside a container. It also stops spending egress-proxy bandwidth on roughly 20k telemetry batches a day and lets the
+  collector see the real source host.
+- A host with no direct route to the collector sets `GRAPH_USE_EGRESS_PROXY=true` to get the 0.102.46 behaviour back (the configured proxy is used
+  even when `NO_PROXY` matches `.0exec.com`; loopback development collectors stay direct). Redirects stay disabled either way, so the writer key
+  stays bound to the canonical endpoint. A service only changes behaviour once it is built on this version.
+
 ## [0.102.58] - 2026-10-16
 
 ### Fixed
