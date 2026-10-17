@@ -10,7 +10,7 @@
 //	email              basic email format check
 //	url                basic URL format check (must start with http:// or https://)
 //	oneof=a|b|c        value must equal one of the pipe-separated options
-//	pattern=<regexp>   string must match the regexp (anchored)
+//	pattern=<regexp>   the whole string must match the regexp (it is wrapped in ^(?:...)$)
 //
 // Usage:
 //

@@ -160,3 +160,51 @@ func TestBindInvalidJSON(t *testing.T) {
 		t.Fatal("expected error for invalid JSON")
 	}
 }
+
+// pattern= is documented as anchored: the WHOLE value must match. It was applied
+// with an unanchored match, so "[A-Z]{2}[0-9]{3}" accepted "AA0000" and any string
+// that merely contained a match. Found by FuzzBindBytes.
+func TestPatternMustMatchTheWholeValue(t *testing.T) {
+	t.Parallel()
+	type req struct {
+		Code string `json:"code" validate:"pattern=[A-Z]{2}[0-9]{3}"`
+	}
+	type alt struct {
+		V string `json:"v" validate:"pattern=a|b"`
+	}
+	type ci struct {
+		V string `json:"v" validate:"pattern=(?i)abc"`
+	}
+	type explicit struct {
+		V string `json:"v" validate:"pattern=^[A-Z]{3}$"`
+	}
+	check := func(name string, bind func(string) bool, accept, reject []string) {
+		t.Helper()
+		for _, v := range accept {
+			if !bind(v) {
+				t.Errorf("%s: %q was rejected, want accepted", name, v)
+			}
+		}
+		for _, v := range reject {
+			if bind(v) {
+				t.Errorf("%s: %q was accepted, want rejected", name, v)
+			}
+		}
+	}
+	check("simple", func(v string) bool {
+		var r req
+		return validate.BindBytes([]byte(`{"code":"`+v+`"}`), &r) == nil
+	}, []string{"AA123", "ZZ999"}, []string{"AA1234", "AA0000", "xAA123", "AA123x", "<script>AA123", "AA123\\n", "aa123"})
+	check("alternation does not match a prefix", func(v string) bool {
+		var r alt
+		return validate.BindBytes([]byte(`{"v":"`+v+`"}`), &r) == nil
+	}, []string{"a", "b"}, []string{"ab", "abc", "xa", "c"})
+	check("inline flags stay scoped", func(v string) bool {
+		var r ci
+		return validate.BindBytes([]byte(`{"v":"`+v+`"}`), &r) == nil
+	}, []string{"abc", "ABC", "aBc"}, []string{"abcd", "xABC"})
+	check("explicit anchors still work", func(v string) bool {
+		var r explicit
+		return validate.BindBytes([]byte(`{"v":"`+v+`"}`), &r) == nil
+	}, []string{"ABC"}, []string{"ABCD", "AB", "abc"})
+}
