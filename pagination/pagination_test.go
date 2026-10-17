@@ -8,6 +8,7 @@ import (
 )
 
 func TestParseParamsDefaults(t *testing.T) {
+	t.Parallel()
 	r := httptest.NewRequest("GET", "/items", nil)
 	p := pagination.ParseParams(r)
 	if p.Limit != pagination.DefaultLimit {
@@ -22,6 +23,7 @@ func TestParseParamsDefaults(t *testing.T) {
 }
 
 func TestParseParamsLimit(t *testing.T) {
+	t.Parallel()
 	r := httptest.NewRequest("GET", "/items?limit=50", nil)
 	p := pagination.ParseParams(r)
 	if p.Limit != 50 {
@@ -30,6 +32,7 @@ func TestParseParamsLimit(t *testing.T) {
 }
 
 func TestParseParamsLimitCapped(t *testing.T) {
+	t.Parallel()
 	r := httptest.NewRequest("GET", "/items?limit=9999", nil)
 	p := pagination.ParseParams(r)
 	if p.Limit != pagination.MaxLimit {
@@ -38,6 +41,7 @@ func TestParseParamsLimitCapped(t *testing.T) {
 }
 
 func TestParseParamsCursor(t *testing.T) {
+	t.Parallel()
 	cursor := pagination.EncodeCursor("uuid-123")
 	r := httptest.NewRequest("GET", "/items?cursor="+cursor, nil)
 	p := pagination.ParseParams(r)
@@ -50,6 +54,7 @@ func TestParseParamsCursor(t *testing.T) {
 }
 
 func TestParseParamsOffset(t *testing.T) {
+	t.Parallel()
 	r := httptest.NewRequest("GET", "/items?offset=40", nil)
 	p := pagination.ParseParams(r)
 	if p.Offset != 40 {
@@ -58,6 +63,7 @@ func TestParseParamsOffset(t *testing.T) {
 }
 
 func TestCursorRoundTrip(t *testing.T) {
+	t.Parallel()
 	original := "user:abc-123:ts:1716000000"
 	encoded := pagination.EncodeCursor(original)
 	decoded, ok := pagination.DecodeCursor(encoded)
@@ -70,6 +76,7 @@ func TestCursorRoundTrip(t *testing.T) {
 }
 
 func TestDecodeCursorInvalid(t *testing.T) {
+	t.Parallel()
 	_, ok := pagination.DecodeCursor("not!base64!!")
 	if ok {
 		t.Fatal("expected false for invalid cursor")
@@ -77,6 +84,7 @@ func TestDecodeCursorInvalid(t *testing.T) {
 }
 
 func TestDecodeCursorEmpty(t *testing.T) {
+	t.Parallel()
 	_, ok := pagination.DecodeCursor("")
 	if ok {
 		t.Fatal("expected false for empty cursor")
@@ -84,6 +92,7 @@ func TestDecodeCursorEmpty(t *testing.T) {
 }
 
 func TestParseParamsWithDefaults(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		url       string
 		defLimit  int
@@ -108,6 +117,7 @@ func TestParseParamsWithDefaults(t *testing.T) {
 }
 
 func TestNewPage(t *testing.T) {
+	t.Parallel()
 	items := []string{"a", "b", "c"}
 	next := pagination.EncodeCursor("d")
 	page := pagination.NewPage(items, next, 100)
@@ -123,6 +133,7 @@ func TestNewPage(t *testing.T) {
 }
 
 func TestNewPageLastPage(t *testing.T) {
+	t.Parallel()
 	page := pagination.NewPage([]int{1, 2}, "", 2)
 	if page.HasMore() {
 		t.Fatal("expected HasMore=false on last page")
@@ -130,6 +141,7 @@ func TestNewPageLastPage(t *testing.T) {
 }
 
 func TestEmpty(t *testing.T) {
+	t.Parallel()
 	page := pagination.Empty[string](20)
 	if len(page.Items) != 0 {
 		t.Fatal("Empty should have no items")

@@ -2,7 +2,6 @@ package config
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"strings"
 )
@@ -42,25 +41,51 @@ func Load(appName, defaultVersion string) *Config {
 
 // readServiceMetadata attempts to parse 'service.yaml' in the current directory
 // to extract 'version' and 'name'. It uses a simple scanner to avoid external YAML deps.
+//
+// Only top-level keys count: an indented "name:" belongs to a nested block such
+// as owner:, and must not replace the service's own name. A missing file is
+// normal (tests, `go run` outside the service directory) and is silent.
 func readServiceMetadata() (version, name string) {
 	file, err := os.Open("service.yaml")
 	if err != nil {
-		fmt.Printf("DEBUG: Failed to open service.yaml: %v\n", err)
 		return "", ""
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file) // Changed 'f' to 'file'
+	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "version:") {
-			version = strings.TrimSpace(strings.TrimPrefix(line, "version:"))
-			version = strings.Trim(version, `"'`) // Remove quotes
+		line := scanner.Text()
+		if line == "" || line[0] == ' ' || line[0] == '\t' {
+			continue
 		}
-		if strings.HasPrefix(line, "name:") {
-			name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
-			name = strings.Trim(name, `"'`)
+		if rest, ok := strings.CutPrefix(line, "version:"); ok {
+			version = yamlScalar(rest)
+		}
+		if rest, ok := strings.CutPrefix(line, "name:"); ok {
+			name = yamlScalar(rest)
 		}
 	}
 	return version, name
+}
+
+// yamlScalar returns the value of a simple "key: value" line: unquoted, with any
+// trailing comment removed.
+func yamlScalar(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if q := s[0]; q == '"' || q == '\'' {
+		if end := strings.IndexByte(s[1:], q); end >= 0 {
+			return s[1 : 1+end]
+		}
+		return strings.Trim(s, `"'`) // unterminated quote: keep the old behaviour
+	}
+	if strings.HasPrefix(s, "#") {
+		return ""
+	}
+	if i := strings.Index(s, " #"); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
 }

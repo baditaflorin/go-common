@@ -6,6 +6,7 @@ import (
 )
 
 func TestIsWordRune(t *testing.T) {
+	t.Parallel()
 	cases := map[rune]bool{
 		'a': true, 'Z': true, '5': true,
 		'ē': true, // Latin extended (Latvian)
@@ -24,6 +25,7 @@ func TestIsWordRune(t *testing.T) {
 }
 
 func TestPrevRune(t *testing.T) {
+	t.Parallel()
 	s := "café"
 	// "café" is c-a-f-é; é starts at byte offset 3 (2-byte encoding).
 	if r := PrevRune(s, 3); r != 'f' {
@@ -35,6 +37,7 @@ func TestPrevRune(t *testing.T) {
 }
 
 func TestIsGluedScript(t *testing.T) {
+	t.Parallel()
 	cases := map[string]bool{
 		"株式会社": true,
 		"주식회사": true,
@@ -58,12 +61,14 @@ func TestIsGluedScript(t *testing.T) {
 // canonical real-world case that motivated this package, so it's pinned
 // here as documentation-by-test.
 func TestContainsToken_LatvianBusinessHoursFalsePositive(t *testing.T) {
+	t.Parallel()
 	if ContainsToken("S.-Sv. Slēgts", "SL") {
 		t.Errorf(`ContainsToken("S.-Sv. Slēgts", "SL") = true, want false (real Latvian business-hours text, not a company suffix)`)
 	}
 }
 
 func TestContainsToken_RealSuffixEvidence(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		text, token string
 		want        bool
@@ -89,6 +94,7 @@ func TestContainsToken_RealSuffixEvidence(t *testing.T) {
 // consumption style (splicing TrailingBoundary into a hand-built pattern)
 // closes the same class of bug a bare `\b` misses.
 func TestTrailingBoundary_FixesLatvianFalsePositive(t *testing.T) {
+	t.Parallel()
 	broken := regexp.MustCompile(`(?i)\b[\p{L}][\p{L}0-9.,'-]*\s+SL\b`)
 	fixed := regexp.MustCompile(`(?i)\b[\p{L}][\p{L}0-9.,'-]*\s+SL` + TrailingBoundary)
 	if !broken.MatchString("S.-Sv. Slēgts") {
@@ -106,6 +112,7 @@ func TestTrailingBoundary_FixesLatvianFalsePositive(t *testing.T) {
 // consumption style closes the go_update_frequency Turkish month-name
 // truncation bug.
 func TestLeadingBoundary_FixesTurkishTruncation(t *testing.T) {
+	t.Parallel()
 	broken := regexp.MustCompile(`(?i)\b([\p{L}]{3,})\s+(\d{1,2}),\s+((?:19|20)\d{2})`)
 	fixed := regexp.MustCompile(`(?i)` + LeadingBoundary + `([\p{L}]{3,})\s+(\d{1,2}),\s+((?:19|20)\d{2})`)
 

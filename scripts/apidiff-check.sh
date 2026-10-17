@@ -7,14 +7,9 @@
 #
 #   scripts/apidiff-check.sh [base-ref]
 #
-# The base is the first of:
-#   1. the argument, or $BASE_REF
-#   2. the merge base of HEAD and origin/$CI_COMMIT_TARGET_BRANCH (Woodpecker
-#                                        pull_request events, see pr_mode below)
-#   3. HEAD^                             (Woodpecker push to the default branch;
-#                                         PRs are squash-merged, so HEAD^ is the
-#                                         previous main)
-#   4. the newest v* tag
+# The base is chosen by scripts/lib/base-ref.sh: the argument or $BASE_REF, else
+# in a pull request the merge base with the target branch, else HEAD^ in CI, else
+# the newest v* tag.
 #
 # apidiff sees API only. It cannot see a behaviour change (a changed default, a
 # removed env var, a different error), so a green run is not a promise of
@@ -30,65 +25,11 @@ source scripts/tool-versions.sh
 
 module="$(go list -m)"
 
-resolve_base() {
-  if [ -n "${1:-}" ]; then echo "$1"; return; fi
-  if [ -n "${BASE_REF:-}" ]; then echo "$BASE_REF"; return; fi
-  if [ -n "${CI_COMMIT_TARGET_BRANCH:-}" ] && [ "${CI_PIPELINE_EVENT:-}" = "pull_request" ]; then
-    echo "origin/${CI_COMMIT_TARGET_BRANCH}"; return
-  fi
-  if [ -n "${CI:-}" ]; then
-    # A shallow CI clone has no HEAD^; deepen it by one commit before giving up.
-    if ! git rev-parse -q --verify HEAD^ >/dev/null 2>&1 && [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-      git fetch -q --no-tags --deepen=1 origin 2>/dev/null || true
-    fi
-    if git rev-parse -q --verify HEAD^ >/dev/null 2>&1; then
-      echo "HEAD^"; return
-    fi
-  fi
-  git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true
-}
-
-# In a pull request the target branch may have moved on since the PR branched.
-# Comparing with its tip would report APIs added to main in the meantime as
-# "removed" by the PR, so compare with the merge base instead. An explicit base
-# (argument or BASE_REF) is used exactly as given.
-pr_mode=0
-if [ -z "${1:-}" ] && [ -z "${BASE_REF:-}" ] && [ -n "${CI_COMMIT_TARGET_BRANCH:-}" ] &&
-  [ "${CI_PIPELINE_EVENT:-}" = "pull_request" ]; then
-  pr_mode=1
-fi
-
-base="$(resolve_base "${1:-}")"
-if [ -z "$base" ]; then
-  echo "apidiff-check: no base ref (pass one, set BASE_REF, or fetch tags)" >&2
+# shellcheck source=scripts/lib/base-ref.sh
+source scripts/lib/base-ref.sh
+if ! base="$(resolve_base_commit "${1:-}")"; then
+  echo "apidiff-check: could not determine the base to compare with" >&2
   exit 1
-fi
-
-if ! git rev-parse -q --verify "${base}^{commit}" >/dev/null 2>&1; then
-  # A shallow CI clone may lack the base. Fetch it before giving up; a gate that
-  # silently skips would be worse than a failed run that can be retried.
-  branch="${base#origin/}"
-  git fetch -q --no-tags origin "$branch" 2>/dev/null || true
-  if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-    git fetch -q --no-tags --unshallow origin 2>/dev/null || true
-  fi
-  if ! git rev-parse -q --verify "${base}^{commit}" >/dev/null 2>&1; then
-    echo "apidiff-check: cannot resolve base ref '${base}'" >&2
-    exit 1
-  fi
-fi
-
-if [ "$pr_mode" = 1 ]; then
-  merge_base="$(git merge-base HEAD "$base" 2>/dev/null || true)"
-  if [ -z "$merge_base" ] && [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-    git fetch -q --no-tags --unshallow origin 2>/dev/null || true
-    merge_base="$(git merge-base HEAD "$base" 2>/dev/null || true)"
-  fi
-  if [ -z "$merge_base" ]; then
-    echo "apidiff-check: no merge base between HEAD and ${base}" >&2
-    exit 1
-  fi
-  base="$merge_base"
 fi
 
 if ! command -v apidiff >/dev/null 2>&1; then
@@ -107,7 +48,7 @@ if [ ! -f "$tmp/base/go.mod" ]; then
   exit 0
 fi
 
-echo "apidiff-check: ${module} HEAD vs ${base} ($(git rev-parse --short "$base"))"
+echo "apidiff-check: ${module} HEAD vs $(git rev-parse --short "$base")"
 # apidiff chatters on stderr ("Ignoring internal package ..."); keep stderr out of
 # the report, and show it only if apidiff really failed.
 if ! (cd "$tmp/base" && apidiff -m -w "$tmp/base.export" "$module") 2>"$tmp/apidiff.err"; then
