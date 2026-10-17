@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func pids(procs []Proc) []int {
@@ -213,18 +214,29 @@ func TestRealProcSmoke(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
-	procs, err := Tree(os.Getpid())
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A child that has just been started can be read between fork and exec, when
+	// /proc still shows this test binary's executable and arguments for it (about
+	// 3% of runs on a loaded host). Read again until the exec has landed.
 	var self, child *Proc
-	for i := range procs {
-		switch procs[i].PID {
-		case os.Getpid():
-			self = &procs[i]
-		case cmd.Process.Pid:
-			child = &procs[i]
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		procs, err := Tree(os.Getpid())
+		if err != nil {
+			t.Fatal(err)
 		}
+		self, child = nil, nil
+		for i := range procs {
+			switch procs[i].PID {
+			case os.Getpid():
+				self = &procs[i]
+			case cmd.Process.Pid:
+				child = &procs[i]
+			}
+		}
+		if (child != nil && filepath.Base(child.Exe) == "sleep") || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if self == nil || self.RSSBytes == 0 || self.Type != TypeBrowser || self.StartTicks == 0 {
 		t.Fatalf("self = %+v", self)
