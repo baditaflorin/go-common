@@ -34,12 +34,42 @@ if [ "${#targets[@]}" -eq 0 ]; then
 fi
 
 echo "fuzzing ${#targets[@]} targets, ${fuzztime} each, -parallel ${parallel}"
+
+# run_target fuzzes one target. Go's fuzzing engine sometimes ends a run with
+# "--- FAIL ... context deadline exceeded" and no failing input: its own timer
+# fired while a worker was still busy (the log shows execs falling to 0/sec at the
+# end). That is the engine, not a bug in the code under test, and it showed up on
+# roughly one target in ten in CI. A real finding always writes a failing input, so
+# a run with no "Failing input written" line and that message is retried, up to
+# three attempts; a real failure is never retried.
+run_target() {
+  local pkg="$1" name="$2" attempt out
+  for attempt in 1 2 3; do
+    out="$(mktemp)"
+    if go test -run='^$' -fuzz="^${name}\$" -fuzztime="${fuzztime}" -parallel="${parallel}" "${pkg}" 2>&1 | tee "$out"; then
+      rm -f "$out"
+      return 0
+    fi
+    if grep -q 'Failing input written' "$out"; then
+      rm -f "$out"
+      return 1
+    fi
+    if grep -q 'context deadline exceeded' "$out" && [ "$attempt" -lt 3 ]; then
+      echo "(the fuzz engine timed out without finding an input; retrying, attempt $((attempt + 1)) of 3)"
+      rm -f "$out"
+      continue
+    fi
+    rm -f "$out"
+    return 1
+  done
+}
+
 failed=()
 for entry in "${targets[@]}"; do
   pkg="${entry%% *}"
   name="${entry##* }"
   echo "== ${pkg##*go-common/} ${name}"
-  if ! go test -run='^$' -fuzz="^${name}\$" -fuzztime="${fuzztime}" -parallel="${parallel}" "${pkg}"; then
+  if ! run_target "${pkg}" "${name}"; then
     failed+=("${pkg##*go-common/}.${name}")
   fi
 done
