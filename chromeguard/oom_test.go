@@ -70,20 +70,25 @@ func TestAdjustRenderersTouchesOnlyRenderersGPUAndUtility(t *testing.T) {
 	}
 }
 
-func TestAdjustRenderersIsIdempotentAndRemembersProcesses(t *testing.T) {
+func TestAdjustRenderersIsIdempotentAndReassertsAfterChromiumResetsAScore(t *testing.T) {
 	root := buildTree(t)
 	in := testInspector(root)
 	if n, _ := in.AdjustRenderers(pidBrowser, 800); n != 4 {
 		t.Fatalf("first pass raised %d", n)
 	}
 
-	// Chromium (or anything) resets one score. The process was handled once, so a
-	// second pass leaves it alone instead of fighting.
+	// Nothing changed: a second pass writes nothing.
+	if n, err := in.AdjustRenderers(pidBrowser, 800); err != nil || n != 0 {
+		t.Fatalf("idempotent second pass: raised=%d err=%v", n, err)
+	}
+
+	// Chromium resets one score (it writes 300 into a renderer shortly after launching it and when it
+	// reclassifies it): the next pass raises that one again and only that one.
 	if err := os.WriteFile(filepath.Join(root, strconv.Itoa(pidRendA), "oom_score_adj"), []byte("300\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := in.AdjustRenderers(pidBrowser, 800); err != nil || n != 0 || readOOM(t, root, pidRendA) != 300 {
-		t.Fatalf("second pass: raised=%d err=%v value=%d", n, err, readOOM(t, root, pidRendA))
+	if n, err := in.AdjustRenderers(pidBrowser, 800); err != nil || n != 1 || readOOM(t, root, pidRendA) != 800 {
+		t.Fatalf("after a reset: raised=%d err=%v value=%d, want 1 and 800", n, err, readOOM(t, root, pidRendA))
 	}
 
 	// A new renderer appears: it alone is adjusted.
