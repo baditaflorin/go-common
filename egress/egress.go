@@ -9,9 +9,11 @@
 // tailnet address, nor a bare container name. Those follow the standard
 // environment behaviour (http.ProxyFromEnvironment, so NO_PROXY still applies).
 //
-// Before this package each host had to list the fleet domains in NO_PROXY, and
-// a host that did not (the infer-runtime pool replicas) sent calls to our own
-// services through the external scraping proxy.
+// Use it for the clients that talk to our own services (the fetch cache, the
+// rate coordinator, the Graph collector). It is deliberately NOT applied to
+// safehttp: that is the generic public-web client, and the runner's strict
+// egress policy (go_fleet_runner #428) keeps even our own public hostnames on
+// the proxy for proxy_egress services that use it to scan targets.
 package egress
 
 import (

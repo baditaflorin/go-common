@@ -13,9 +13,9 @@
 
 ### Changed
 
-- `safehttp`, the `fleetfetch` cross-host cache client and `ratecoord` use the egress rule. Before, a host whose `NO_PROXY` lacked `.0exec.com`
-  (the infer-runtime pool replicas) sent calls to our own services, for example `infrastructure-fetch-cache.0exec.com`, through the external
-  scraping proxy. Third-party destinations are unchanged.
+- The `fleetfetch` cross-host cache client and `ratecoord` use the egress rule, so a call to one of our own services no longer depends on the
+  host's `NO_PROXY` listing it. `safehttp` is deliberately unchanged: it is the generic public-web client, and the runner's strict egress policy
+  keeps even our own public hostnames on the proxy for proxy_egress services that scan targets with it. Third-party destinations are unchanged.
 - **BREAKING (only for 0.102.59):** `GRAPH_USE_EGRESS_PROXY` is removed; `graph` is always direct. Nothing used it.
 - `golang.org/x/net` is an indirect dependency again (the Graph client no longer builds a proxy function from the environment).
 
