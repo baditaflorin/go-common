@@ -63,7 +63,7 @@
 | [`secrets`](../secrets/) | The canonical client for go-fleet-secrets, the fleet vault. |
 | [`selftest`](../selftest/) | Gives every fleet service ONE canonical way to declare and serve a /selftest endpoint. |
 | [`server`](../server/) | Provides the canonical fleet HTTP server bootstrap. |
-| [`shutdown`](../shutdown/) | Provides a single-call graceful shutdown helper for net/http servers. |
+| [`shutdown`](../shutdown/) | Provides a single-call graceful shutdown helper for net/http servers. **Deprecated.** |
 | [`spiffe`](../spiffe/) | Adapts the SPIFFE Workload API to credentiallease identities. |
 | [`telemetry`](../telemetry/) | Installs W3C trace propagation, creates privacy-conscious inbound/outbound HTTP spans, and exports them with OTLP/HTTP when configured. |
 | [`testhelpers/fakeexec`](../testhelpers/fakeexec/) | Provides an in-memory fake for the command-runner seam used across the fleet to shell out to git / go / docker: |

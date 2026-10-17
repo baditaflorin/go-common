@@ -37,6 +37,9 @@ steps:
       - scripts/fuzz-selftest.sh
       # docs/ENV.md must match the variables the packages declare.
       - go run ./scripts/envdoc -check
+      # A budgeted small package may not gain a third-party module (scripts/dep-budget.txt),
+      # and docs/dependencies.md must match what the packages import.
+      - scripts/dep-budget-selftest.sh && scripts/dep-budget.sh && scripts/dep-budget.sh --check-doc
     when:
       - event: pull_request
       - event: push

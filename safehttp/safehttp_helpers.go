@@ -2,6 +2,7 @@ package safehttp
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/telemetry"
@@ -11,16 +12,48 @@ import (
 	"time"
 )
 
+// Messages of the two start-up checks in NewClientE. NewClient panics with
+// exactly these strings, so keep them stable.
+const (
+	errProxyOptionsConflict = "safehttp: WithoutProxy and RequireProxy are mutually exclusive"
+	errProxyRequiredMissing = "safehttp: RequireProxy set but no HTTP(S)_PROXY env var found — refusing to start (service.yaml has proxy_egress: true but /opt/_shared/proxy.env was not mounted)"
+)
+
 // NewClient returns an *http.Client with a guarded transport. The transport
 // blocks private/internal IPs on every dial, including after redirects, making
 // it safe against DNS-rebind and open-redirect SSRF chains.
+//
+// NewClient panics when the proxy setup is wrong: WithoutProxy together with
+// RequireProxy, or RequireProxy (or FLEET_REQUIRE_PROXY=1) with no proxy
+// variable set. That is a deployment mistake and the service should stop at
+// start-up, so call NewClient from start-up code. Code that runs per request
+// or in a goroutine, and checks that want to report the problem instead of
+// crashing, use NewClientE.
 func NewClient(opts ...Option) *http.Client {
+	c, err := NewClientE(opts...)
+	if err != nil {
+		panic(err.Error())
+	}
+	return c
+}
+
+// NewClientE is NewClient that returns an error where NewClient panics: when
+// WithoutProxy and RequireProxy are both set, and when RequireProxy (or
+// FLEET_REQUIRE_PROXY=1 without WithoutProxy) is in force but no HTTPS_PROXY,
+// https_proxy, HTTP_PROXY or http_proxy variable is set. The error text is the
+// text NewClient panics with. No client is returned with an error, so a caller
+// that fails closed on the error never reaches the network without the proxy.
+//
+// Use it where a panic is not acceptable: lazily built clients on a request
+// path or in a worker goroutine, and /selftest or start-up checks that report
+// the problem instead of crashing the process.
+func NewClientE(opts ...Option) (*http.Client, error) {
 	o := &options{timeout: 8 * time.Second, maxRedirects: 5}
 	for _, opt := range opts {
 		opt(o)
 	}
 	if o.withoutProxy && o.requireProxy {
-		panic("safehttp: WithoutProxy and RequireProxy are mutually exclusive")
+		return nil, errors.New(errProxyOptionsConflict)
 	}
 	// Fleet-wide enforcement: FLEET_REQUIRE_PROXY=1 promotes any
 	// caller to RequireProxy posture unless they explicitly opted
@@ -33,7 +66,7 @@ func NewClient(opts ...Option) *http.Client {
 		o.requireProxy = true
 	}
 	if o.requireProxy && os.Getenv("HTTPS_PROXY") == "" && os.Getenv("https_proxy") == "" && os.Getenv("HTTP_PROXY") == "" && os.Getenv("http_proxy") == "" {
-		panic("safehttp: RequireProxy set but no HTTP(S)_PROXY env var found — refusing to start (service.yaml has proxy_egress: true but /opt/_shared/proxy.env was not mounted)")
+		return nil, errors.New(errProxyRequiredMissing)
 	}
 	proxyFn := func(req *http.Request) (*url.URL, error) {
 		return proxySkippingPrivate(req)
@@ -167,5 +200,5 @@ func NewClient(opts ...Option) *http.Client {
 		store := newBreakerStore(o.breakerState, extras)
 		registerBreakerStore(client, store)
 	}
-	return client
+	return client, nil
 }

@@ -1,0 +1,95 @@
+# Third-party dependency budget for the small packages many services import.
+# Enforced by scripts/dep-budget.sh (the `validate` step); the measurements are in
+# docs/dependencies.md.
+#
+# Syntax: the package (path relative to the module root), then the third-party
+# modules (module paths, no versions) it may reach through its transitive, non-test
+# imports. A package may have several lines. `@other` allows whatever package `other`
+# is allowed. Anything after `#` is a comment. A package with nothing after its name
+# is stdlib-only: it, and the go-common packages it imports, may not use any
+# third-party module.
+#
+# This is a ratchet, not a target: each set is what the package reaches today.
+# CI fails when a package reaches a module that is not listed for it. Fix that by
+# moving the code that needs the module into a package that already depends on it
+# (the usual answer), or, if the dependency is intended, add the module here and give
+# the reason in the pull request. When a dependency goes away, delete its line too.
+#
+# `scripts/dep-budget.sh --print` shows every package's current set in this syntax;
+# `scripts/dep-budget.sh --write-doc` refreshes docs/dependencies.md after an edit.
+
+# Stdlib-only packages that services import everywhere.
+env
+header
+ua
+errors
+clock
+retry
+cache
+pagination
+response
+validate
+nullify
+wordbound
+version
+workpool
+loadshed
+circuitbreaker
+degraded
+config
+apikey
+resilience
+
+# The other stdlib-only packages, kept that way for the same reason.
+agent
+backoffcoord
+bootgate
+browserheaders
+cgroup
+compat
+credentiallease/broker
+deploymentintent
+depcheck
+egress
+meshresult
+metrics
+openapi
+policyeval
+reqstats
+runtimetune
+secrets
+shutdown
+
+# The rate limiter and the singleflight group.
+middleware golang.org/x/sync
+middleware golang.org/x/time
+
+# safehttp imports telemetry (the OpenTelemetry SDK, the OTLP/HTTP exporter and,
+# through the exporter's protobuf definitions, gRPC) and graph, so every package that
+# imports safehttp inherits all of this. This is where the ratchet starts, not an
+# endorsement; the way to shrink it is for safehttp to stop importing telemetry.
+safehttp github.com/cenkalti/backoff/v5
+safehttp github.com/cespare/xxhash/v2
+safehttp github.com/felixge/httpsnoop
+safehttp github.com/go-logr/logr
+safehttp github.com/go-logr/stdr
+safehttp github.com/google/uuid
+safehttp github.com/grpc-ecosystem/grpc-gateway/v2
+safehttp go.opentelemetry.io/auto/sdk
+safehttp go.opentelemetry.io/otel
+safehttp go.opentelemetry.io/otel/exporters/otlp/otlptrace
+safehttp go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp
+safehttp go.opentelemetry.io/otel/metric
+safehttp go.opentelemetry.io/otel/sdk
+safehttp go.opentelemetry.io/otel/trace
+safehttp go.opentelemetry.io/proto/otlp
+safehttp golang.org/x/net
+safehttp golang.org/x/sys
+safehttp golang.org/x/text
+safehttp google.golang.org/genproto/googleapis/api
+safehttp google.golang.org/genproto/googleapis/rpc
+safehttp google.golang.org/grpc
+safehttp google.golang.org/protobuf
+
+# selftest imports safehttp.
+selftest @safehttp

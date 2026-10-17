@@ -147,12 +147,16 @@ func (s *Server) buildHTTPServer(addr string, h http.Handler) *http.Server {
 // Start listens on PORT, serves requests, and performs a graceful
 // shutdown when SIGTERM or SIGINT is received. It blocks until the
 // server has drained all in-flight requests or the drain timeout
-// elapses, then returns. log.Fatal is no longer used here — callers
-// should handle the returned error themselves:
+// elapses, then returns. A listen failure (the port is taken, for example) is
+// returned as an error, so handle it:
 //
 //	if err := srv.Start(); err != nil {
 //	    log.Fatal(err)
 //	}
+//
+// Exception: with WithGracefulDrain a listen failure is not returned. Start
+// logs it and exits the process with status 1 (log.Fatalf), without running
+// its deferred cleanup. Run and RunTier ignore the error that Start returns.
 func (s *Server) Start() error {
 	stopProfiling := startServerProfiling(s.Config.AppName, profiling.StartFromEnv)
 	defer stopProfiling()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"strings"
 	"sync"
@@ -11,9 +12,13 @@ import (
 
 // Recover downloads bundleURL and any associated .map, returning one Source
 // per original file when a source map is available, or a single Source with
-// the raw bundle body otherwise.
+// the raw bundle body otherwise. With no opt.Client it uses a shared safehttp
+// client; if that cannot be built (FLEET_REQUIRE_PROXY=1 with no proxy
+// variable set) it returns the error and fetches nothing.
 func Recover(ctx context.Context, bundleURL string, opt RecoverOptions) ([]Source, error) {
-	opt.normalize()
+	if err := opt.normalize(); err != nil {
+		return nil, err
+	}
 	body, err := fetchBody(ctx, opt.Client, opt.UserAgent, bundleURL, opt.MaxScriptBytes)
 	if err != nil {
 		return nil, fmt.Errorf("fetch bundle: %w", err)
@@ -93,8 +98,15 @@ func Recover(ctx context.Context, bundleURL string, opt RecoverOptions) ([]Sourc
 
 // RecoverAll runs Recover across every bundleURL with bounded concurrency.
 // Failed bundles are silently dropped — partial recovery is the common case.
+// If the default client cannot be built (see Recover) it logs the reason and
+// returns nil.
 func RecoverAll(ctx context.Context, bundleURLs []string, opt RecoverOptions) []Source {
-	opt.normalize()
+	if err := opt.normalize(); err != nil {
+		// No client, so nothing can be fetched. The signature has no error
+		// to return, so say why the result is empty.
+		log.Printf("jsbundle: RecoverAll: %v", err)
+		return nil
+	}
 	if len(bundleURLs) > opt.MaxScripts {
 		bundleURLs = bundleURLs[:opt.MaxScripts]
 	}

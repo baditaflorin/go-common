@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.102.72] - 2026-10-17
+
+Wave 4 of the go-common hardening: a CI budget on what the small packages may import, a guide to the observability packages, a count of which packages are used, and two
+deprecations. One behaviour change: three call sites now return an error, not a panic, when a required proxy is missing.
+
+### Changed
+
+- **BREAKING (behavioural):** `client.Fetch` (the direct path) and `jsbundle.Recover` / `RecoverAll` no longer panic when proxy egress is required (`safehttp.RequireProxy`
+  or `FLEET_REQUIRE_PROXY=1`) and no proxy variable is set. They run per request and in worker goroutines, where a deployment mistake should not take the process down. `Fetch`
+  and `Recover` now return an error and fetch nothing (still fail-closed); `RecoverAll` logs the reason and returns nil. A caller that relied on the panic to stop the process
+  must check the error. The start-up constructors, `safehttp.NewClient` among them, still panic as before.
+
+### Fixed
+
+- `jsbundle`: after the default client failed to build once, every later `Recover` call died with a nil-pointer dereference. A failed build is no longer cached.
+- `Server.Start`: its documentation said `log.Fatal` was no longer used. It still is, on a listen failure with `WithGracefulDrain`; the comment now says what the code does,
+  and that `Run` and `RunTier` ignore the error `Start` returns. The `WithAgentFromEmbed` panic that cannot happen now says so.
+
+### Added
+
+- `safehttp.NewClientE`: `NewClient` that returns an error where `NewClient` panics (`WithoutProxy` with `RequireProxy`, or a required proxy with no proxy variable set). The error
+  text is the text `NewClient` panics with, and no client is returned with an error. For clients built lazily on a request path, and for checks that should report a problem, not crash.
+- `scripts/dep-budget.sh` and `scripts/dep-budget.txt`: a budget on the third-party modules each small package may reach. A package that gains one fails `validate`, and the message
+  names the package, the module and the go-common package that imports it. `scripts/dep-budget-selftest.sh` proves the gate fails when it should. `docs/dependencies.md` is
+  generated from the same data (`scripts/dep-budget.sh --write-doc`; CI fails if it is stale), and `docs/adr/0002-dependency-budget.md` records the measurements and why nested
+  modules are not worth it yet.
+- `docs/observability.md`: which of `promx`, `metrics`, `reqstats`, the access log, `logx`, `telemetry`, `graph`, `obs` and `profiling` emits what, what `server.New` wires by default and
+  how to turn each off, the per-request cost of each, and why `metrics` is not deprecated. Documentation only.
+- `docs/package-usage.md` and `scripts/package-usage.sh`: how many repositories import each package (a lower bound; counts only), and how to refresh it.
+
+### Deprecated
+
+- `shutdown`: use `server.New` and `Server.Start` (`WithDrainTimeout`, `WithGracefulDrain`), or `signal.NotifyContext` and `http.Server.Shutdown`. Removal no earlier than v0.104.0.
+- `client.Client`, `client.New` and `(*Client).Post`: use `safehttp.NewClient` or `meshclient`. `Post` never sent its body. The rest of `client` (`Fetch`, the `JSProxy*` helpers and
+  the capability types) has no replacement and is not deprecated. Removal no earlier than v0.104.0.
+
 ## [0.102.71] - 2026-10-17
 
 Wave 3 of the go-common hardening: the building blocks for calling a sibling service well, a catalogue of environment variables, and structured logs.
