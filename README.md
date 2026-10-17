@@ -32,10 +32,13 @@ trustworthy, which is what the API policy and the CI gates below are for.
 | Decode and validate a request body | [`validate`](validate/) |
 | Retry, or protect a slow upstream | [`resilience`](resilience/) (retries limited by a budget, plus a breaker and a load-shed gate), built from [`retry`](retry/), [`circuitbreaker`](circuitbreaker/) and [`loadshed`](loadshed/); also [`backoffcoord`](backoffcoord/), [`ratecoord`](ratecoord/) |
 | Decide which result type to return | [docs/outcomes.md](docs/outcomes.md): `errors`, `meshresult`, `degraded`, `nullify` and what each is for |
+| Decide which observability package to use | [docs/observability.md](docs/observability.md): what `promx`, `metrics`, `reqstats`, `logx`, `telemetry`, `graph` and `obs` each emit, what `server.New` wires by default, and what each costs per request |
 | Fake time or an upstream in a test | [`clock`](clock/) (`testhelpers/testclock`), [`testhelpers/httpmock`](testhelpers/httpmock/) |
 | Test a URL or host guard against known SSRF bypasses, or fail a test that leaks goroutines | [`testhelpers/ssrfcorpus`](testhelpers/ssrfcorpus/), [`testhelpers/leakcheck`](testhelpers/leakcheck/) |
 
-`client` is the older, lower-level HTTP client; prefer `safehttp` for new code.
+`client.Client`, `client.New` and `client.Post` are deprecated in favour of `safehttp.NewClient` or `meshclient`; the `client.Fetch` and `JSProxy*` helpers have no replacement and
+are not deprecated. `shutdown` is deprecated in favour of `server`'s graceful drain. How many repositories import each package: [docs/package-usage.md](docs/package-usage.md).
+What the small packages may import: [docs/dependencies.md](docs/dependencies.md).
 
 Runnable examples (checked by `go test`) are in `example_test.go` next to the
 packages above. The full list of packages is in [docs/PACKAGES.md](docs/PACKAGES.md),
