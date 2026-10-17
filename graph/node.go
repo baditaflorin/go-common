@@ -2,7 +2,6 @@ package graph
 
 import (
 	"log"
-	"os"
 	"strings"
 	"sync"
 )
@@ -23,7 +22,7 @@ var nodeInvalidLogOnce sync.Once
 // lowercase DNS label, like a service id; anything else is ignored with one log line so
 // a typo cannot put arbitrary text into a request header.
 func loadNode() string {
-	raw := strings.TrimSpace(os.Getenv("FLEET_NODE"))
+	raw := strings.TrimSpace(envNode.Value())
 	if raw == "" {
 		return ""
 	}

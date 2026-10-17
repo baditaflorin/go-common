@@ -82,6 +82,7 @@ package runtimetune
 
 import (
 	"fmt"
+	"github.com/baditaflorin/go-common/env"
 	"log"
 	"math"
 	"os"
@@ -290,9 +291,9 @@ func DefaultConfig() Config {
 // a bad env var must never take a service down.
 func ConfigFromEnv() Config {
 	cfg := DefaultConfig()
-	cfg.Enabled = killSwitchEnabled(os.Getenv(EnvKillSwitch))
+	cfg.Enabled = killSwitchEnabled(envKillSwitch.Value())
 
-	if v := os.Getenv(EnvMemLimitRatio); v != "" {
+	if v := envMemLimitRatio.Value(); v != "" {
 		f, err := strconv.ParseFloat(v, 64)
 		if err != nil || f <= 0 || f >= 1 {
 			log.Printf("runtimetune: %s=%q is not a ratio in (0,1), using %g",
@@ -301,7 +302,7 @@ func ConfigFromEnv() Config {
 			cfg.MemLimitRatio = f
 		}
 	}
-	if v := os.Getenv(EnvMinHeapBytes); v != "" {
+	if v := envMinHeapBytes.Value(); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || n < 0 {
 			log.Printf("runtimetune: %s=%q is not a non-negative integer, using %d",
@@ -310,9 +311,9 @@ func ConfigFromEnv() Config {
 			cfg.MinHeapTarget = n
 		}
 	}
-	cfg.BaseGOGC = intFromEnv(EnvBaseGOGC, cfg.BaseGOGC)
-	cfg.MaxGOGC = intFromEnv(EnvMaxGOGC, cfg.MaxGOGC)
-	if v := os.Getenv(EnvInterval); v != "" {
+	cfg.BaseGOGC = intFromEnv(envBaseGOGC, cfg.BaseGOGC)
+	cfg.MaxGOGC = intFromEnv(envMaxGOGC, cfg.MaxGOGC)
+	if v := envInterval.Value(); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {
 			log.Printf("runtimetune: %s=%q is not a positive duration, using %s",
@@ -324,8 +325,9 @@ func ConfigFromEnv() Config {
 	return cfg
 }
 
-func intFromEnv(name string, defaultVal int) int {
-	v := os.Getenv(name)
+func intFromEnv(ev *env.Var, defaultVal int) int {
+	name := ev.Name
+	v := ev.Value()
 	if v == "" {
 		return defaultVal
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/baditaflorin/go-common/promx"
 	"github.com/baditaflorin/go-common/safehttp"
 	"github.com/baditaflorin/go-common/telemetry"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -94,6 +95,12 @@ type Server struct {
 	// Server-Timing + X-Request-Stats on every response). Set via
 	// WithoutRequestStats; default is enabled.
 	noRequestStats bool
+
+	// structuredLogs switches the process to structured JSON logs (logx) at New.
+	// LOG_FORMAT=json does the same without a code change.
+	structuredLogs bool
+	// logOutput is where structured logs go; nil means os.Stdout. Tests set it.
+	logOutput io.Writer
 
 	// AgentContract is the resolved contract from WithAgent /
 	// WithAgentFromEmbed, stashed here (regardless of option order) so

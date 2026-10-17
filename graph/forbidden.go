@@ -2,7 +2,6 @@ package graph
 
 import (
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,7 +58,7 @@ func processForbidden(passedServiceID string) bool {
 	if forbiddenIdentitySeen.Load() {
 		return true
 	}
-	if identityForbidden(passedServiceID, os.Getenv("GRAPH_SERVICE_ID")) {
+	if identityForbidden(passedServiceID, envServiceID.Value()) {
 		forbiddenIdentitySeen.Store(true)
 		return true
 	}

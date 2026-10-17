@@ -54,6 +54,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/baditaflorin/go-common/env"
 	"github.com/baditaflorin/go-common/promx"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -174,6 +175,9 @@ func StartDebugServer(addr string) (StopFunc, error) {
 	// metrics the public /metrics serves are reachable on loopback even
 	// for services that gate their public /metrics behind auth.
 	mux.Handle("/metrics", promx.Handler())
+	// The declared environment variables, values redacted: for an operator on the
+	// host asking "what is this process actually configured with".
+	mux.Handle("/debug/config", env.Default.Handler())
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
