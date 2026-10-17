@@ -1,6 +1,7 @@
 package proxysupplier
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -80,21 +81,39 @@ func snapshotOf(t *testing.T, s Supplier) WebshareDirectPoolState {
 
 // The incident: the very first pool fetch fails (the Webshare API throttled several replicas that
 // restarted together). The pool used to stay empty for a whole refresh interval (10 minutes).
-func TestWebshareDirect_FailedInitialFetchIsRetriedWithBackoff(t *testing.T) {
+// A few throttled requests are absorbed by the per-page retry inside one refresh.
+func TestWebshareDirect_ThrottledInitialFetchRecoversWithinTheFirstRefresh(t *testing.T) {
 	fastRetries(t, 5*time.Millisecond, 40*time.Millisecond)
 	srv := newFlakyWebshare(t, 3, http.StatusTooManyRequests, "", 4)
 	withWebshareDirectBaseURL(t, srv.URL)
 
 	s := newTestSupplier(t)
-	if u := waitForNonEmptyProxyURL(t, s, 3*time.Second); u == "" {
-		t.Fatal("pool never filled")
-	}
+	waitForNonEmptyProxyURL(t, s, 3*time.Second)
 	if got := len(srv.requests()); got != 4 {
-		t.Fatalf("API saw %d requests, want 3 failures + 1 success", got)
+		t.Fatalf("API saw %d requests, want 3 throttled + 1 success", got)
 	}
 	st := snapshotOf(t, s)
-	if st.Total != 4 || st.RefreshFailures != 3 || st.RefreshSuccesses < 1 || st.ConsecutiveRefreshFailures != 0 {
-		t.Fatalf("state after recovery = %+v", st)
+	if st.Total != 4 || st.RefreshFailures != 0 || st.RefreshSuccesses < 1 || st.ConsecutiveRefreshFailures != 0 {
+		t.Fatalf("state after recovery = %+v, want a single successful refresh", st)
+	}
+}
+
+// A failure that outlasts the page attempts fails that refresh; refreshLoop then backs off and retries.
+func TestWebshareDirect_FailedInitialFetchIsRetriedWithBackoff(t *testing.T) {
+	fastRetries(t, 5*time.Millisecond, 40*time.Millisecond)
+	// 8 throttled answers: the first refresh uses its 6 page attempts and fails, the second fails twice
+	// more inside its page attempts and then succeeds.
+	srv := newFlakyWebshare(t, 8, http.StatusTooManyRequests, "", 4)
+	withWebshareDirectBaseURL(t, srv.URL)
+
+	s := newTestSupplier(t)
+	waitForNonEmptyProxyURL(t, s, 5*time.Second)
+	if got := len(srv.requests()); got != 9 {
+		t.Fatalf("API saw %d requests, want 8 throttled + 1 success", got)
+	}
+	st := snapshotOf(t, s)
+	if st.Total != 4 || st.RefreshFailures != 1 || st.RefreshSuccesses < 1 || st.ConsecutiveRefreshFailures != 0 {
+		t.Fatalf("state after recovery = %+v, want one failed refresh then a success", st)
 	}
 	if st.LastRefreshAgeSeconds < 0 || st.LastRefreshAgeSeconds > 5 {
 		t.Fatalf("LastRefreshAgeSeconds = %v, want a small non-negative age", st.LastRefreshAgeSeconds)
@@ -135,7 +154,8 @@ func TestWebshareDirect_FailedRefreshKeepsThePoolAndRetriesBeforeTheInterval(t *
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := calls.Add(1)
-		if n >= 2 && n <= 4 { // the first refresh after the initial fetch fails three times
+		if n >= 2 && n <= 9 { // more failures than the 6 page attempts: a whole refresh fails, then two more answers fail
+			// // the first refresh after the initial fetch fails three times
 			http.Error(w, "boom", http.StatusBadGateway)
 			return
 		}
@@ -277,4 +297,94 @@ func TestWebshareDirect_RefreshMetricsStartAtNeverAndAreZeroWithoutKey(t *testin
 	if st.LastRefreshAgeSeconds != -1 || st.RefreshSuccesses != 0 || st.RefreshFailures != 0 || st.ConsecutiveRefreshFailures != 0 {
 		t.Fatalf("fresh supplier state = %+v, want age -1 and zero counters", st)
 	}
+}
+
+// A throttled catalog page is repeated on its own: the pages already fetched are kept and the refresh
+// does not restart from page 1 (which, with 18 pages and a throttling API, rarely finished).
+func TestWebshareDirect_ThrottledPageIsRetriedWithoutRestartingTheRefresh(t *testing.T) {
+	fastRetries(t, 2*time.Millisecond, 10*time.Millisecond)
+	var mu sync.Mutex
+	hits := map[string]int{}
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		mu.Lock()
+		hits[page]++
+		n := hits[page]
+		mu.Unlock()
+		if page == "2" && n <= 3 { // page 2 is throttled three times
+			w.Header().Set("Retry-After", "0")
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+			return
+		}
+		resp := webshareListResponse{Count: 3}
+		switch page {
+		case "1":
+			resp.Results = []webshareEntry{{Username: "u", Password: "p", ProxyAddress: "10.0.0.1", Port: 5000, Valid: true}}
+			resp.Next = srvURL + "/?mode=direct&page=2&page_size=100"
+		case "2":
+			resp.Results = []webshareEntry{{Username: "u", Password: "p", ProxyAddress: "10.0.0.1", Port: 5001, Valid: true}}
+			resp.Next = srvURL + "/?mode=direct&page=3&page_size=100"
+		default:
+			resp.Results = []webshareEntry{{Username: "u", Password: "p", ProxyAddress: "10.0.0.1", Port: 5002, Valid: true}}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+	withWebshareDirectBaseURL(t, srv.URL)
+
+	s := newTestSupplier(t)
+	waitForNonEmptyProxyURL(t, s, 3*time.Second)
+	st := snapshotOf(t, s)
+	if st.Total != 3 {
+		t.Fatalf("pool has %d entries, want all 3 pages", st.Total)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if hits["1"] != 1 || hits["2"] != 4 || hits["3"] != 1 {
+		t.Fatalf("API hits per page = %v, want page 1 once, page 2 four times (3 throttled + 1 ok), page 3 once", hits)
+	}
+	if st.RefreshFailures != 0 || st.ConsecutiveRefreshFailures != 0 {
+		t.Fatalf("a recovered page must not count as a failed refresh: %+v", st)
+	}
+}
+
+func TestRetryablePageError(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{&webshareAPIError{Status: http.StatusTooManyRequests}, true},
+		{&webshareAPIError{Status: http.StatusBadGateway}, true},
+		{&webshareAPIError{Status: http.StatusInternalServerError}, true},
+		{&webshareAPIError{Status: http.StatusUnauthorized}, false},
+		{&webshareAPIError{Status: http.StatusForbidden}, false},
+		{&webshareAPIError{Status: http.StatusNotFound}, false},
+		{errors.New("dial tcp: connection refused"), true},
+		{context.Canceled, false},
+		{context.DeadlineExceeded, false},
+	} {
+		if got := retryablePageError(c.err); got != c.want {
+			t.Errorf("retryablePageError(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}
+
+// A bad API key (401) is not hammered: one request per refresh, then the loop backoff takes over.
+func TestWebshareDirect_AuthErrorIsNotRetriedWithinARefresh(t *testing.T) {
+	fastRetries(t, 50*time.Millisecond, 100*time.Millisecond)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "bad token", http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	withWebshareDirectBaseURL(t, srv.URL)
+	s := newTestSupplier(t)
+	time.Sleep(20 * time.Millisecond) // the first refresh has failed once; the next retry is at least 25 ms away
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("API saw %d requests right after start, want exactly 1 for a 401", n)
+	}
+	_ = s
 }

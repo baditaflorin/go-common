@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.102.67] - 2026-10-17
+## [0.102.68] - 2026-10-17
 
 Wave 1 of the go-common hardening: CI gates, fuzz targets, an API policy, a shared lint config and generated docs. Two bugs the new fuzz
 targets found are fixed. No exported API changed.
@@ -41,6 +41,18 @@ targets found are fixed. No exported API changed.
   `go run ./scripts/pkgindex` (CI fails when it is stale or a package has no comment), and runnable `Example` functions for `errors`, `env`, `ua`,
   `cache`, `clock`, `retry`, `nullify`, `wordbound`, `header`, `response`, `pagination`, `validate`, `safehttp` and `server`.
 - `safehttp` package doc comment (`safehttp/doc.go`); it had none.
+
+## [0.102.67] - 2026-10-17
+
+### Fixed
+
+- `proxysupplier` `webshare_direct`: a throttled catalog page is retried on its own instead of restarting the whole
+  refresh. 0.102.65 retried a failed refresh with backoff, but the catalog is paginated (about 18 requests for 1,800
+  entries) and any 429 aborted the refresh, so under a throttling API most attempts died part-way and restarted from
+  page 1: during the 2026-10-17 rollouts replicas needed 2.5 to 6 minutes and up to 11 whole attempts before the pool
+  filled (egress failed closed meanwhile). Now each page is tried up to 6 times with the same jittered backoff and the
+  API's `Retry-After` (transport errors, 429 and 5xx; a 401/403/404 is not repeated), keeping the pages already fetched;
+  the refresh only fails when a page keeps failing, and then `refreshLoop` backs off as before.
 
 ## [0.102.66] - 2026-10-17
 
