@@ -24,6 +24,16 @@
 //
 // The function returns nil on clean shutdown, or the server error if
 // it fails for any reason other than http.ErrServerClosed.
+//
+// Deprecated: use server.New and Server.Start, which on SIGTERM or SIGINT stop
+// accepting connections and drain in-flight requests (30 seconds by default,
+// server.WithDrainTimeout); server.WithGracefulDrain adds a readiness phase first
+// (/readyz answers 503 while the load balancer moves traffic away). A program
+// that builds its own http.Server can use signal.NotifyContext and
+// http.Server.Shutdown from the standard library. server has no counterpart for
+// TLS (ListenAndServeTLS), extra signals (WithSignals) or a notify callback
+// (WithNotify); if you need one of those, say so before this package is removed.
+// Removal no earlier than v0.104.0.
 package shutdown
 
 import (
