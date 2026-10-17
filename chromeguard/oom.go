@@ -20,9 +20,14 @@ func SetOOMScoreAdj(pid, adj int) (bool, error) { return theDefault().SetOOMScor
 // of every renderer, GPU and utility process below rootPID that this process
 // has not touched yet, so the kernel's OOM killer picks one of those before the
 // browser or the Go service. The zygote is left alone: it forks the renderers,
-// and the browser does not survive losing it. It is idempotent: a process is
-// attempted once (identified by pid and start time, so a reused pid is a new
-// process). It returns how many scores were raised.
+// and the browser does not survive losing it. It is idempotent: a process that
+// is already at or above adj is not written to again. It is also persistent:
+// Chromium writes its own score (300) into a renderer shortly after launching
+// it and again when it reclassifies it, so every pass reads each target's score
+// and raises it again if something lowered it. A process whose write failed for
+// a reason other than exiting (a read-only /proc, a denied write) is not tried
+// again, so a systemic failure is reported once and does not repeat on every
+// pass. It returns how many scores were raised.
 func AdjustRenderers(rootPID, adj int) (int, error) {
 	return theDefault().AdjustRenderers(rootPID, adj)
 }
@@ -95,9 +100,11 @@ func oomTarget(t ProcType) bool {
 	return false
 }
 
-// adjustProcs raises the score of the target processes in procs that were not
-// attempted before. It returns how many scores were raised, how many writes
-// failed (other than because the process exited) and the first such error.
+// adjustProcs raises the score of every target process in procs that is below
+// adj (reading one file per target, writing only when it must). A process whose
+// write failed before is skipped. It returns how many scores were raised, how
+// many writes failed (other than because the process exited) and the first such
+// error.
 func (in *Inspector) adjustProcs(procs []Proc, adj int) (raised, failed int, firstErr error) {
 	if adj == 0 {
 		adj = DefaultOOMScoreAdj
@@ -108,10 +115,9 @@ func (in *Inspector) adjustProcs(procs []Proc, adj int) (raised, failed int, fir
 		}
 		key := procKey{p.PID, p.StartTicks}
 		in.mu.Lock()
-		_, done := in.touched[key]
-		in.touched[key] = struct{}{} // one attempt per process, success or not
+		_, failedBefore := in.touched[key]
 		in.mu.Unlock()
-		if done {
+		if failedBefore {
 			continue
 		}
 		changed, err := in.SetOOMScoreAdj(p.PID, adj)
@@ -124,6 +130,9 @@ func (in *Inspector) adjustProcs(procs []Proc, adj int) (raised, failed int, fir
 			// Exited before we got to it.
 		default:
 			failed++
+			in.mu.Lock()
+			in.touched[key] = struct{}{} // do not repeat a failing write on every pass
+			in.mu.Unlock()
 			if firstErr == nil {
 				firstErr = fmt.Errorf("chromeguard: raise oom_score_adj of pid %d: %w", p.PID, err)
 			}
@@ -132,11 +141,11 @@ func (in *Inspector) adjustProcs(procs []Proc, adj int) (raised, failed int, fir
 	return raised, failed, firstErr
 }
 
-// maxTouched bounds the remembered set when nothing prunes it.
+// maxTouched bounds the remembered set of failed writes when nothing prunes it.
 const maxTouched = 8192
 
 // capTouched forgets everything when the remembered set outgrows its bound; a
-// forgotten process is simply attempted once more.
+// forgotten process is simply tried once more.
 func (in *Inspector) capTouched() {
 	in.mu.Lock()
 	if len(in.touched) > maxTouched {

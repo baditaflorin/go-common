@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.102.66] - 2026-10-17
+
+### Fixed
+
+- `chromeguard`: the raise of a renderer's `oom_score_adj` is no longer attempted only once per process. Chromium writes its
+  own score (300) into a renderer shortly after launching it and again when it reclassifies it, so a raise that came
+  first was lost (seen as a flaky test with a fast scan interval, and a risk in production whenever Chromium reclassifies a
+  tab). Every pass now reads each renderer, GPU and utility process's score and raises it again if something lowered it
+  (one file read per target, a write only when needed). A process whose write failed for a reason other than exiting is
+  still not retried on every pass. Nothing else changes; `AdjustRenderers` is still idempotent.
+
 ## [0.102.65] - 2026-10-17
 
 ### Fixed
