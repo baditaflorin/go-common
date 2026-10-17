@@ -8,8 +8,8 @@
 #   - it adds more than one version entry (one change, one release),
 #   - the heading is not in that exact form,
 #   - the tag vX.Y.Z already exists: another change released it first. Two changes
-#     both claimed 0.102.66 on 2026-10-17, and the next two did the same for
-#     0.102.67; whichever merges second must renumber,
+#     both claimed 0.102.66 on 2026-10-17, and the same happened to 0.102.67 and
+#     0.102.68; whichever merges second must renumber,
 #   - X.Y.Z is not newer than the newest tag, or than the previous top entry.
 # A change that leaves CHANGELOG.md alone claims no release, and passes.
 #

@@ -13,8 +13,8 @@ number and keeping old lines patched.
   author and not generated from commit subjects.
 - X.Y.Z is the next free version: newer than the newest tag and than the entry
   below it. `scripts/release-check.sh` enforces this on every pull request. Two
-  changes can claim the same number while both are open (it happened to 0.102.66
-  and again to 0.102.67); whichever merges second fails the check and renumbers.
+  changes can claim the same number while both are open (it happened to 0.102.66,
+  0.102.67 and 0.102.68 on the day this check was written); whichever merges second fails the check and renumbers.
 - A change that is BREAKING (see [api-policy.md](api-policy.md)) should take a
   minor bump, so that consumers who follow patch releases only are not broken.
 - A change that leaves `CHANGELOG.md` alone claims no release, and the check
