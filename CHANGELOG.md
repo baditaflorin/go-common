@@ -2,11 +2,16 @@
 
 ## [0.102.69] - 2026-10-17
 
-Wave 2 of the go-common hardening: a shared SSRF test corpus, tests for the packages that had none, hot-path
-benchmarks with an allocation gate, a security floor for pins, and release tooling. One behaviour change, marked below.
+Wave 2 of the go-common hardening: a shared SSRF test corpus (which found a hole in the guard), tests for the packages that had none, hot-path
+benchmarks with an allocation gate, a security floor for pins, and release tooling. Two behaviour changes, both marked below.
 
 ### Fixed
 
+- **BREAKING (behavioural):** `safehttp.IsBlocked`, and so `GuardHost`, `CheckURL`, the guarded dialer and `egressproxy.DefaultGuard`, now also
+  refuses an IPv6 address that carries a blocked IPv4 address through a translator: NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`). Before, `64:ff9b::7f00:1`,
+  `64:ff9b::a9fe:a9fe` (the cloud metadata address) and `2002:7f00:1::` were allowed. Reaching them needs a NAT64 or 6to4 gateway on the path, which a typical
+  container host lacks, so this closes a latent hole rather than a live one. A NAT64 or 6to4 address that carries a public IPv4 address is still allowed. Found by
+  the new SSRF corpus; `FuzzIsBlocked` now checks the embedded forms too.
 - **BREAKING (behavioural):** `jsbundle.RecoverOptions.Client`, when nil, is now a guarded `safehttp` client (20 s timeout, refuses internal addresses, also
   after redirects) instead of `http.DefaultClient`, which had no timeout and no SSRF guard, while the URLs it fetches come from pages and error reports. Pass a
   `Client` to opt out, for example an `httptest` server's client in a test.

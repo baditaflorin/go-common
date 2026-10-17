@@ -36,7 +36,7 @@ type Case struct {
 	NeedsResolver bool
 	// Gap, when set, marks a target a guard does NOT refuse today. It documents
 	// a known hole: tests log the verdict instead of asserting it, and say when
-	// the hole has closed.
+	// the hole has closed. The corpus has no open gaps right now.
 	Gap string
 }
 
@@ -52,9 +52,8 @@ func (c Case) URL() string {
 // IsLiteralIP reports whether Host is an IP literal in canonical form.
 func (c Case) IsLiteralIP() bool { return net.ParseIP(c.Host) != nil }
 
-func blocked(name, host string) Case  { return Case{Name: name, Host: host, Blocked: true} }
-func allowed(name, host string) Case  { return Case{Name: name, Host: host} }
-func gap(name, host, why string) Case { return Case{Name: name, Host: host, Gap: why} }
+func blocked(name, host string) Case { return Case{Name: name, Host: host, Blocked: true} }
+func allowed(name, host string) Case { return Case{Name: name, Host: host} }
 func viaResolver(name, host string) Case {
 	return Case{Name: name, Host: host, Blocked: true, NeedsResolver: true}
 }
@@ -119,14 +118,13 @@ var Cases = []Case{
 	allowed("just-below-192-168", "192.167.255.255"),
 	allowed("just-above-192-168", "192.169.0.1"),
 
-	// Known holes. Reaching 127.0.0.1 this way needs a NAT64 or 6to4 gateway
-	// between the caller and the target, which a typical container host does not
-	// have; they are listed so that a guard that closes them can say so here.
-	gap("nat64-loopback", "64:ff9b::7f00:1", "NAT64 well-known prefix embedding 127.0.0.1"),
-	gap("nat64-cloud-metadata", "64:ff9b::a9fe:a9fe", "NAT64 well-known prefix embedding 169.254.169.254"),
-	gap("nat64-private", "64:ff9b::a00:1", "NAT64 well-known prefix embedding 10.0.0.1"),
-	gap("6to4-loopback", "2002:7f00:1::", "6to4 prefix embedding 127.0.0.1"),
-	gap("6to4-private", "2002:c0a8:101::", "6to4 prefix embedding 192.168.1.1"),
+	// IPv4 carried inside IPv6 by a translator (NAT64, 6to4): reachable as the
+	// embedded IPv4 address once a gateway is on the path.
+	blocked("nat64-loopback", "64:ff9b::7f00:1"),
+	blocked("nat64-cloud-metadata", "64:ff9b::a9fe:a9fe"),
+	blocked("nat64-private", "64:ff9b::a00:1"),
+	blocked("6to4-loopback", "2002:7f00:1::"),
+	blocked("6to4-private", "2002:c0a8:101::"),
 	allowed("nat64-public", "64:ff9b::808:808"),
 	allowed("6to4-public", "2002:808:808::"),
 }
