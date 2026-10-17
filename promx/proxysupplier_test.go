@@ -110,3 +110,33 @@ proxysupplier_webshare_direct_pool_size{service="go-disabled-service"} 0
 		t.Fatal(err)
 	}
 }
+
+func TestWebshareDirectCollectorsExposeRefreshHealth(t *testing.T) {
+	Init("go-test-service", "test")
+	reg := prometheus.NewRegistry()
+	c := NewWebshareDirectCollectors(reg)
+	c.snapshot = func() proxysupplier.WebshareDirectPoolState {
+		return proxysupplier.WebshareDirectPoolState{
+			RefreshSuccesses: 4, RefreshFailures: 3, ConsecutiveRefreshFailures: 2, LastRefreshAgeSeconds: -1,
+		}
+	}
+	want := `
+# HELP proxysupplier_webshare_direct_last_refresh_age_seconds Seconds since the webshare_direct catalog was last refreshed successfully, -1 if it never was.
+# TYPE proxysupplier_webshare_direct_last_refresh_age_seconds gauge
+proxysupplier_webshare_direct_last_refresh_age_seconds{service="go-test-service"} -1
+# HELP proxysupplier_webshare_direct_refresh_consecutive_failures Catalog refreshes that failed in a row since the last success (0 = healthy).
+# TYPE proxysupplier_webshare_direct_refresh_consecutive_failures gauge
+proxysupplier_webshare_direct_refresh_consecutive_failures{service="go-test-service"} 2
+# HELP proxysupplier_webshare_direct_refresh_total Catalog refreshes of the webshare_direct supplier by result. A failed refresh is retried with backoff.
+# TYPE proxysupplier_webshare_direct_refresh_total counter
+proxysupplier_webshare_direct_refresh_total{result="error",service="go-test-service"} 3
+proxysupplier_webshare_direct_refresh_total{result="ok",service="go-test-service"} 4
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(want),
+		"proxysupplier_webshare_direct_last_refresh_age_seconds",
+		"proxysupplier_webshare_direct_refresh_consecutive_failures",
+		"proxysupplier_webshare_direct_refresh_total",
+	); err != nil {
+		t.Fatal(err)
+	}
+}

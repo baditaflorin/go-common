@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,6 +54,28 @@ const (
 	// window (unknown) -- a reasonable starting point, adjust if the
 	// fleet's own data suggests otherwise.
 	webshareDirectFailureCooldown = 3 * time.Minute
+
+	// webshareDirectMaxRetryAfter caps how long a Retry-After from the
+	// Webshare API can postpone the next pool fetch.
+	webshareDirectMaxRetryAfter = 5 * time.Minute
+
+	// webshareDirectRefreshJitter spreads the regular refresh by +/- this
+	// fraction of the interval, so replicas started together (a rolling
+	// deploy, a fleet restart) do not keep hitting the API in the same second.
+	webshareDirectRefreshJitter = 0.1
+)
+
+// webshareDirectRetryBase / webshareDirectRetryMax shape the retry after a
+// FAILED pool fetch (network error, 429, 5xx, undecodable body, zero valid
+// entries): the first retry comes after about the base, doubling up to the
+// cap, with jitter. Without them a failed initial fetch left the pool empty
+// for a whole refresh interval (10 minutes): traced 2026-10-17, one replica of
+// five answered 503 egress_unavailable from 12:37 to 12:48 after the Webshare
+// API throttled five replicas that restarted within three minutes. Vars so
+// tests can shrink them.
+var (
+	webshareDirectRetryBase = time.Second
+	webshareDirectRetryMax  = time.Minute
 )
 
 // webshareDirectDefaultBaseURL is a var (not const) so internal tests can
@@ -116,7 +141,28 @@ type webshareDirectSupplier struct {
 	list []*webshareDirectEntry
 	idx  atomic.Uint64
 
-	stop chan struct{}
+	// Refresh bookkeeping (see refreshLoop and poolSnapshot).
+	refreshOK      atomic.Uint64
+	refreshFail    atomic.Uint64
+	consecFail     atomic.Int32
+	lastOKUnixNano atomic.Int64 // 0 = never succeeded
+
+	// retryBase / retryMax are webshareDirectRetryBase / webshareDirectRetryMax as they were at
+	// construction (zero = the package defaults).
+	retryBase, retryMax time.Duration
+
+	// rand01 returns a float in [0,1); nil uses math/rand/v2. Tests pin it.
+	rand01 func() float64
+
+	stop     chan struct{}
+	stopOnce sync.Once
+}
+
+// Close stops the background refresh loop. Suppliers live for the whole life of a service,
+// so production code never needs it; tests and long-running tools that build suppliers
+// repeatedly do.
+func (s *webshareDirectSupplier) Close() {
+	s.stopOnce.Do(func() { close(s.stop) })
 }
 
 func (s *webshareDirectSupplier) Name() string { return "webshare_direct" }
@@ -244,6 +290,8 @@ func newWebshareDirectSupplier(cfg Config) Supplier {
 		refreshInterval: webshareDirectDefaultRefreshInterval,
 		httpClient:      &http.Client{Timeout: webshareDirectDefaultHTTPTimeout},
 		rules:           parseNoProxy(cfg.NoProxy),
+		retryBase:       webshareDirectRetryBase,
+		retryMax:        webshareDirectRetryMax,
 		stop:            make(chan struct{}),
 	}
 	activeWebshareDirectSupplier.Store(s)
@@ -345,7 +393,11 @@ func (s *webshareDirectSupplier) fetchPage(ctx context.Context, pageURL string) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("webshare API returned status %d for %s", resp.StatusCode, pageURL)
+		return nil, &webshareAPIError{
+			Status:     resp.StatusCode,
+			URL:        pageURL,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+		}
 	}
 	var page webshareListResponse
 	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
@@ -354,29 +406,116 @@ func (s *webshareDirectSupplier) fetchPage(ctx context.Context, pageURL string) 
 	return &page, nil
 }
 
-func (s *webshareDirectSupplier) refreshLoop() {
-	// The initial fetch itself, not just subsequent ones -- this is what
-	// actually makes newWebshareDirectSupplier's early return non-blocking
-	// mean anything. It ran the fetch synchronously in the constructor
-	// before; moving the goroutine boundary without also moving this call
-	// would leave the pool empty until the FIRST ticker fires, silently
-	// (webshareDirectDefaultRefreshInterval is 10 minutes by default) --
-	// caught by TestWebshareDirect_FetchesAndRoundRobins timing out
-	// waiting for a non-empty ProxyURL() during review of this change.
-	ctx, cancel := context.WithTimeout(context.Background(), webshareDirectRefreshBudget)
-	_ = s.refresh(ctx) // best-effort; ProxyURL() returns "" until a later refresh succeeds
-	cancel()
+// webshareAPIError is a non-200 answer from the Webshare account API.
+type webshareAPIError struct {
+	Status     int
+	URL        string
+	RetryAfter time.Duration // from the Retry-After header; 0 when absent or unusable
+}
 
-	ticker := time.NewTicker(s.refreshInterval)
-	defer ticker.Stop()
+func (e *webshareAPIError) Error() string {
+	return fmt.Sprintf("webshare API returned status %d for %s", e.Status, e.URL)
+}
+
+// parseRetryAfter reads a Retry-After header (delay seconds or an HTTP date).
+// Anything unusable is 0; the value is capped at webshareDirectMaxRetryAfter.
+func parseRetryAfter(v string, now time.Time) time.Duration {
+	if v == "" {
+		return 0
+	}
+	var d time.Duration
+	if secs, err := strconv.Atoi(v); err == nil {
+		d = time.Duration(secs) * time.Second
+	} else if t, err := http.ParseTime(v); err == nil {
+		d = t.Sub(now)
+	}
+	if d < 0 {
+		return 0
+	}
+	return min(d, webshareDirectMaxRetryAfter)
+}
+
+func (s *webshareDirectSupplier) random() float64 {
+	if s.rand01 != nil {
+		return s.rand01()
+	}
+	return rand.Float64()
+}
+
+// nextDelay is how long refreshLoop waits before the next pool fetch.
+//
+//   - after a success: the refresh interval, spread by +/- webshareDirectRefreshJitter;
+//   - after a failure: exponential backoff from webshareDirectRetryBase (doubling per
+//     consecutive failure) up to webshareDirectRetryMax and never beyond the refresh
+//     interval, with "equal jitter" (half fixed, half random) so replicas that failed
+//     together do not retry together, and at least the API's own Retry-After.
+func (s *webshareDirectSupplier) nextDelay(err error, consecutiveFailures int) time.Duration {
+	if err == nil {
+		d := float64(s.refreshInterval)
+		return time.Duration(d * (1 + webshareDirectRefreshJitter*(2*s.random()-1)))
+	}
+	base, ceiling := s.retryBase, s.retryMax
+	if base <= 0 {
+		base = webshareDirectRetryBase
+	}
+	if ceiling <= 0 {
+		ceiling = webshareDirectRetryMax
+	}
+	backoff := base
+	for i := 1; i < consecutiveFailures && backoff < ceiling; i++ {
+		backoff *= 2
+	}
+	backoff = min(backoff, ceiling, s.refreshInterval)
+	d := backoff/2 + time.Duration(float64(backoff/2)*s.random())
+	var apiErr *webshareAPIError
+	if errors.As(err, &apiErr) && apiErr.RetryAfter > d {
+		d = apiErr.RetryAfter
+	}
+	return min(d, max(s.refreshInterval, webshareDirectMaxRetryAfter))
+}
+
+// refreshOnce runs one bounded fetch and records the outcome for the metrics.
+func (s *webshareDirectSupplier) refreshOnce() error {
+	ctx, cancel := context.WithTimeout(context.Background(), webshareDirectRefreshBudget)
+	defer cancel()
+	err := s.refresh(ctx)
+	if err != nil {
+		s.refreshFail.Add(1)
+		n := s.consecFail.Add(1)
+		if n <= 3 || n%10 == 0 {
+			log.Printf("proxysupplier: webshare_direct pool refresh failed (%d in a row, pool keeps %d entries): %v", n, s.poolLen(), err)
+		}
+		return err
+	}
+	if n := s.consecFail.Swap(0); n > 0 {
+		log.Printf("proxysupplier: webshare_direct pool refresh recovered after %d failed attempts (%d entries)", n, s.poolLen())
+	}
+	s.refreshOK.Add(1)
+	s.lastOKUnixNano.Store(time.Now().UnixNano())
+	return nil
+}
+
+func (s *webshareDirectSupplier) poolLen() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.list)
+}
+
+// refreshLoop keeps the pool fresh. The first fetch happens at once and a failed
+// one (the pool is then empty, so ProxyURL() answers "" and an egress that must not
+// go direct fails closed) is retried with backoff instead of waiting out a whole
+// refresh interval; after a failure with a live pool the previous list stays in use.
+func (s *webshareDirectSupplier) refreshLoop() {
+	err := s.refreshOnce()
+	timer := time.NewTimer(s.nextDelay(err, int(s.consecFail.Load())))
+	defer timer.Stop()
 	for {
 		select {
 		case <-s.stop:
 			return
-		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), webshareDirectRefreshBudget)
-			_ = s.refresh(ctx) // best-effort; keep the previous list on failure
-			cancel()
+		case <-timer.C:
+			err = s.refreshOnce()
+			timer.Reset(s.nextDelay(err, int(s.consecFail.Load())))
 		}
 	}
 }
