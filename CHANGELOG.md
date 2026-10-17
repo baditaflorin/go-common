@@ -35,6 +35,28 @@
     ok|guard_denied|guard_error|no_upstream|upstream_error|overload|byte_cap|bad_request), `egressproxy_bytes_total{direction}`,
     `egressproxy_active_tunnels`, `egressproxy_upstream_attempts_total{result}`, `egressproxy_request_duration_seconds{kind}`. No host, upstream
     address or credential is ever a label, and logs name only the upstream's host:port, scheme and a result (rate limited per cause).
+- `chromeguard` package: keeps a Chromium process tree from taking its container down (no chromedp or browser-driver dependency; the service hands
+  it the browsers' pids). Reads a proc filesystem whose root is `/proc` on Linux and none elsewhere (readers return `ErrUnsupported`, `Monitor.Run`
+  idles), or any root given explicitly, which is how the tests run on a fake tree on every platform.
+  - `Tree(rootPID)` / `TreeRSS(rootPID)` (and the same on `NewInspector(procRoot)`): the browser root and its descendants with pid, ppid, executable,
+    args, role from `--type=` (browser, renderer, gpu, utility, zygote, crashpad, other), `RSSBytes` and, when `smaps_rollup` is readable,
+    `PSSBytes`. Chromium rewrites the argument area of its child processes into one space-joined string, which is split back into arguments.
+    Summed RSS double counts pages shared between processes (the Chromium binary, libraries, shared memory), so a tree's RSS total overstates it;
+    PSS does not (`SumRSS`, `SumPSS`): a live Alpine Chromium 142 tree with three renderers summed to 726 MiB RSS and 142 MiB PSS.
+  - `SetOOMScoreAdj(pid, adj)` raises `oom_score_adj` and never lowers it (raising is allowed unprivileged); `AdjustRenderers(rootPID, adj)` raises it
+    (default 800) for renderer, gpu, utility and zygote children once per process (keyed by pid and start time, so pid reuse is a new process), so
+    the kernel's OOM killer picks a renderer before the browser or the Go service.
+  - `NewMonitor(MonitorConfig)` + `Run(ctx)`: each tick raises the OOM score of new children, SIGKILLs any renderer above `RendererMaxRSS` (one
+    pid, re-checked right before the kill, never a watched browser, init or the calling process) and calls `OnBrowserOverLimit` once per episode
+    when a browser's whole tree exceeds `BrowserMaxRSS` (the episode ends below 90% of it) so the service can drain and recycle that browser.
+    `UsePSS` compares PSS instead of RSS. Metrics on `MonitorConfig.Registerer` (default `promx.Registry()`): `chromeguard_browser_rss_bytes{browser}`
+    (index, at most 16), `chromeguard_renderers`, `chromeguard_renderer_kills_total`, `chromeguard_oom_adjusted_total`,
+    `chromeguard_scan_errors_total`. Start from `DefaultMonitorConfig()` (5 s, renderers killed above 1 GiB, OOM 800): a bare `MonitorConfig`
+    literal has `RendererMaxRSS` 0, which disables killing.
+  - `Size(cgroup.Snapshot, SizingOptions) Sizing{Browsers, Tabs, Reason}`: tabs = clamp(min(CPUQuotaCores x 2.5, (MemLimit x 0.7 - 200 MiB x browsers) /
+    250 MiB), 4, 40), browsers = clamp(ceil(tabs / 6), 1, 6), taking the largest tab count whose memory bill fits; a nil quota or limit falls back to
+    `HostCPUs` / `HostMemBytes`, then `runtime.NumCPU()` and 4 GiB. The function is `Size` rather than `Sizing` because the result type has that name.
+    `Reason` is one line for the start-up log.
 
 ## [0.102.63] - 2026-10-17
 
