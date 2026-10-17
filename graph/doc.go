@@ -56,6 +56,15 @@
 // variable and saying emission is off; it never logs a key, secret or the
 // rejected value, and Record itself never logs: it does one atomic add.
 //
+// Origin of events. Replicas of one service share a service id, so the id alone
+// cannot say which server or VM a batch came from. When FLEET_NODE is set the
+// sender adds the X-Fleet-Node header to each batch POST (graph.NodeHeader,
+// graph.Node()). It is deliberately a header: the collector decodes batches with
+// DisallowUnknownFields, so a new JSON field would make an older collector
+// reject every batch from a newer sender, whereas an unknown header is ignored.
+// The value is self-asserted diagnostic metadata and is never used for
+// authorization.
+//
 // A batch the collector refuses for its content (403, 400, 413, 415, 422) is
 // dropped and counted in Counters.BatchesRejected instead of being retried
 // forever; 401, 408, 429 and 5xx keep the batch for a later flush.
@@ -84,6 +93,14 @@
 //	                       Docker hostnames; it changes telemetry only.
 //	GRAPH_TRUSTED_CALLER_IPS — optional comma-separated literal IP allowlist
 //	                            for custom gateways stamping X-Auth-User.
+//	FLEET_NODE           — optional logical host (the VM) this process runs on,
+//	                       as named in the host-placement policy, e.g.
+//	                       "dockerhost" or "infer-runtime"; injected per host
+//	                       and per pool replica by the deploy tooling. Sent as
+//	                       the X-Fleet-Node header on every batch so the
+//	                       collector can say which server/VM events come from.
+//	                       Lowercase DNS label; invalid values are ignored with
+//	                       one log line. It is a header, never a JSON field.
 //	GRAPH_BUFFER_SIZE    — ring capacity (default 10000 events).
 //	GRAPH_FLUSH_INTERVAL — flush cadence in seconds (default 10).
 //	GRAPH_FLUSH_BATCH    — max events per flush (default 500).

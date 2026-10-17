@@ -25,10 +25,12 @@ type config struct {
 	// trustedCallerIPs is an exact-host allowlist for gateways that stamp
 	// X-Auth-User after keystore verification in custom HTTP servers.
 	trustedCallerIPs []netip.Addr
-	sampleRate       float64
-	bufferSize       int
-	flushInterval    time.Duration
-	flushBatch       int
+	// node is the logical host this process runs on (FLEET_NODE), sent as the X-Fleet-Node header.
+	node          string
+	sampleRate    float64
+	bufferSize    int
+	flushInterval time.Duration
+	flushBatch    int
 }
 
 // loadConfig reads env vars once. Called from initOnce.
@@ -48,6 +50,7 @@ func loadConfig() config {
 		readerAPIKey:     strings.TrimSpace(os.Getenv("GRAPH_READER_API_KEY")),
 		targetAliases:    parseTargetAliases(os.Getenv("GRAPH_TARGET_ALIASES")),
 		trustedCallerIPs: parseTrustedCallerIPs(os.Getenv("GRAPH_TRUSTED_CALLER_IPS")),
+		node:             loadNode(),
 		sampleRate:       parseFloatEnv("GRAPH_SAMPLE_RATE", 1.0),
 		bufferSize:       parseIntEnv("GRAPH_BUFFER_SIZE", 10000),
 		flushInterval:    time.Duration(parseIntEnv("GRAPH_FLUSH_INTERVAL", 10)) * time.Second,
