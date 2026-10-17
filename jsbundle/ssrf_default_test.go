@@ -33,7 +33,11 @@ func TestRecoverDefaultClientRefusesInternalTargets(t *testing.T) {
 }
 
 func TestDefaultClientIsSharedAndHasATimeout(t *testing.T) {
-	a, b := guardedDefaultClient(), guardedDefaultClient()
+	a, errA := guardedDefaultClient()
+	b, errB := guardedDefaultClient()
+	if errA != nil || errB != nil {
+		t.Fatalf("guardedDefaultClient() errors: %v, %v", errA, errB)
+	}
 	if a != b {
 		t.Fatal("the default client should be built once and shared")
 	}
