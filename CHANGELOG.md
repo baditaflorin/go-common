@@ -25,6 +25,8 @@ Metrics-wiring fixes for the problems the wave-4 observability review found ([do
 
 ### Fixed
 
+- `obs.Init()` before `server.New` left the debug server's `/metrics` mirror empty for the life of the process (0 bytes against 16 KB when `Init` came after), because it looked
+  the `promx` registry up once, when it started, and `promx.Init` had not run yet. It looks the registry up on every scrape now, so the order does not matter. pprof was not affected.
 - The comment on `Server.PromHTTPCollectors` said a caller could supply a custom `RouteFunc` through it. Replacing the field after `New` never did anything; the comment now
   points to `WithPromRoute`.
 

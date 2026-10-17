@@ -18,7 +18,7 @@ listed under [Known limits](#known-limits).
 | See where one slow request spent its time | [`reqstats`](../reqstats/) | Read the `Server-Timing` / `X-Request-Stats` response headers; add phases with `defer reqstats.From(ctx).Phase("name")()`. |
 | Follow one request across services | [`telemetry`](../telemetry/) | Propagation is always on; spans are exported only once an OTLP endpoint or the fleet vault credential is configured. |
 | Search logs by service, version, trace id | [`logx`](../logx/) | `LOG_FORMAT=json` or `server.WithStructuredLogs()`. Off by default. |
-| Find a leak or a CPU hot spot in one live process | [`obs`](../obs/) | Call `obs.Init()` after `server.New` (loopback pprof; see [Known limits](#known-limits)). For continuous profiles use [`profiling`](../profiling/), see [profiling.md](profiling.md). |
+| Find a leak or a CPU hot spot in one live process | [`obs`](../obs/) | Call `obs.Init()` in `main` (loopback pprof; before v0.102.74 it had to come after `server.New`, see [Known limits](#known-limits)). For continuous profiles use [`profiling`](../profiling/), see [profiling.md](profiling.md). |
 | Know which services call which | [`graph`](../graph/) | `GRAPH_ENABLED=true` plus a collector URL and writer key. Off by default. |
 | See what environment a process is really running with | [`env`](../env/) registry | The start-up check already logs problems; `/debug/config` on the `obs` debug server lists declared variables, redacted; [ENV.md](ENV.md) lists them all. |
 | Read a snapshot with `curl`, with no Prometheus | [`metrics`](../metrics/) | Nothing; `GET /metrics/json` (behind whatever auth the service installed). See [the `metrics` question](#is-metrics-superseded-by-promx). |
@@ -271,11 +271,13 @@ not surprised. An item says when a later release fixed it; the rest are still tr
 
 Wiring order:
 
-- `obs.Init()` before `server.New` leaves the debug server's `/metrics` mirror
+- `obs.Init()` before `server.New` left the debug server's `/metrics` mirror
   empty for the life of the process: it captured the registry that existed when
   it started, and `promx.Init` had not run. `server.Run` calls `New` and `Start`
-  itself, so the right order can only be had from a custom `server.Option`
-  (options run after the collectors are wired). pprof is not affected.
+  itself, so the right order could only be had from a custom `server.Option`
+  (options run after the collectors are wired). pprof was not affected.
+  **Fixed in v0.102.74:** the mirror looks the registry up on every scrape, so
+  `obs.Init()` can come before or after `server.New`.
 - `promx.Registry()` and `promx.Handler()` before `promx.Init` hand back a
   throwaway registry. Anything you register on it is never served. Register
   after `server.New` returns.
