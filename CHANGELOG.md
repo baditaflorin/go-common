@@ -61,6 +61,9 @@ targets found are fixed. No exported API changed.
   clone (Woodpecker's default is shallow and treeless, which has neither `HEAD^` nor a merge base) and runs for pull requests and pushes to `main` only, so a change is built once,
   not once as a push and again as a pull request. The vuln step is pinned to `golang:1.26.9`: the agents hold different 1.26 patches and govulncheck's standard-library findings
   differ between them. The pipeline passes `woodpecker-cli lint` for server v3.17.0.
+  - `scripts/fuzz.sh` retries a target whose run ended in the Go fuzz engine's own `context deadline exceeded` with no failing input (seen on roughly one target in ten
+    in CI: the engine's timer fires while a worker is still busy), up to three attempts. A run that wrote a failing input is a real finding and is never retried.
+    `scripts/fuzz-selftest.sh` checks both paths with a fake `go`.
   - `scripts/vuln-check.sh` runs `govulncheck` on a supported Go (`golang:1.26`) and fails on any reachable vulnerability that is not in
     `scripts/govulncheck-allow.txt`, or whose entry there has expired. It starts with four entries: GO-2026-6603, -6611, -6612 and -6617, HTTP/2
     issues reachable through `golang.org/x/net@v0.58.0`. The fix is x/net v0.60.0, which requires go 1.26.0 (so did v0.59.0 and later); taking it raises

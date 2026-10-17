@@ -33,6 +33,8 @@ steps:
       - go build ./...
       # Every package needs a doc comment, and docs/PACKAGES.md must match them.
       - go run ./scripts/pkgindex -check
+      # fuzz.sh retries the Go fuzz engine's spurious timeout; prove it still does.
+      - scripts/fuzz-selftest.sh
     when:
       - event: pull_request
       - event: push
