@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.102.73] - 2026-10-18
+
+`server.Run` and `server.RunTier` no longer let a service that cannot serve end with exit status 0 and no log line.
+
+### Changed
+
+- **BREAKING (behavioural):** `server.Run` and `server.RunTier` now log the error that `Server.Start` returns and exit with status 1. Before, they dropped it: `main` returned and the
+  process ended with status 0 and no message, so a supervisor read a service whose port was taken as having stopped cleanly. This covers a listen failure and a drain that runs out of
+  time after SIGTERM (`Start` already logged that one and returned the error; the process now ends with status 1 instead of 0). A restart policy that restarts only on failure
+  (Docker `restart: on-failure`) will now restart such a service, so a port that stays taken becomes a restart loop with the reason in the log, where it used to be a silent exit.
+  A service that calls `srv.Start()` itself is unchanged: with `WithGracefulDrain` a listen failure already ended the process with status 1 (`log.Fatalf`), and without it `Start`
+  returns the error to its caller, as its documentation says.
+
+### Fixed
+
+- The `Server.Start` documentation said `Run` and `RunTier` ignore the error `Start` returns; it now says what they do.
+
 ## [0.102.72] - 2026-10-17
 
 Wave 4 of the go-common hardening: a CI budget on what the small packages may import, a guide to the observability packages, a count of which packages are used, and two
