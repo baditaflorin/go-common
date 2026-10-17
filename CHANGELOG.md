@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.102.68] - 2026-10-17
+## [0.102.69] - 2026-10-17
 
 Wave 1 of the go-common hardening: CI gates, fuzz targets, an API policy, a shared lint config and generated docs. Two bugs the new fuzz
 targets found are fixed. No exported API changed.
@@ -41,6 +41,16 @@ targets found are fixed. No exported API changed.
   `go run ./scripts/pkgindex` (CI fails when it is stale or a package has no comment), and runnable `Example` functions for `errors`, `env`, `ua`,
   `cache`, `clock`, `retry`, `nullify`, `wordbound`, `header`, `response`, `pagination`, `validate`, `safehttp` and `server`.
 - `safehttp` package doc comment (`safehttp/doc.go`); it had none.
+
+## [0.102.68] - 2026-10-17
+
+### Fixed
+
+- The `graph` tests no longer talk to the production collector. Six tests (and two more through `setGraphEnv`) configured
+  `https://fleet-graph.0exec.com` with a fake writer key, and the "fully configured, valid id" case really flushed an event on
+  `Shutdown`: every go-common test run on a builder, CI worker or laptop sent `POST /events` as `domain-example` and got 401
+  (38 in 10 hours on 2026-10-17, from five hosts, which looked like a fleet writer without a valid key). They use a loopback
+  address that refuses the connection (`unreachableCollectorURL`). Test-only; no change to the package.
 
 ## [0.102.67] - 2026-10-17
 
