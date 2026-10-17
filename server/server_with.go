@@ -346,7 +346,10 @@ func WithAgentFromEmbed(fsys embed.FS, name string) Option {
 		s.AgentContract = c
 		data, err := c.JSON()
 		if err != nil {
-			panic("agent contract serialization failed: " + err.Error())
+			// Not reachable: c was just decoded from JSON, and everything
+			// a decode produces (strings, finite numbers, maps, slices)
+			// encodes again. The panic marks a broken invariant.
+			panic("agent: re-encoding the contract just decoded from the embedded file failed (cannot happen; a go-common bug): " + err.Error())
 		}
 		s.Mux.HandleFunc("/agent.json", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
