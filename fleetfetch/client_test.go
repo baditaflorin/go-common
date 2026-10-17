@@ -10,10 +10,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/baditaflorin/go-common/egress"
 	"github.com/baditaflorin/go-common/header"
 	"github.com/baditaflorin/go-common/meshresult"
 	"github.com/baditaflorin/go-common/safehttp"
@@ -224,8 +226,21 @@ func TestCacheProxyForURLUsesProxyOnlyForHTTPS(t *testing.T) {
 	if got := cacheProxyForURL("http://10.10.10.20:18205"); got != nil {
 		t.Fatal("private HTTP cache URL must bypass environment proxy")
 	}
-	if got := cacheProxyForURL("https://infrastructure-fetch-cache.0exec.com"); got == nil {
-		t.Fatal("public HTTPS cache URL must use environment proxy")
+	got := cacheProxyForURL("https://infrastructure-fetch-cache.0exec.com")
+	if got == nil {
+		t.Fatal("HTTPS cache URL must carry the egress proxy policy")
+	}
+	// The cache is one of our own services: reached directly even though the
+	// call crosses hosts, whatever NO_PROXY the host happens to carry. Pin that
+	// the policy is the shared egress rule (not http.ProxyFromEnvironment).
+	if reflect.ValueOf(got).Pointer() != reflect.ValueOf(egress.Proxy).Pointer() {
+		t.Fatal("HTTPS cache client must use egress.Proxy")
+	}
+	for _, target := range []string{"https://infrastructure-fetch-cache.0exec.com/fetch", "https://fetch.0crawl.com/fetch"} {
+		req, _ := http.NewRequest(http.MethodGet, target, nil)
+		if proxy, err := got(req); err != nil || proxy != nil {
+			t.Fatalf("proxy for %s = %v, %v; want a direct connection", target, proxy, err)
+		}
 	}
 }
 

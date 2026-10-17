@@ -12,6 +12,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/baditaflorin/go-common/egress"
 )
 
 // isTLSInternalAlert matches the TLS alert 80 ("internal error") that
@@ -469,6 +471,10 @@ func fleetRequireProxyEnv() bool {
 	return v == "1" || v == "true" || v == "yes"
 }
 
+// envProxy is the standard environment proxy lookup; a variable so tests are
+// independent of http.ProxyFromEnvironment's process-wide cache.
+var envProxy = http.ProxyFromEnvironment
+
 // proxySkipCache remembers which hostnames resolve to private addresses so
 // the DNS lookup only happens once per unique host across all clients.
 var (
@@ -487,12 +493,18 @@ var (
 func proxySkippingPrivate(req *http.Request) (*url.URL, error) {
 	host := req.URL.Hostname()
 
+	// Our own destinations (fleet domains, private/loopback/tailnet addresses,
+	// bare container names) never use the egress proxy, whatever NO_PROXY says.
+	if egress.Direct(host) {
+		return nil, nil
+	}
+
 	// IP literal fast-path.
 	if ip := net.ParseIP(host); ip != nil {
 		if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
 			return nil, nil
 		}
-		return http.ProxyFromEnvironment(req)
+		return envProxy(req)
 	}
 
 	// Well-known Docker-internal names that may not resolve on Linux.
@@ -508,7 +520,7 @@ func proxySkippingPrivate(req *http.Request) (*url.URL, error) {
 		if skip {
 			return nil, nil
 		}
-		return http.ProxyFromEnvironment(req)
+		return envProxy(req)
 	}
 
 	// Resolve and check whether all addresses are private.
@@ -530,7 +542,7 @@ func proxySkippingPrivate(req *http.Request) (*url.URL, error) {
 	if skip {
 		return nil, nil
 	}
-	return http.ProxyFromEnvironment(req)
+	return envProxy(req)
 }
 
 // newBaseTransport builds the primary guarded *http.Transport that

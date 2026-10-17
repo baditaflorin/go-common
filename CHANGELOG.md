@@ -1,18 +1,36 @@
 # Changelog
 
+## [0.102.60] - 2026-10-17
+
+### Added
+
+- `egress` package: one rule for which requests use the egress proxy, by destination instead of by each host's `NO_PROXY`. Our own destinations are
+  always direct: the fleet apex domains and their subdomains (`0exec.com`, `0crawl.com`, `0own.com`, `0docker.com`, `0infer.com`, matched on a
+  label boundary so `evil0exec.com` is not ours), private / loopback / link-local / tailnet (100.64.0.0/10) addresses, `localhost`,
+  `host.docker.internal` and bare container names. Everything else follows the standard environment proxy (`http.ProxyFromEnvironment`, so
+  `NO_PROXY` still applies). `FLEET_DIRECT_DOMAINS` (comma-separated, each with a dot) adds domains without a release. Exposes `egress.Direct`,
+  `egress.Proxy` (an `http.Transport.Proxy` function) and `egress.Transport()` (a clone of `http.DefaultTransport` using it).
+
+### Changed
+
+- `safehttp`, the `fleetfetch` cross-host cache client and `ratecoord` use the egress rule. Before, a host whose `NO_PROXY` lacked `.0exec.com`
+  (the infer-runtime pool replicas) sent calls to our own services, for example `infrastructure-fetch-cache.0exec.com`, through the external
+  scraping proxy. Third-party destinations are unchanged.
+- **BREAKING (only for 0.102.59):** `GRAPH_USE_EGRESS_PROXY` is removed; `graph` is always direct. Nothing used it.
+- `golang.org/x/net` is an indirect dependency again (the Graph client no longer builds a proxy function from the environment).
+
 ## [0.102.59] - 2026-10-17
 
 ### Changed
 
 - **Behaviour change:** `graph` connects to the collector directly (batches and lookups) instead of through the egress proxy, and ignores
-  `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` for that traffic. This reverses the routing added in 0.102.46 (#149). Measured on pool replicas the
-  proxy hop cost 18-27% failed batches (api-first 294 sent / 66 failed, domain-deployment-fingerprint 1555 / 226, ad-density 1307 / 173; the
-  collector side showed 499 client timeouts and no 401/403), while a direct POST to `fleet-graph.0exec.com` answers in 18-87 ms from all five pool
-  hosts and in about 50 ms from inside a container. It also stops spending egress-proxy bandwidth on roughly 20k telemetry batches a day and lets the
-  collector see the real source host.
-- A host with no direct route to the collector sets `GRAPH_USE_EGRESS_PROXY=true` to get the 0.102.46 behaviour back (the configured proxy is used
-  even when `NO_PROXY` matches `.0exec.com`; loopback development collectors stay direct). Redirects stay disabled either way, so the writer key
-  stays bound to the canonical endpoint. A service only changes behaviour once it is built on this version.
+  `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` for that traffic. This reverses the routing added in 0.102.46 (#149).
+- Correction (added in 0.102.60): the failed batches seen on pool replicas (18-27%) were collector overload, not the proxy hop. The collector's
+  `/brief` handler was starving `POST /events`; it was fixed in go-fleet-graph on 2026-10-16 23:38Z, after which proxy-path senders failed about
+  1.4% outside short collector 503 bursts. Direct delivery is kept because the collector is one of our own services (no reason to send it through
+  the external proxy), it gives the collector the real source host, and it stops spending proxy bandwidth on roughly 20k telemetry batches a day.
+- 0.102.59 also added `GRAPH_USE_EGRESS_PROXY=true` to restore the old routing; 0.102.60 removes it (no host needs it: the collector is reachable
+  directly from every runtime probed).
 
 ## [0.102.58] - 2026-10-16
 

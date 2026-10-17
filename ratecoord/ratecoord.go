@@ -40,6 +40,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/baditaflorin/go-common/egress"
 	"golang.org/x/time/rate"
 )
 
@@ -94,7 +95,7 @@ func New() *Client {
 	return &Client{
 		BaseURL: base,
 		APIKey:  apiKey,
-		HTTP:    &http.Client{Timeout: 15 * time.Second},
+		HTTP:    &http.Client{Timeout: 15 * time.Second, Transport: egress.Transport()},
 		fb:      map[string]*rate.Limiter{},
 		fbRPS:   rps,
 		fbBurst: burst,
