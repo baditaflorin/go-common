@@ -1,0 +1,38 @@
+# golangci-lint (v2) config for go-common itself. Consumers use lint/golangci.yml.
+#
+# CI runs this with --new-from-rev, so only findings in code a change touches
+# fail the build; the legacy findings (mostly style and dead code) are tracked
+# separately and do not block anyone. Run it over everything with:
+#
+#   golangci-lint run ./...
+version: "2"
+
+run:
+  timeout: 10m
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  settings:
+    staticcheck:
+      # Keep the bug (SA), simplification (S) and deprecation checks. ST (style)
+      # and QF (suggested rewrites) are advice rather than defects and make up
+      # most of the legacy noise.
+      checks: ["all", "-ST*", "-QF*"]
+    govet:
+      # The `inline` analyzer arrived with Go 1.26's vet; CI vets with 1.25, so
+      # leave it to the toolchain's own `go vet` step.
+      disable:
+        - inline
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+      - legacy
+    rules:
+      # A test handler that cannot encode its canned reply has already failed.
+      - path: _test\.go
+        linters:
+          - errcheck

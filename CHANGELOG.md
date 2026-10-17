@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.102.69] - 2026-10-17
+
+Wave 1 of the go-common hardening: CI gates, fuzz targets, an API policy, a shared lint config and generated docs. Three bugs the new fuzz
+targets found are fixed (one changes behaviour: see `validate` below). No exported API changed.
+
+### Fixed
+
+- `wordbound.ContainsToken` no longer loops forever when `token` is empty. An empty token matches at every offset without ever advancing,
+  so on any text that begins with a word character the scan spun until the process was killed. It now reports no match. This changes
+  `ContainsToken("", "")` from `true` to `false`. Found by `FuzzContainsToken`; `TestContainsTokenEmptyToken` pins it.
+- `egressproxy`: an upstream proxy URL whose host cannot be dialed (for example `//]`, which `url.Parse` accepts) is rejected when it is
+  parsed, instead of producing an address like `]:80` that fails on every connection. Found by `FuzzParseUpstream`; the crashing input is
+  committed under `egressproxy/testdata/fuzz/` and replayed by `go test`.
+- **BREAKING (behavioural):** `validate`'s `pattern=` tag now requires the whole value to match, as its documentation has said since the file was created ("anchored").
+  It was applied with an unanchored match, so `pattern=[A-Z]{2}[0-9]{3}` accepted `AA0000` and anything that merely contained a match (`<script>AA123`), and an alternation
+  such as `pattern=a|b` accepted `abc`. The tag is now wrapped in `^(?:...)$`: one that already has `^...$` is unaffected, one that relied on substring matching starts
+  rejecting. No `pattern=` tag exists in any local repository outside go-common's own tests. Found by `FuzzBindBytes` in the first real CI run of the fuzz step on a later
+  PR in this series; the crashing input is committed under `validate/testdata/fuzz/` and replayed by `go test`.
+
+### Added
+
+- CI (`.woodpecker.yml`): `go test -race`, `golangci-lint` (new findings only, `.golangci.yml`), `govulncheck`, an exported-API compatibility
+  check (`scripts/apidiff-check.sh`), a 5 s fuzz smoke run on pull requests, and a package-index check. The existing `validate` step is unchanged
+  apart from the index check. Tool versions are pinned in `scripts/tool-versions.sh`; the lint image is pinned by digest. On a pull request the lint
+  and API checks compare with the merge base, not the target branch tip, so a main that moved on is not read as the PR removing its additions. The pipeline takes a full
+  clone (Woodpecker's default is shallow and treeless, which has neither `HEAD^` nor a merge base) and runs for pull requests and pushes to `main` only, so a change is built once,
+  not once as a push and again as a pull request. The vuln step is pinned to `golang:1.26.9`: the agents hold different 1.26 patches and govulncheck's standard-library findings
+  differ between them. The pipeline passes `woodpecker-cli lint` for server v3.17.0.
+  - `scripts/fuzz.sh` retries a target whose run ended in the Go fuzz engine's own `context deadline exceeded` with no failing input (seen on roughly one target in ten
+    in CI: the engine's timer fires while a worker is still busy), up to three attempts. A run that wrote a failing input is a real finding and is never retried.
+    `scripts/fuzz-selftest.sh` checks both paths with a fake `go`.
+  - `scripts/vuln-check.sh` runs `govulncheck` on a supported Go (`golang:1.26`) and fails on any reachable vulnerability that is not in
+    `scripts/govulncheck-allow.txt`, or whose entry there has expired. It starts with four entries: GO-2026-6603, -6611, -6612 and -6617, HTTP/2
+    issues reachable through `golang.org/x/net@v0.58.0`. The fix is x/net v0.60.0, which requires go 1.26.0 (so did v0.59.0 and later); taking it raises
+    the minimum Go version of every consumer, which is a fleet decision and not part of this change. The entries expire on 2026-11-30.
+    Separately, on Go 1.25.14, the toolchain CI used until now, govulncheck reports 11 reachable standard-library vulnerabilities whose fixes exist
+    only in Go 1.26.9.
+- `docs/api-policy.md`: what a release promises, when a change must be marked **BREAKING:**, and the deprecation rules. The `apidiff` gate fails an
+  incompatible exported-API change unless this change's `CHANGELOG.md` entry says BREAKING.
+- 17 fuzz targets in `dataformat`, `jsbundle`, `pagination`, `validate`, `wordbound`, `safehttp`, `egressproxy` and `policyeval`, and
+  `scripts/fuzz.sh [fuzztime]` to run them all. `FuzzIsBlocked` checks `safehttp.IsBlocked` against an independent list of the documented ranges,
+  including IPv4-mapped IPv6 forms; it found nothing in a 15 s run per target.
+- `lint/golangci.yml`: a shared golangci-lint v2 config for services (forbids `http.Get`/`DefaultClient`/`ListenAndServe`, adds `noctx` and
+  `bodyclose`, and keeps staticcheck's SA1019 so deprecations reach consumers). Use it from the pinned module, see `lint/README.md`.
+  `lint/selftest.sh` and the `lint/fixture` module keep the rules honest.
+- `README.md` with a "which package do I use?" table, `docs/PACKAGES.md` generated from the packages' doc comments by
+  `go run ./scripts/pkgindex` (CI fails when it is stale or a package has no comment), and runnable `Example` functions for `errors`, `env`, `ua`,
+  `cache`, `clock`, `retry`, `nullify`, `wordbound`, `header`, `response`, `pagination`, `validate`, `safehttp` and `server`.
+- `safehttp` package doc comment (`safehttp/doc.go`); it had none.
+
 ## [0.102.68] - 2026-10-17
 
 ### Fixed

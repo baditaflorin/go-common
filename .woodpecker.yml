@@ -1,6 +1,25 @@
 # Woodpecker CI (services-registry ADR-0035). go-common is a library rather
 # than a deployable container, so its gate covers the root Go module and has
 # no container/compose smoke stage.
+#
+# Pipelines run for pull requests, and for pushes to main; a push to a PR branch
+# is covered by its PR run, so each change is built once, not twice.
+#
+# Steps run in order. `validate` keeps its original name and commands so
+# anything keyed on it is unaffected; the rest were added by the wave-1 hardening
+# (race, lint, vuln, API compatibility, fuzz smoke, package index). Tool versions
+# live in scripts/tool-versions.sh, except the lint image tag below, which has to
+# be kept equal to GOLANGCI_LINT_VERSION by hand.
+# Woodpecker's default clone is shallow (depth 1) and treeless. That has no HEAD^
+# and no merge base, so the lint, API and benchmark checks cannot find what to
+# compare with. A full clone fixes that; this is the same clone block other
+# repos on this server use.
+clone:
+  git:
+    image: quay.io/woodpeckerci/plugin-git:2.9.2
+    settings:
+      partial: false
+
 steps:
   validate:
     image: golang:1.25
@@ -11,5 +30,92 @@ steps:
       - go vet ./...
       - go test -count=1 ./...
       - go build ./...
+      # Every package needs a doc comment, and docs/PACKAGES.md must match them.
+      - go run ./scripts/pkgindex -check
+      # fuzz.sh retries the Go fuzz engine's spurious timeout; prove it still does.
+      - scripts/fuzz-selftest.sh
     when:
-      event: [push, pull_request]
+      - event: pull_request
+      - event: push
+        branch: main
+
+  # Data races. -race needs cgo, so this step cannot share validate's CGO_ENABLED=0.
+  race:
+    image: golang:1.25
+    environment:
+      CGO_ENABLED: "1"
+    commands:
+      - go test -race -count=1 ./...
+    when:
+      - event: pull_request
+      - event: push
+        branch: main
+
+  # Only findings in code this change touches fail the step; the legacy findings
+  # do not block anyone. A PR is compared with the merge base with its target
+  # branch (not the branch tip, which may have moved on), a push with the
+  # previous commit. lint/selftest.sh proves the shared consumer config in lint/
+  # still fires.
+  lint:
+    # golangci-lint v2.14.0, pinned by digest.
+    image: golangci/golangci-lint:v2.14.0@sha256:ad862ba6b3798cbe0fd9fd7408d498fd74fbd2623a92406b2fd3898faf0bf98f
+    commands:
+      - git config --global --add safe.directory '*'
+      - |
+        if [ "$CI_PIPELINE_EVENT" = "pull_request" ]; then
+          git fetch -q --no-tags origin "$CI_COMMIT_TARGET_BRANCH"
+          golangci-lint run --new-from-merge-base="origin/$CI_COMMIT_TARGET_BRANCH" ./...
+        else
+          golangci-lint run --new-from-rev=HEAD^ ./...
+        fi
+      - lint/selftest.sh
+    when:
+      - event: pull_request
+      - event: push
+        branch: main
+
+  # Fails on a reachable vulnerability that is not in scripts/govulncheck-allow.txt,
+  # or whose allowlist entry has expired. Runs on a supported Go (1.26): on 1.25,
+  # which no longer gets security fixes, unfixable standard-library findings would
+  # hide the module findings that are go-common's own to fix. A red step on an
+  # unrelated change means main itself has a new vulnerability: fix that first.
+  vuln:
+    # An exact patch, not golang:1.26: the agents hold different 1.26 patches, and
+    # govulncheck's standard-library findings change between them, so a floating
+    # tag can pass on one agent and fail on another. Bump it with the Go patch
+    # release (and look at scripts/govulncheck-allow.txt when you do).
+    image: golang:1.26.9
+    environment:
+      CGO_ENABLED: "0"
+    commands:
+      - scripts/vuln-check.sh
+    when:
+      - event: pull_request
+      - event: push
+        branch: main
+
+  # An incompatible exported-API change must be declared BREAKING in CHANGELOG.md.
+  # See docs/api-policy.md.
+  api:
+    image: golang:1.25
+    environment:
+      CGO_ENABLED: "0"
+    commands:
+      - git config --global --add safe.directory '*'
+      - scripts/apidiff-check.sh
+    when:
+      - event: pull_request
+      - event: push
+        branch: main
+
+  # A short mutation run of every Fuzz target. The seed corpus (including every
+  # committed crash) already runs in `go test`; this is the part that mutates.
+  # Long runs belong in a nightly job: scripts/fuzz.sh 5m.
+  fuzz:
+    image: golang:1.25
+    environment:
+      CGO_ENABLED: "0"
+    commands:
+      - scripts/fuzz.sh 5s
+    when:
+      event: [pull_request]

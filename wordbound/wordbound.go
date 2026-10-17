@@ -132,6 +132,12 @@ func IsGluedScript(token string) bool {
 // go_tos_finder's vendored copy already used — promoted here so both (and
 // any future consumer) share one implementation instead of three.
 func ContainsToken(text, token string) bool {
+	// An empty token matches at every offset without ever advancing, so on any
+	// text that starts with a word rune the loop below would spin forever.
+	// Nothing is "standalone" about an empty token; report no match.
+	if token == "" {
+		return false
+	}
 	glued := IsGluedScript(token)
 	idx := 0
 	for {

@@ -1,0 +1,72 @@
+# go-common
+
+Shared Go primitives for the fleet's services: the HTTP server bootstrap, the
+SSRF-safe client, typed config and errors, the API-key client, and the small
+coordination clients (rate limits, backoff, locks of a sort) that every service
+would otherwise write for itself.
+
+```go
+import "github.com/baditaflorin/go-common/safehttp"
+```
+
+Module `github.com/baditaflorin/go-common`, Go 1.25. This repository is public:
+nothing sensitive belongs in it.
+
+**Change go-common, not the consumers.** When a fix would touch every service,
+fix it here and bump the dependency. That only works if releases are
+trustworthy, which is what the API policy and the CI gates below are for.
+
+## Which package do I use?
+
+| I need to... | Use |
+| --- | --- |
+| Start an HTTP service with the fleet middleware, `/health`, `/selftest`, graceful drain | [`server`](server/) with [`config`](config/) and [`env`](env/) |
+| Call the **public internet** | [`safehttp.NewClient`](safehttp/) (refuses internal addresses, DNS-rebind safe) |
+| Call a **sibling fleet service** on the private mesh | A plain `net/http.Client` with a 1-3 s `Timeout`; fail open and add `"<primitive>-down"` to [`degraded`](degraded/). `safehttp` rejects private IPs by design, so it cannot be used here |
+| Fetch a page through the fleet fetch cache | [`fleetfetch`](fleetfetch/) |
+| Send a browser through an upstream proxy that needs credentials | [`egressproxy`](egressproxy/) with [`proxysupplier`](proxysupplier/) |
+| Verify an API key, or protect a handler | [`apikey`](apikey/), [`middleware`](middleware/) |
+| Read environment variables | [`env`](env/) |
+| Return JSON, typed errors, pages | [`response`](response/), [`errors`](errors/), [`pagination`](pagination/) |
+| Decode and validate a request body | [`validate`](validate/) |
+| Retry, or protect a slow upstream | [`retry`](retry/), [`circuitbreaker`](circuitbreaker/), [`loadshed`](loadshed/), [`backoffcoord`](backoffcoord/), [`ratecoord`](ratecoord/) |
+| Fake time or an upstream in a test | [`clock`](clock/) (`testhelpers/testclock`), [`testhelpers/httpmock`](testhelpers/httpmock/) |
+
+`client` is the older, lower-level HTTP client; prefer `safehttp` for new code.
+
+Runnable examples (checked by `go test`) are in `example_test.go` next to the
+packages above. The full list of packages is in [docs/PACKAGES.md](docs/PACKAGES.md),
+generated from the packages' own doc comments.
+
+## Using go-common in a service
+
+- **Pin a recent version** and bump it when a release lands; the changelog says
+  what changed and whether it can break you ([CHANGELOG.md](CHANGELOG.md)).
+- **Lint with the shared config** so deprecated API and the common HTTP mistakes
+  show up in your CI: see [lint/README.md](lint/README.md).
+- **What a release promises** (and what it does not): [docs/api-policy.md](docs/api-policy.md).
+
+## Working on go-common
+
+Every change to the module has to pass, in CI (Woodpecker, `.woodpecker.yml`):
+
+| Gate | What it catches |
+| --- | --- |
+| `gofmt`, `go vet`, `go build`, `go test` | The basics |
+| `go test -race` | Data races |
+| `golangci-lint` (new findings only) | Bugs and dead code; legacy findings do not block |
+| `scripts/vuln-check.sh` (`govulncheck`) | A reachable known vulnerability that is not in the reviewed, expiring allowlist `scripts/govulncheck-allow.txt` |
+| `scripts/apidiff-check.sh` | An incompatible API change that the changelog does not call BREAKING |
+| `scripts/fuzz.sh` (short smoke) | Panics and hangs on hostile input in the parsers |
+| `go run ./scripts/pkgindex -check` | A stale package index, or a package with no doc comment |
+| `lint/selftest.sh` | The shared lint config no longer firing |
+
+Most of these are CPU-heavy. Run them in CI or on a build host rather than a
+laptop. `scripts/fuzz.sh 2m` is the long version of the fuzz smoke, meant for a
+nightly job; a crashing input it finds must be fixed and then committed under
+`testdata/fuzz/` so plain `go test` replays it forever.
+
+Every release needs a `CHANGELOG.md` entry. A change that removes or alters
+exported API, or changes a default or an environment variable, leads that entry
+with **BREAKING:**; see [docs/api-policy.md](docs/api-policy.md). A new package
+needs a package comment, or the index check fails.

@@ -106,7 +106,13 @@ func parseUpstream(raw string) (*upstream, error) {
 	if port == "" {
 		port = "80"
 	}
-	up := &upstream{addr: net.JoinHostPort(host, port), scheme: scheme}
+	addr := net.JoinHostPort(host, port)
+	// url.Parse accepts hosts such as "]" that no dialer can use; refuse them
+	// here, where the configuration error is visible, not on every connection.
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return nil, errBadUpstream
+	}
+	up := &upstream{addr: addr, scheme: scheme}
 	if u.User != nil {
 		pass, _ := u.User.Password()
 		up.auth = "Basic " + base64.StdEncoding.EncodeToString([]byte(u.User.Username()+":"+pass))
