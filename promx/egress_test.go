@@ -44,10 +44,10 @@ func TestEgressCollectorsCountsSuccess(t *testing.T) {
 	u, _ := url.Parse(srv.URL)
 	host := u.Hostname()
 
-	if got := testutil.ToFloat64(coll.requestsTotal.WithLabelValues("", host, "http", "false", "success")); got != 1 {
+	if got := testutil.ToFloat64(coll.requestsTotal.WithLabelValues(coll.service, host, "http", "false", "success")); got != 1 {
 		t.Errorf("requests_total = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(coll.bytesTotal.WithLabelValues("", host, "direct")); got != 11 {
+	if got := testutil.ToFloat64(coll.bytesTotal.WithLabelValues(coll.service, host, "direct")); got != 11 {
 		t.Errorf("response_bytes_total = %v, want 11", got)
 	}
 	// Histogram: assert the registry has it and there's at least one
@@ -83,7 +83,7 @@ func TestEgressCollectorsCountsBlocked(t *testing.T) {
 	)
 	_, _ = c.Get("http://10.0.0.1/")
 
-	if got := testutil.ToFloat64(coll.blockedTotal.WithLabelValues("", "ssrf")); got != 1 {
+	if got := testutil.ToFloat64(coll.blockedTotal.WithLabelValues(coll.service, "ssrf")); got != 1 {
 		t.Errorf("blocked_total{reason=ssrf} = %v, want 1", got)
 	}
 }
@@ -109,10 +109,10 @@ func TestEgressCollectorsSeparatesCacheHitBytesFromDirect(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if got := testutil.ToFloat64(coll.bytesTotal.WithLabelValues("", "example.invalid", "cache_hit")); got != float64(len("cached body")) {
+	if got := testutil.ToFloat64(coll.bytesTotal.WithLabelValues(coll.service, "example.invalid", "cache_hit")); got != float64(len("cached body")) {
 		t.Errorf("bytesTotal{channel=cache_hit} = %v, want %d", got, len("cached body"))
 	}
-	if got := testutil.ToFloat64(coll.bytesTotal.WithLabelValues("", "example.invalid", "direct")); got != 0 {
+	if got := testutil.ToFloat64(coll.bytesTotal.WithLabelValues(coll.service, "example.invalid", "direct")); got != 0 {
 		t.Errorf("bytesTotal{channel=direct} = %v, want 0 (this call never hit origin directly)", got)
 	}
 }
