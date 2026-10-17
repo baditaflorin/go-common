@@ -6,5 +6,6 @@
 //	egressColl, httpColl, authColl := promx.AutoWire(serviceName, version)
 //	safehttp.SetDefaultObserver(egressColl)
 //
-// Prefer telemetry.Init which calls AutoWire internally.
+// Prefer server.New, which calls AutoWire and installs the egress observer
+// itself. telemetry.Init does not call AutoWire.
 package promx

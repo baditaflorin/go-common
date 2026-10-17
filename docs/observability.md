@@ -344,5 +344,6 @@ Other:
   `env` registry. `DEBUG_ADDR`, `OBS_DISABLE`, `OTEL_*`, `PYROSCOPE_*` and
   `LOG_SKIP_PATHS` are not, so neither the start-up check nor `/debug/config`
   knows about them and a typo in one is silent.
-- The package comment of `promx` says `telemetry.Init` calls `AutoWire`. It does
-  not; only `server.New` (or a direct call) does.
+- The package comment of `promx` said `telemetry.Init` calls `AutoWire`. It does
+  not; only `server.New` (or a direct call) does. **Fixed in v0.102.74** (the
+  comment).
