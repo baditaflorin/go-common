@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.102.74] - 2026-10-18
+
+Metrics-wiring fixes for the problems the wave-4 observability review found ([docs/observability.md](docs/observability.md), "Known limits"). One behaviour change: the
+`method` label of the `promx` HTTP collectors.
+
+### Changed
+
+- **BREAKING (behavioural):** the `promx` HTTP collectors (`http_requests_total`, `http_request_duration_seconds`, `http_response_size_bytes`, so every service built on `server.New`)
+  label a request `method="OTHER"` when its method is not one of GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, CONNECT or TRACE. They used to label it with whatever token the client
+  sent. Go's server accepts any token as a method and the middleware runs before authentication, so anyone who could reach the port could create a new series set per distinct
+  method: a probe with 300 methods made 300 series sets, and about 900 requests made a 2 MB scrape. Methods are case-sensitive, so `get` is `OTHER` too. The request is still
+  counted and only the label changed: a dashboard or alert that selects a non-standard method by name (`method="PROPFIND"` on a WebDAV service) must select `"OTHER"` instead.
+  The nine standard methods are unchanged.
+
 ## [0.102.73] - 2026-10-18
 
 `server.Run` and `server.RunTier` no longer let a service that cannot serve end with exit status 0 and no log line.

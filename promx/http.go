@@ -28,6 +28,13 @@ import (
 // in-app metrics, where every distinct ID blows up label cardinality.
 // Default RouteFunc returns r.URL.Path which preserves current behaviour
 // for callers who haven't wired their router up yet.
+//
+// The "method" label is the request method when it is one of the nine
+// standard ones (GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, CONNECT,
+// TRACE) and "OTHER" for any other token. Go's server accepts any token as
+// a method and this middleware runs before authentication, so without the
+// fold anyone who can reach the port could mint a new series set per
+// distinct method.
 type HTTPCollectors struct {
 	service string
 
@@ -99,6 +106,22 @@ func WithRouteLimit(n int) HTTPOption {
 	return func(o *httpOpts) { o.routeLimit = n }
 }
 
+// methodOther is the "method" label for any request method outside the
+// standard set. See methodLabel.
+const methodOther = "OTHER"
+
+// methodLabel returns m when it is a standard HTTP method and methodOther
+// otherwise, so the "method" label has at most ten values whatever a client
+// sends. It returns m itself, not a copy, so it does not allocate.
+func methodLabel(m string) string {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodOptions, http.MethodConnect, http.MethodTrace:
+		return m
+	}
+	return methodOther
+}
+
 // NewHTTPCollectors registers the canonical inbound HTTP collectors on
 // reg and returns the wrapper. reg may be nil — the shared
 // promx.Registry() is used in that case.
@@ -156,6 +179,7 @@ func (c *HTTPCollectors) Middleware() middleware.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			route := c.routeCap.label(c.routeFn(r))
+			method := methodLabel(r.Method)
 			c.inFlightG.Inc()
 			defer c.inFlightG.Dec()
 
@@ -165,8 +189,8 @@ func (c *HTTPCollectors) Middleware() middleware.Middleware {
 			dur := time.Since(start)
 
 			status := strconv.Itoa(rw.status)
-			c.requestsTotal.WithLabelValues(c.service, r.Method, route, status).Inc()
-			durationObserver := c.duration.WithLabelValues(c.service, r.Method, route)
+			c.requestsTotal.WithLabelValues(c.service, method, route, status).Inc()
+			durationObserver := c.duration.WithLabelValues(c.service, method, route)
 			if spanContext := trace.SpanContextFromContext(r.Context()); spanContext.IsSampled() {
 				if exemplarObserver, ok := durationObserver.(prometheus.ExemplarObserver); ok {
 					exemplarObserver.ObserveWithExemplar(dur.Seconds(), prometheus.Labels{"trace_id": spanContext.TraceID().String()})
@@ -177,7 +201,7 @@ func (c *HTTPCollectors) Middleware() middleware.Middleware {
 				durationObserver.Observe(dur.Seconds())
 			}
 			if rw.bytes > 0 {
-				c.responseSize.WithLabelValues(c.service, r.Method, route).Observe(float64(rw.bytes))
+				c.responseSize.WithLabelValues(c.service, method, route).Observe(float64(rw.bytes))
 			}
 		})
 	}

@@ -266,8 +266,8 @@ name, an outcome; never an id, a URL or a user.
 
 ## Known limits
 
-True of v0.102.71, found while writing this page. None is fixed by the page;
-they are listed so that an author is not surprised.
+Found against v0.102.71 while writing this page and listed so that an author is
+not surprised. An item says when a later release fixed it; the rest are still true.
 
 Wiring order:
 
@@ -296,11 +296,13 @@ Label cardinality (`promx` `http_*`):
   `AutoWire` takes no options, `HTTPCollectors` has no setter, and
   `WithRouteFunc` / `WithRouteLimit` only work on a collector you build
   yourself. The comment on `Server.PromHTTPCollectors` suggests otherwise.
-- The `method` label is `r.Method` with no cap, and Go's server accepts any
+- The `method` label was `r.Method` with no cap, and Go's server accepts any
   token as a method. A probe sending 300 distinct methods to one path created 300
   new series sets; after about 900 requests the scrape was 2.0 MB and 22,000
   lines (about 27 lines per method-and-route pair). Reachable by anyone who can
-  reach the port, before your auth middleware runs.
+  reach the port, before your auth middleware runs. **Fixed in v0.102.74:** a
+  method other than GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, CONNECT and
+  TRACE is labelled `OTHER`.
 - Because `/metrics` is unauthenticated, an identifier or token embedded in a
   request path becomes a label value readable there. `graph` templates paths
   (`/{id}`, `/{uuid}`, `/{token}`) and `promx` does not.
