@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.102.68] - 2026-10-17
+
+### Fixed
+
+- The `graph` tests no longer talk to the production collector. Six tests (and two more through `setGraphEnv`) configured
+  `https://fleet-graph.0exec.com` with a fake writer key, and the "fully configured, valid id" case really flushed an event on
+  `Shutdown`: every go-common test run on a builder, CI worker or laptop sent `POST /events` as `domain-example` and got 401
+  (38 in 10 hours on 2026-10-17, from five hosts, which looked like a fleet writer without a valid key). They use a loopback
+  address that refuses the connection (`unreachableCollectorURL`). Test-only; no change to the package.
+
 ## [0.102.67] - 2026-10-17
 
 ### Fixed

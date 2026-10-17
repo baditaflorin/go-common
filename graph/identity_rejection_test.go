@@ -260,7 +260,7 @@ func TestBootstrapResolvesGraphServiceIDBeforeInit(t *testing.T) {
 
 func TestInvalidGraphServiceIDBeforeInitFailsClosed(t *testing.T) {
 	resetState(t)
-	setGraphEnv(t, "https://fleet-graph.0exec.com")
+	setGraphEnv(t, unreachableCollectorURL)
 	t.Setenv("GRAPH_SERVICE_ID", "not_a_label")
 
 	if Enabled() {
@@ -278,7 +278,7 @@ func TestInvalidGraphServiceIDBeforeInitFailsClosed(t *testing.T) {
 func TestInvalidGraphServiceIDBeforeInitIsLoggedOnceAndCounted(t *testing.T) {
 	resetState(t)
 	buf := captureLog(t)
-	setGraphEnv(t, "https://fleet-graph.0exec.com")
+	setGraphEnv(t, unreachableCollectorURL)
 	t.Setenv("GRAPH_SERVICE_ID", "not_a_label")
 
 	if Enabled() {
