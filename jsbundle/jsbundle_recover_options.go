@@ -1,6 +1,7 @@
 package jsbundle
 
 import (
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -27,22 +28,37 @@ type RecoverOptions struct {
 const defaultFetchTimeout = 20 * time.Second
 
 var (
-	defaultClientOnce sync.Once
-	defaultClient     *http.Client
+	defaultClientMu sync.Mutex
+	defaultClient   *http.Client
 )
 
-// guardedDefaultClient builds the default client once and shares it, so every
-// Recover call reuses one connection pool.
-func guardedDefaultClient() *http.Client {
-	defaultClientOnce.Do(func() {
-		defaultClient = safehttp.NewClient(safehttp.WithTimeout(defaultFetchTimeout))
-	})
-	return defaultClient
+// guardedDefaultClient builds the default client on first use and shares it, so
+// every Recover call reuses one connection pool. It is built lazily, on a
+// request path or in a worker goroutine, so a deployment problem (for example
+// FLEET_REQUIRE_PROXY=1 without a proxy variable) is returned as an error
+// instead of panicking. A failure is not cached: the next call tries again, and
+// never sees a nil client.
+func guardedDefaultClient() (*http.Client, error) {
+	defaultClientMu.Lock()
+	defer defaultClientMu.Unlock()
+	if defaultClient != nil {
+		return defaultClient, nil
+	}
+	c, err := safehttp.NewClientE(safehttp.WithTimeout(defaultFetchTimeout))
+	if err != nil {
+		return nil, err
+	}
+	defaultClient = c
+	return c, nil
 }
 
-func (o *RecoverOptions) normalize() {
+func (o *RecoverOptions) normalize() error {
 	if o.Client == nil {
-		o.Client = guardedDefaultClient()
+		c, err := guardedDefaultClient()
+		if err != nil {
+			return fmt.Errorf("jsbundle: default client: %w", err)
+		}
+		o.Client = c
 	}
 	if o.MaxScriptBytes <= 0 {
 		o.MaxScriptBytes = DefaultMaxScriptBytes
@@ -56,4 +72,5 @@ func (o *RecoverOptions) normalize() {
 	if o.UserAgent == "" {
 		o.UserAgent = "go-common-jsbundle/0.1"
 	}
+	return nil
 }

@@ -162,10 +162,17 @@ func fetchDirect(ctx context.Context, target string, cfg fetchConfig) (*FetchRes
 	hops := []FetchHop{}
 	cookies := []FetchCookie{}
 
-	client := safehttp.NewClient(
+	// NewClientE, not NewClient: this runs on every Fetch, from request
+	// handlers and worker goroutines, where a deployment problem (for example
+	// FLEET_REQUIRE_PROXY=1 without a proxy variable) must come back as an
+	// error and not as a panic. It still fails closed: nothing is fetched.
+	client, err := safehttp.NewClientE(
 		safehttp.WithTimeout(cfg.timeout),
 		safehttp.WithUserAgent(cfg.userAgent),
 	)
+	if err != nil {
+		return nil, fmt.Errorf("direct: build client: %w", err)
+	}
 	// Wrap CheckRedirect to capture each hop's headers + Set-Cookie.
 	prev := client.CheckRedirect
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {

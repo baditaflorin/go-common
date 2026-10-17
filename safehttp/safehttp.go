@@ -465,14 +465,15 @@ func WithMaxIdleConnsPerHost(n int) Option {
 // legitimately need a direct egress path (SSRF probers, smuggling
 // tests, port scanners) where routing through the fleet proxy would
 // defeat the purpose. Mutually exclusive with RequireProxy — passing
-// both panics at NewClient time.
+// both panics in NewClient (NewClientE returns the error instead).
 func WithoutProxy() Option { return func(o *options) { o.withoutProxy = true } }
 
 // RequireProxy asserts HTTPS_PROXY (or HTTP_PROXY) is set in the
 // environment at NewClient time. Services declared `proxy_egress:
 // true` in service.yaml should pass this so a misconfigured deploy
 // fails loudly at startup instead of silently leaking the dockerhost
-// IP. Mutually exclusive with WithoutProxy.
+// IP. Mutually exclusive with WithoutProxy. A missing variable makes
+// NewClient panic; NewClientE returns the error instead.
 //
 // Fleet-wide enforcement: when the environment variable
 // FLEET_REQUIRE_PROXY=1 is set (rendered by fleet-runner deploy for
