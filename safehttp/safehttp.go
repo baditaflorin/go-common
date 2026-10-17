@@ -1,6 +1,7 @@
 package safehttp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -43,7 +44,9 @@ var (
 
 // IsBlocked reports whether ip falls in any blocked range:
 // loopback, unspecified, multicast, link-local, private (RFC1918),
-// CGNAT (100.64.0.0/10), 0.0.0.0/8, or ULA (fc00::/7).
+// CGNAT (100.64.0.0/10), 0.0.0.0/8, or ULA (fc00::/7). An IPv6 address that
+// embeds an IPv4 one (IPv4-mapped, NAT64 64:ff9b::/96, 6to4 2002::/16) is
+// blocked when the embedded IPv4 address is.
 //
 // Honors SAFEHTTP_ALLOW_PRIVATE_IPS — a comma-separated list of literal
 // IPs that bypass the private-network check. Use it ONLY for trusted
@@ -87,7 +90,31 @@ func IsBlocked(ip net.IP) bool {
 	if len(ip) == 16 && ip[0]&0xfe == 0xfc {
 		return true
 	}
+	// An IPv4 address carried inside an IPv6 one (NAT64, 6to4) is as reachable as
+	// the IPv4 address itself once a translator is on the path, so judge the
+	// embedded address by the IPv4 rules.
+	if v4 := embeddedIPv4(ip); v4 != nil {
+		return IsBlocked(v4)
+	}
 	return false
+}
+
+// embeddedIPv4 returns the IPv4 address carried by a NAT64 (64:ff9b::/96,
+// RFC 6052) or 6to4 (2002::/16, RFC 3056) address, or nil for any other
+// address. IPv4-mapped addresses (::ffff:a.b.c.d) never get here: To4 already
+// turned them into IPv4.
+func embeddedIPv4(ip net.IP) net.IP {
+	if len(ip) != net.IPv6len {
+		return nil
+	}
+	var zeros [8]byte
+	if ip[0] == 0x00 && ip[1] == 0x64 && ip[2] == 0xff && ip[3] == 0x9b && bytes.Equal(ip[4:12], zeros[:]) {
+		return net.IPv4(ip[12], ip[13], ip[14], ip[15])
+	}
+	if ip[0] == 0x20 && ip[1] == 0x02 {
+		return net.IPv4(ip[2], ip[3], ip[4], ip[5])
+	}
+	return nil
 }
 
 // allowedPrivateIPs holds the once-parsed SAFEHTTP_ALLOW_PRIVATE_IPS list.

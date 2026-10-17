@@ -2,7 +2,7 @@
 
 # Package index
 
-66 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
+69 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
 
 | Package | Summary |
 | --- | --- |
@@ -17,6 +17,7 @@
 | [`circuitbreaker`](../circuitbreaker/) | Implements a per-host circuit breaker state machine (ok → backing_off → failed → ok) that protects services from cascading failures when upstream dependencies are overloaded or down. |
 | [`client`](../client/) | Provides low-level HTTP client abstractions: capability negotiation, URL proxying helpers (JSProxy, FetchProxy), and network property extraction. |
 | [`clock`](../clock/) | Provides a Clock interface with a real implementation (backed by time.Now) and a controllable mock implementation for deterministic tests. |
+| [`compat`](../compat/) | Says whether a go-common version is old enough to be missing a security fix that go-common itself shipped. |
 | [`config`](../config/) | Loads service configuration from service.yaml and environment variables. |
 | [`credentiallease`](../credentiallease/) | A task-bound client for a credential broker. |
 | [`credentiallease/broker`](../credentiallease/broker/) | Provides the fail-closed HTTP core for credentiallease v1. |
@@ -66,6 +67,8 @@
 | [`testhelpers/fakegraph`](../testhelpers/fakegraph/) | Captures graph.Event values for use in tests. |
 | [`testhelpers/fakekey`](../testhelpers/fakekey/) | Provides an in-memory implementation of the apikey.Verifier interface for use in tests. |
 | [`testhelpers/httpmock`](../testhelpers/httpmock/) | Provides canonical httptest.Server factories for common fleet upstream patterns. |
+| [`testhelpers/leakcheck`](../testhelpers/leakcheck/) | Fails a test that leaves goroutines running. |
+| [`testhelpers/ssrfcorpus`](../testhelpers/ssrfcorpus/) | One shared table of server-side-request-forgery probe targets, for testing any code that decides whether a host may be contacted: safehttp's guard, egressproxy's guard, a fetcher's default client. |
 | [`testhelpers/testclock`](../testhelpers/testclock/) | Re-exports clock.NewMock and clock.Mock for use in tests without importing the full clock package. |
 | [`ua`](../ua/) | Builds the fleet User-Agent header value. |
 | [`validate`](../validate/) | Provides struct-tag-driven JSON request decoding and validation. |

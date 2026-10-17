@@ -6,8 +6,9 @@
 # is covered by its PR run, so each change is built once, not twice.
 #
 # Steps run in order. `validate` keeps its original name and commands so
-# anything keyed on it is unaffected; the rest were added by the wave-1 hardening
-# (race, lint, vuln, API compatibility, fuzz smoke, package index). Tool versions
+# anything keyed on it is unaffected; the rest were added by the hardening work
+# (race, lint, vuln, API compatibility, benchmarks, release number, fuzz smoke,
+# package index). Tool versions
 # live in scripts/tool-versions.sh, except the lint image tag below, which has to
 # be kept equal to GOLANGCI_LINT_VERSION by hand.
 # Woodpecker's default clone is shallow (depth 1) and treeless. That has no HEAD^
@@ -107,6 +108,27 @@ steps:
       - event: pull_request
       - event: push
         branch: main
+
+  # A hot-path benchmark must not start allocating more: allocs/op is compared
+  # with the merge base (see scripts/bench-gate.sh for why not ns/op).
+  bench:
+    image: golang:1.25
+    environment:
+      CGO_ENABLED: "0"
+    commands:
+      - git config --global --add safe.directory '*'
+      - scripts/bench-gate.sh
+    when:
+      event: [pull_request]
+
+  # The version this change claims in CHANGELOG.md must be the next free one.
+  release:
+    image: golang:1.25
+    commands:
+      - git config --global --add safe.directory '*'
+      - scripts/release-check.sh
+    when:
+      event: [pull_request]
 
   # A short mutation run of every Fuzz target. The seed corpus (including every
   # committed crash) already runs in `go test`; this is the part that mutates.

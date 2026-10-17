@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.102.70] - 2026-10-17
+
+Wave 2 of the go-common hardening: a shared SSRF test corpus (which found a hole in the guard), tests for the packages that had none, hot-path
+benchmarks with an allocation gate, a security floor for pins, and release tooling. Two behaviour changes, both marked below.
+
+### Fixed
+
+- **BREAKING (behavioural):** `safehttp.IsBlocked`, and so `GuardHost`, `CheckURL`, the guarded dialer and `egressproxy.DefaultGuard`, now also
+  refuses an IPv6 address that carries a blocked IPv4 address through a translator: NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`). Before, `64:ff9b::7f00:1`,
+  `64:ff9b::a9fe:a9fe` (the cloud metadata address) and `2002:7f00:1::` were allowed. Reaching them needs a NAT64 or 6to4 gateway on the path, which a typical
+  container host lacks, so this closes a latent hole rather than a live one. A NAT64 or 6to4 address that carries a public IPv4 address is still allowed. Found by
+  the new SSRF corpus; `FuzzIsBlocked` now checks the embedded forms too.
+- **BREAKING (behavioural):** `jsbundle.RecoverOptions.Client`, when nil, is now a guarded `safehttp` client (20 s timeout, refuses internal addresses, also
+  after redirects) instead of `http.DefaultClient`, which had no timeout and no SSRF guard, while the URLs it fetches come from pages and error reports. Pass a
+  `Client` to opt out, for example an `httptest` server's client in a test.
+- `config.Load` read `service.yaml` naively: any indented `name:` or `version:` replaced the service's own (the template's `owner.name` did), a trailing
+  `# comment` stayed in the value, and a missing file printed `DEBUG: Failed to open service.yaml` to stdout. Only top-level keys count now, comments and quotes are
+  stripped, and a missing file is silent. It only changed the result for callers that pass an empty app name.
+
+### Added
+
+- `testhelpers/ssrfcorpus`: one table of SSRF probe targets (loopback, IPv4-mapped, NAT64 and 6to4 IPv6, RFC 1918, link-local and cloud metadata, CGNAT, ULA,
+  alternative spellings of 127.0.0.1, and the public addresses just outside each range), run against `safehttp` (host guard, `IsBlocked`, `CheckURL`, the client at dial
+  time), `egressproxy.DefaultGuard` and `jsbundle`'s default client. Add a case there when a bypass is found anywhere.
+- `testhelpers/leakcheck`: a dependency-free goroutine-leak check (`leakcheck.Check(t)`), used by new leak tests for `egressproxy` tunnels, `workpool` and `shutdown`.
+- Tests for `shutdown` (signal drain, drain timeout, startup error), `config`, `header` (every constant is a well-formed, unique header name), `version` and the
+  `httpmock`, `fakekey`, `fakegraph` and `testclock` helpers. `t.Parallel` on 68 tests in seven pure packages.
+- Benchmarks for the per-request path: `BenchmarkServerRequest` puts the whole `server.New` stack (telemetry, request id, metrics, body limit, promx, graph) at about
+  79 allocations and 5.9 KB per request around a no-op handler, access log excluded; plus `middleware`, `reqstats`, `promx`, `response`, `validate`, `cache`, `pagination`
+  and `safehttp`. `scripts/bench-gate.sh` and the `bench` CI step (pull requests) fail when a benchmark's allocs/op grows by more than 10% and at least 2 against the
+  merge base; ns/op is printed but not gated, because time on a shared runner is not reproducible.
+- `compat` package, `compat/compat.json` and `scripts/compatcheck`: the oldest go-common version with every security fix go-common itself shipped (`v0.102.2`, the
+  gRPC patch), with a check for a service's `go.mod` that understands tags, pre-releases and `v0.0.0-<time>` pseudo-versions, and optional per-line floors for old
+  lines that get backports. It says nothing about dependency or toolchain advisories, which stay in `scripts/govulncheck-allow.txt`.
+- `scripts/release-check.sh` and the `release` CI step (pull requests): the version a change adds to `CHANGELOG.md` must be well formed, not already tagged, and newer
+  than the latest tag and the entry below it. `scripts/backport.sh` prepares a security backport branch in a separate worktree and pushes nothing. `docs/releasing.md`
+  describes both. `scripts/lib/base-ref.sh` is the one place the gates choose their base (merge base in a pull request), shared by the API, benchmark and release checks.
+
 ## [0.102.69] - 2026-10-17
 
 Wave 1 of the go-common hardening: CI gates, fuzz targets, an API policy, a shared lint config and generated docs. Three bugs the new fuzz

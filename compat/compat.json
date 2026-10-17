@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "min_safe": "v0.102.2",
+  "min_safe_date": "2026-09-27T15:03:06Z",
+  "reasons": [
+    {"version": "v0.89.1", "summary": "bump gRPC and x/net to close Dependabot CVEs"},
+    {"version": "v0.90.0", "summary": "scope the safehttp private-IP SSRF bypass to specific hostnames (#71)"},
+    {"version": "v0.102.2", "summary": "patch a gRPC vulnerability (#101)"}
+  ],
+  "note": "A version below min_safe lacks a security fix that go-common itself shipped. At or above it no such fix is outstanding, but advisories in go-common's dependencies and in the Go toolchain are tracked separately (scripts/govulncheck-allow.txt)."
+}

@@ -23,6 +23,7 @@ func jsonEqual(t *testing.T, a, b []byte) bool {
 }
 
 func TestParseFormat(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in      string
 		want    Format
@@ -65,6 +66,7 @@ func TestParseFormat(t *testing.T) {
 }
 
 func TestFormatString(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		f    Format
 		want string
@@ -86,6 +88,7 @@ func TestFormatString(t *testing.T) {
 }
 
 func TestDetectFormat(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		in      string
@@ -124,6 +127,7 @@ func TestDetectFormat(t *testing.T) {
 }
 
 func TestRoundTripJSONYAMLJSON(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		`{"name":"florin","age":30,"tags":["a","b"],"nested":{"k":true}}`,
 		`[1,2,3,4]`,
@@ -150,6 +154,7 @@ func TestRoundTripJSONYAMLJSON(t *testing.T) {
 }
 
 func TestCSVToJSONHeaderInference(t *testing.T) {
+	t.Parallel()
 	csvIn := "name,age,city\nflorin,30,bucharest\nalice,28,berlin\n"
 	out, err := Convert(CSV, JSON, []byte(csvIn))
 	if err != nil {
@@ -162,6 +167,7 @@ func TestCSVToJSONHeaderInference(t *testing.T) {
 }
 
 func TestJSONToCSVArrayOfObjects(t *testing.T) {
+	t.Parallel()
 	jsonIn := `[{"name":"florin","age":30},{"name":"alice","age":28}]`
 	out, err := Convert(JSON, CSV, []byte(jsonIn))
 	if err != nil {
@@ -176,6 +182,7 @@ func TestJSONToCSVArrayOfObjects(t *testing.T) {
 }
 
 func TestJSONToCSVUnionedKeys(t *testing.T) {
+	t.Parallel()
 	jsonIn := `[{"a":"1"},{"a":"2","b":"3"}]`
 	out, err := Convert(JSON, CSV, []byte(jsonIn))
 	if err != nil {
@@ -189,6 +196,7 @@ func TestJSONToCSVUnionedKeys(t *testing.T) {
 }
 
 func TestJSONToCSVNotTabular(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		`{"a":1}`,            // object, not array
 		`[1,2,3]`,            // array of scalars
@@ -209,6 +217,7 @@ func TestJSONToCSVNotTabular(t *testing.T) {
 }
 
 func TestTOMLToJSON(t *testing.T) {
+	t.Parallel()
 	tomlIn := "name = \"florin\"\nage = 30\n\n[server]\nhost = \"localhost\"\nport = 8080\n"
 	out, err := Convert(TOML, JSON, []byte(tomlIn))
 	if err != nil {
@@ -221,6 +230,7 @@ func TestTOMLToJSON(t *testing.T) {
 }
 
 func TestJSONToTOMLRoundTrip(t *testing.T) {
+	t.Parallel()
 	jsonIn := `{"name":"florin","server":{"host":"localhost","port":8080}}`
 	tomlBytes, err := Convert(JSON, TOML, []byte(jsonIn))
 	if err != nil {
@@ -236,6 +246,7 @@ func TestJSONToTOMLRoundTrip(t *testing.T) {
 }
 
 func TestTOMLEncodeUnsupportedShape(t *testing.T) {
+	t.Parallel()
 	// A bare array cannot be a TOML document.
 	_, err := Convert(JSON, TOML, []byte(`[1,2,3]`))
 	if !errors.Is(err, ErrUnsupportedShape) {
@@ -244,6 +255,7 @@ func TestTOMLEncodeUnsupportedShape(t *testing.T) {
 }
 
 func TestXMLDecodeAttributesAndText(t *testing.T) {
+	t.Parallel()
 	xmlIn := `<book id="42"><title>Go</title><author>Florin</author></book>`
 	v, err := Decode(XML, []byte(xmlIn))
 	if err != nil {
@@ -266,6 +278,7 @@ func TestXMLDecodeAttributesAndText(t *testing.T) {
 }
 
 func TestXMLRepeatedChildrenBecomeArray(t *testing.T) {
+	t.Parallel()
 	xmlIn := `<list><item>a</item><item>b</item><item>c</item></list>`
 	v, err := Decode(XML, []byte(xmlIn))
 	if err != nil {
@@ -283,6 +296,7 @@ func TestXMLRepeatedChildrenBecomeArray(t *testing.T) {
 }
 
 func TestXMLRoundTrip(t *testing.T) {
+	t.Parallel()
 	xmlIn := `<config><host>localhost</host><port>8080</port></config>`
 	// XML -> JSON -> XML
 	jsonBytes, err := Convert(XML, JSON, []byte(xmlIn))
@@ -302,6 +316,7 @@ func TestXMLRoundTrip(t *testing.T) {
 }
 
 func TestXMLEncodeUnsupportedShape(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		`[1,2,3]`,         // top-level array
 		`{"a":1,"b":2}`,   // multiple roots
@@ -329,6 +344,7 @@ func TestXMLEncodeUnsupportedShape(t *testing.T) {
 // existing non-fatal "target format can't represent this shape" convention)
 // rather than emit broken/injected markup.
 func TestXMLEncodeRejectsInvalidNames(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		src  string
@@ -362,6 +378,7 @@ func TestXMLEncodeRejectsInvalidNames(t *testing.T) {
 // here: decodeXML already collapses "ns:tag" to "tag" via xml.Name.Local,
 // a pre-existing, separate decode-side asymmetry outside this fix's scope.)
 func TestXMLEncodeAcceptsOrdinaryIdentifierKeys(t *testing.T) {
+	t.Parallel()
 	src := `{"root":{"host_name":"example.com","port-8080":"open","a1":"b2"}}`
 	out, err := Convert(JSON, XML, []byte(src))
 	if err != nil {
@@ -377,6 +394,7 @@ func TestXMLEncodeAcceptsOrdinaryIdentifierKeys(t *testing.T) {
 }
 
 func TestDecodeMalformed(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		f    Format
@@ -405,6 +423,7 @@ func TestDecodeMalformed(t *testing.T) {
 }
 
 func TestDecodeEmpty(t *testing.T) {
+	t.Parallel()
 	for _, f := range []Format{JSON, CSV, XML, YAML, TOML} {
 		t.Run(f.String(), func(t *testing.T) {
 			_, err := Decode(f, []byte("   "))
@@ -416,6 +435,7 @@ func TestDecodeEmpty(t *testing.T) {
 }
 
 func TestDecodeSampleEachFormat(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		f  Format
 		in string
@@ -440,6 +460,7 @@ func TestDecodeSampleEachFormat(t *testing.T) {
 }
 
 func TestEncodeUnknownFormat(t *testing.T) {
+	t.Parallel()
 	_, err := Encode(Format(99), map[string]any{"a": 1})
 	if !errors.Is(err, ErrUnknownFormat) {
 		t.Fatalf("expected ErrUnknownFormat, got %v", err)
@@ -447,6 +468,7 @@ func TestEncodeUnknownFormat(t *testing.T) {
 }
 
 func TestConvertAllPairs(t *testing.T) {
+	t.Parallel()
 	// A value that is faithfully representable in every format: a single
 	// object whose values are all strings. CSV needs an array, so the CSV
 	// legs are handled separately below; here we exercise the map-friendly
@@ -486,6 +508,7 @@ func TestConvertAllPairs(t *testing.T) {
 }
 
 func TestConvertCSVPairs(t *testing.T) {
+	t.Parallel()
 	// CSV <-> JSON and CSV <-> YAML (the tabular-friendly legs).
 	csvIn := "name,role\nflorin,admin\nalice,dev\n"
 	rowsWant := `[{"name":"florin","role":"admin"},{"name":"alice","role":"dev"}]`
@@ -534,6 +557,7 @@ func TestConvertCSVPairs(t *testing.T) {
 }
 
 func TestConvertCSVRawRows(t *testing.T) {
+	t.Parallel()
 	// Array-of-arrays encodes as raw CSV rows.
 	out, err := Encode(CSV, []any{
 		[]any{"a", "b"},
@@ -550,6 +574,7 @@ func TestConvertCSVRawRows(t *testing.T) {
 }
 
 func TestYAMLToTOML(t *testing.T) {
+	t.Parallel()
 	yamlIn := "name: florin\nserver:\n  host: localhost\n  port: 8080\n"
 	out, err := Convert(YAML, TOML, []byte(yamlIn))
 	if err != nil {
@@ -566,6 +591,7 @@ func TestYAMLToTOML(t *testing.T) {
 }
 
 func TestConvertPropagatesDecodeError(t *testing.T) {
+	t.Parallel()
 	_, err := Convert(JSON, YAML, []byte(`{bad`))
 	var de *DecodeError
 	if !errors.As(err, &de) {

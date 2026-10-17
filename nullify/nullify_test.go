@@ -3,6 +3,7 @@ package nullify
 import "testing"
 
 func TestIsPlaceholder(t *testing.T) {
+	t.Parallel()
 	cases := map[string]bool{
 		"":             true,
 		"  ":           true,
@@ -28,6 +29,7 @@ func TestIsPlaceholder(t *testing.T) {
 }
 
 func TestStringOrNil(t *testing.T) {
+	t.Parallel()
 	if got := StringOrNil("unknown"); got != nil {
 		t.Errorf("StringOrNil(unknown) = %v, want nil", *got)
 	}

@@ -10,6 +10,7 @@ import (
 var epoch = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func TestRealNow(t *testing.T) {
+	t.Parallel()
 	c := clock.Real()
 	before := time.Now()
 	got := c.Now()
@@ -20,6 +21,7 @@ func TestRealNow(t *testing.T) {
 }
 
 func TestRealSince(t *testing.T) {
+	t.Parallel()
 	c := clock.Real()
 	past := time.Now().Add(-10 * time.Millisecond)
 	if d := c.Since(past); d <= 0 {
@@ -28,6 +30,7 @@ func TestRealSince(t *testing.T) {
 }
 
 func TestMockNow(t *testing.T) {
+	t.Parallel()
 	mc := clock.NewMock(epoch)
 	if got := mc.Now(); !got.Equal(epoch) {
 		t.Fatalf("got %v, want %v", got, epoch)
@@ -35,6 +38,7 @@ func TestMockNow(t *testing.T) {
 }
 
 func TestMockAdvance(t *testing.T) {
+	t.Parallel()
 	mc := clock.NewMock(epoch)
 	mc.Advance(5 * time.Minute)
 	want := epoch.Add(5 * time.Minute)
@@ -44,6 +48,7 @@ func TestMockAdvance(t *testing.T) {
 }
 
 func TestMockSince(t *testing.T) {
+	t.Parallel()
 	mc := clock.NewMock(epoch)
 	past := epoch.Add(-3 * time.Second)
 	if d := mc.Since(past); d != 3*time.Second {
@@ -52,6 +57,7 @@ func TestMockSince(t *testing.T) {
 }
 
 func TestMockAfterFires(t *testing.T) {
+	t.Parallel()
 	mc := clock.NewMock(epoch)
 	ch := mc.After(1 * time.Second)
 	mc.Advance(500 * time.Millisecond)
@@ -73,6 +79,7 @@ func TestMockAfterFires(t *testing.T) {
 }
 
 func TestMockSet(t *testing.T) {
+	t.Parallel()
 	mc := clock.NewMock(epoch)
 	target := epoch.Add(10 * time.Hour)
 	mc.Set(target)
@@ -82,6 +89,7 @@ func TestMockSet(t *testing.T) {
 }
 
 func TestMockAfterAlreadyPast(t *testing.T) {
+	t.Parallel()
 	mc := clock.NewMock(epoch)
 	// After(0) or negative should fire immediately
 	ch := mc.After(0)
@@ -93,6 +101,7 @@ func TestMockAfterAlreadyPast(t *testing.T) {
 }
 
 func TestMockAdvanceNegativeNoOp(t *testing.T) {
+	t.Parallel()
 	mc := clock.NewMock(epoch)
 	mc.Advance(-5 * time.Minute)
 	if got := mc.Now(); !got.Equal(epoch) {

@@ -64,6 +64,8 @@ func FuzzIsBlocked(f *testing.F) {
 	f.Add([]byte(net.ParseIP("::ffff:169.254.169.254")))
 	f.Add([]byte(net.ParseIP("fd00::1")))
 	f.Add([]byte(net.ParseIP("2001:4860:4860::8888")))
+	f.Add([]byte(net.ParseIP("64:ff9b::7f00:1")))
+	f.Add([]byte(net.ParseIP("2002:a9fe:a9fe::")))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		if len(b) != 4 && len(b) != 16 {
 			return
@@ -74,13 +76,41 @@ func FuzzIsBlocked(f *testing.F) {
 			return
 		}
 		addr = addr.Unmap()
-		for _, p := range documentedBlocked {
-			if p.Contains(addr) {
-				if !safehttp.IsBlocked(net.IP(b)) {
-					t.Fatalf("IsBlocked(%v) = false, but %v is inside documented range %v", net.IP(b), addr, p)
+		// An address may be blocked itself, or because it carries a blocked IPv4
+		// address (NAT64, 6to4).
+		for _, candidate := range []netip.Addr{addr, embeddedIPv4(addr)} {
+			if !candidate.IsValid() {
+				continue
+			}
+			for _, p := range documentedBlocked {
+				if p.Contains(candidate) {
+					if !safehttp.IsBlocked(net.IP(b)) {
+						t.Fatalf("IsBlocked(%v) = false, but %v is inside documented range %v", net.IP(b), candidate, p)
+					}
+					return
 				}
-				return
 			}
 		}
 	})
+}
+
+var (
+	nat64Prefix = netip.MustParsePrefix("64:ff9b::/96")
+	sixToFour   = netip.MustParsePrefix("2002::/16")
+)
+
+// embeddedIPv4 extracts the IPv4 address a NAT64 (RFC 6052) or 6to4 (RFC 3056)
+// address carries, or returns the zero Addr.
+func embeddedIPv4(a netip.Addr) netip.Addr {
+	if !a.Is6() {
+		return netip.Addr{}
+	}
+	b := a.As16()
+	switch {
+	case nat64Prefix.Contains(a):
+		return netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
+	case sixToFour.Contains(a):
+		return netip.AddrFrom4([4]byte{b[2], b[3], b[4], b[5]})
+	}
+	return netip.Addr{}
 }

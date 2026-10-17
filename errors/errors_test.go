@@ -9,6 +9,7 @@ import (
 )
 
 func TestNewError(t *testing.T) {
+	t.Parallel()
 	e := errors.New(http.StatusNotFound, "not_found", "item missing")
 	if e.Status != http.StatusNotFound {
 		t.Fatalf("status: got %d, want %d", e.Status, http.StatusNotFound)
@@ -22,6 +23,7 @@ func TestNewError(t *testing.T) {
 }
 
 func TestErrorString(t *testing.T) {
+	t.Parallel()
 	e := errors.New(400, "bad_request", "invalid input")
 	got := e.Error()
 	if got != "bad_request: invalid input" {
@@ -30,6 +32,7 @@ func TestErrorString(t *testing.T) {
 }
 
 func TestErrorStringWithCause(t *testing.T) {
+	t.Parallel()
 	cause := fmt.Errorf("underlying io error")
 	e := errors.Wrap(cause, 500, "internal", "disk failure")
 	got := e.Error()
@@ -40,6 +43,7 @@ func TestErrorStringWithCause(t *testing.T) {
 }
 
 func TestHTTPStatus(t *testing.T) {
+	t.Parallel()
 	e := &errors.Error{}
 	if e.HTTPStatus() != http.StatusInternalServerError {
 		t.Fatal("empty Error should default to 500")
@@ -51,6 +55,7 @@ func TestHTTPStatus(t *testing.T) {
 }
 
 func TestUnwrap(t *testing.T) {
+	t.Parallel()
 	cause := fmt.Errorf("root")
 	e := errors.Wrap(cause, 500, "internal", "outer")
 	if errors.Unwrap(e) != cause {
@@ -59,6 +64,7 @@ func TestUnwrap(t *testing.T) {
 }
 
 func TestIs(t *testing.T) {
+	t.Parallel()
 	sentinel := errors.New(404, "not_found", "")
 	actual := errors.New(404, "not_found", "specific message")
 	if !errors.Is(actual, sentinel) {
@@ -71,6 +77,7 @@ func TestIs(t *testing.T) {
 }
 
 func TestFromError(t *testing.T) {
+	t.Parallel()
 	original := errors.New(403, "auth.forbidden", "nope")
 	chain := fmt.Errorf("outer: %w", original)
 	got, ok := errors.FromError(chain)
@@ -83,6 +90,7 @@ func TestFromError(t *testing.T) {
 }
 
 func TestFromErrorStdlib(t *testing.T) {
+	t.Parallel()
 	err := fmt.Errorf("plain error")
 	got, ok := errors.FromError(err)
 	if ok {
@@ -94,6 +102,7 @@ func TestFromErrorStdlib(t *testing.T) {
 }
 
 func TestNewf(t *testing.T) {
+	t.Parallel()
 	e := errors.Newf(400, "bad_request", "field %q is required", "name")
 	if e.Msg != `field "name" is required` {
 		t.Fatalf("got %q", e.Msg)
@@ -101,6 +110,7 @@ func TestNewf(t *testing.T) {
 }
 
 func TestSentinels(t *testing.T) {
+	t.Parallel()
 	sentinels := []*errors.Error{
 		errors.ErrNotFound,
 		errors.ErrBadRequest,

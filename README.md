@@ -31,6 +31,7 @@ trustworthy, which is what the API policy and the CI gates below are for.
 | Decode and validate a request body | [`validate`](validate/) |
 | Retry, or protect a slow upstream | [`retry`](retry/), [`circuitbreaker`](circuitbreaker/), [`loadshed`](loadshed/), [`backoffcoord`](backoffcoord/), [`ratecoord`](ratecoord/) |
 | Fake time or an upstream in a test | [`clock`](clock/) (`testhelpers/testclock`), [`testhelpers/httpmock`](testhelpers/httpmock/) |
+| Test a URL or host guard against known SSRF bypasses, or fail a test that leaks goroutines | [`testhelpers/ssrfcorpus`](testhelpers/ssrfcorpus/), [`testhelpers/leakcheck`](testhelpers/leakcheck/) |
 
 `client` is the older, lower-level HTTP client; prefer `safehttp` for new code.
 
@@ -45,6 +46,10 @@ generated from the packages' own doc comments.
 - **Lint with the shared config** so deprecated API and the common HTTP mistakes
   show up in your CI: see [lint/README.md](lint/README.md).
 - **What a release promises** (and what it does not): [docs/api-policy.md](docs/api-policy.md).
+- **Check that your pin has go-common's security fixes**:
+  `go run github.com/baditaflorin/go-common/scripts/compatcheck@latest -gomod go.mod`
+  (the floor and the fixes behind it are in [compat/compat.json](compat/compat.json);
+  see [docs/releasing.md](docs/releasing.md) for backports to old lines).
 
 ## Working on go-common
 
@@ -57,6 +62,8 @@ Every change to the module has to pass, in CI (Woodpecker, `.woodpecker.yml`):
 | `golangci-lint` (new findings only) | Bugs and dead code; legacy findings do not block |
 | `scripts/vuln-check.sh` (`govulncheck`) | A reachable known vulnerability that is not in the reviewed, expiring allowlist `scripts/govulncheck-allow.txt` |
 | `scripts/apidiff-check.sh` | An incompatible API change that the changelog does not call BREAKING |
+| `scripts/bench-gate.sh` | A hot-path benchmark that started allocating more (allocs/op, against the merge base) |
+| `scripts/release-check.sh` | A CHANGELOG version that is malformed, already tagged, or not the next free one |
 | `scripts/fuzz.sh` (short smoke) | Panics and hangs on hostile input in the parsers |
 | `go run ./scripts/pkgindex -check` | A stale package index, or a package with no doc comment |
 | `lint/selftest.sh` | The shared lint config no longer firing |
