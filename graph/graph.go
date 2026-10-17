@@ -49,7 +49,13 @@ type pkgState struct {
 // If the package was already initialised (e.g. via an earlier Record
 // from a probe) the existing ring and sender are preserved.
 func Init(serviceID, version string) {
+	forbidden := processForbidden(serviceID)
 	serviceID, overrideSet := configuredServiceID(serviceID)
+	if forbidden {
+		// A service that must never run the writer takes the same fail-closed path as an invalid GRAPH_SERVICE_ID: identified, no identity,
+		// so Record drops (and counts), the instrumentation chokepoints return, and the sender holds back anything it has (forbidden.go).
+		serviceID, overrideSet = "", true
+	}
 	stateOnce.Do(func() {
 		stateMu.Lock()
 		state = bootstrap(serviceID, version, serviceID != "" || overrideSet)
@@ -71,7 +77,11 @@ func Init(serviceID, version string) {
 	}
 	stateMu.Unlock()
 	if s != nil && serviceID == "" && overrideSet {
-		warnInvalidServiceID(s.cfg)
+		if forbidden {
+			warnForbiddenIdentity(s.cfg)
+		} else {
+			warnInvalidServiceID(s.cfg)
+		}
 	}
 }
 
@@ -108,12 +118,20 @@ func ensureInit() *pkgState {
 	}
 	stateOnce.Do(func() {
 		stateMu.Lock()
+		forbidden := processForbidden("")
 		serviceID, overrideSet := configuredServiceID("")
+		if forbidden {
+			serviceID, overrideSet = "", true
+		}
 		state = bootstrap(serviceID, "", serviceID != "" || overrideSet)
 		cfg := state.cfg
 		stateMu.Unlock()
 		if serviceID == "" && overrideSet {
-			warnInvalidServiceID(cfg)
+			if forbidden {
+				warnForbiddenIdentity(cfg)
+			} else {
+				warnInvalidServiceID(cfg)
+			}
 		}
 	})
 	stateMu.RLock()

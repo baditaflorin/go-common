@@ -30,6 +30,8 @@ func resetState(t *testing.T) {
 	state = nil
 	stateOnce = sync.Once{}
 	invalidIdentityLogOnce = sync.Once{}
+	forbiddenIdentityLogOnce = sync.Once{}
+	forbiddenIdentitySeen.Store(false)
 	stateMu.Unlock()
 	lookupMu.Lock()
 	lookupTable = map[string]lookupEntry{}

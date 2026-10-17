@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.102.62] - 2026-10-17
+
+### Added
+
+- `graph`: a process that is the collector (`fleet-graph`), the keystore (`apikey-service`), the vault front (`fleet-secrets`) or the keystore mesh (`keystore-mesh`) can never emit Fleet Graph events, whatever its environment says. The identity `Init` is given, or `GRAPH_SERVICE_ID`, naming one of them (`go-x` and `go_x` normalise to the plain id) takes the same fail-closed path as an invalid `GRAPH_SERVICE_ID`: no identity, `Record` drops and counts the event in `fleet_graph_events_dropped_invalid_identity_total`, `Enabled`/the instrumentation chokepoints return false, and the sender holds back anything it has. It is sticky for the process (a later `Init` cannot undo it), also holds when a `Record` arrives before `Init`, and logs one line, only when emission is otherwise configured. Why: the collector authenticates every writer batch through the keystore, so keystore telemetry would close keystore -> collector -> keystore; writer keys are materialised from the vault front; tier-0 services must not depend on the collector. This is the last layer behind go_fleet_runner (manifest refusal, render forces `GRAPH_ENABLED=false`) and services-registry (CI check), which hold the same four names. Tests pin the list and the name variants and cover each identity, the environment override, record-before-`Init`, stickiness, ordinary ids still emitting, and the log line; they also run under `-race` and `-shuffle`.
+
 ## [0.102.61] - 2026-10-17
 
 ### Fixed
