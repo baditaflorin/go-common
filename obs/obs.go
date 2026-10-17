@@ -173,8 +173,14 @@ func StartDebugServer(addr string) (StopFunc, error) {
 
 	// /metrics mirror of the shared registry, so the same runtime
 	// metrics the public /metrics serves are reachable on loopback even
-	// for services that gate their public /metrics behind auth.
-	mux.Handle("/metrics", promx.Handler())
+	// for services that gate their public /metrics behind auth. The
+	// registry is looked up on every scrape, not once here: Init may run
+	// before promx.Init (obs.Init in main() ahead of server.New is the
+	// natural order), and a handler built now would serve a registry that
+	// is empty or replaced for the life of the process.
+	mux.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		promx.Handler().ServeHTTP(w, r)
+	}))
 	// The declared environment variables, values redacted: for an operator on the
 	// host asking "what is this process actually configured with".
 	mux.Handle("/debug/config", env.Default.Handler())

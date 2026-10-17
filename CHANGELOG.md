@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.102.74] - 2026-10-18
+
+Metrics-wiring fixes for the problems the wave-4 observability review found ([docs/observability.md](docs/observability.md), "Known limits"). One behaviour change: the
+`method` label of the `promx` HTTP collectors.
+
+### Changed
+
+- **BREAKING (behavioural):** the `promx` HTTP collectors (`http_requests_total`, `http_request_duration_seconds`, `http_response_size_bytes`, so every service built on `server.New`)
+  label a request `method="OTHER"` when its method is not one of GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, CONNECT or TRACE. They used to label it with whatever token the client
+  sent. Go's server accepts any token as a method and the middleware runs before authentication, so anyone who could reach the port could create a new series set per distinct
+  method: a probe with 300 methods made 300 series sets, and about 900 requests made a 2 MB scrape. Methods are case-sensitive, so `get` is `OTHER` too. The request is still
+  counted and only the label changed: a dashboard or alert that selects a non-standard method by name (`method="PROPFIND"` on a WebDAV service) must select `"OTHER"` instead.
+  The nine standard methods are unchanged.
+
+### Added
+
+- `server.WithPromRoute(fn, limit)`: sets the route function and the limit of distinct route values for the Prometheus HTTP collectors of one server. `server.New` had no way to
+  do either (`promx.AutoWire` takes no options, and `WithRouteFunc` and `WithRouteLimit` only work on a collector you build yourself), so every `server.New` service labelled
+  routes with the raw path, kept the first 512 and folded the rest into `_other`. The default is unchanged. Its comment says that `GET /metrics` is unauthenticated, so a token
+  embedded in a path is a readable label value, and that `graph` templates paths while `promx` does not.
+- `promx.(*HTTPCollectors).WithRoute(fn, limit)`: a view of existing collectors with its own route function and limit, recording into the same series. The collectors it was
+  called on, and the set `AutoWire` shares, do not change.
+
+### Fixed
+
+- `obs.Init()` before `server.New` left the debug server's `/metrics` mirror empty for the life of the process (0 bytes against 16 KB when `Init` came after), because it looked
+  the `promx` registry up once, when it started, and `promx.Init` had not run yet. It looks the registry up on every scrape now, so the order does not matter. pprof was not affected.
+- The package comment of `promx` said `telemetry.Init` calls `AutoWire`. It does not; `server.New` does, and so does a direct call. The comment says so.
+- The comment on `Server.PromHTTPCollectors` said a caller could supply a custom `RouteFunc` through it. Replacing the field after `New` never did anything; the comment now
+  points to `WithPromRoute`.
+
 ## [0.102.73] - 2026-10-18
 
 `server.Run` and `server.RunTier` no longer let a service that cannot serve end with exit status 0 and no log line.

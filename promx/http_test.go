@@ -116,6 +116,138 @@ func TestHTTPRouteLimitDefaultAndOverride(t *testing.T) {
 	}
 }
 
+// TestHTTPWithRouteIsAView: WithRoute changes what a view records without
+// touching the collectors it came from, and both record into the same series.
+func TestHTTPWithRouteIsAView(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	base := NewHTTPCollectors(reg)
+	view := base.WithRoute(func(*http.Request) string { return "/t/{id}" }, 2)
+	serve := func(c *HTTPCollectors, path string) {
+		c.Middleware()(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).
+			ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", path, nil))
+	}
+
+	serve(view, "/t/1")
+	serve(view, "/t/2")
+	serve(base, "/t/3")
+
+	count := func(route string) float64 {
+		return testutil.ToFloat64(base.requestsTotal.WithLabelValues(base.service, "GET", route, "200"))
+	}
+	if got := count("/t/{id}"); got != 2 {
+		t.Errorf(`view route="/t/{id}" = %v, want 2`, got)
+	}
+	if got := count("/t/3"); got != 1 {
+		t.Errorf("the original collectors changed: route=/t/3 = %v, want 1 (raw path)", got)
+	}
+
+	keep := base.WithRoute(nil, 0)
+	if keep.routeFn == nil || keep.routeCap == base.routeCap || keep.routeCap.limit != base.routeCap.limit {
+		t.Errorf("WithRoute(nil, 0) must keep the route function and limit, with its own admitted set: %+v", keep)
+	}
+	if view.routeCap.limit != 2 {
+		t.Errorf("view limit = %d, want 2", view.routeCap.limit)
+	}
+}
+
+// TestMethodLabel: the nine standard methods keep their own label; any other
+// token, including a standard one in another case, is "OTHER".
+func TestMethodLabel(t *testing.T) {
+	for _, m := range []string{
+		http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodOptions, http.MethodConnect, http.MethodTrace,
+	} {
+		if got := methodLabel(m); got != m {
+			t.Errorf("methodLabel(%q) = %q, want %q", m, got, m)
+		}
+	}
+	for _, m := range []string{"", "get", "Post", "PROPFIND", "PURGE", "BREW", "X1", "GET ", "G\u00c9T"} {
+		if got := methodLabel(m); got != "OTHER" {
+			t.Errorf("methodLabel(%q) = %q, want OTHER", m, got)
+		}
+	}
+}
+
+// TestHTTPMethodLabelIsBounded drives a loopback server with 300 distinct
+// request methods, as anyone who can reach the port can: Go's server accepts any
+// token as a method and the middleware runs before authentication. The scrape
+// must stay small: one "OTHER" series set, not one per method.
+func TestHTTPMethodLabelIsBounded(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	coll := NewHTTPCollectors(reg)
+	ts := httptest.NewServer(coll.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})))
+	defer ts.Close()
+
+	send := func(method string) {
+		t.Helper()
+		req, err := http.NewRequest(method, ts.URL+"/probe", nil)
+		if err != nil {
+			t.Fatalf("NewRequest(%q): %v", method, err)
+		}
+		resp, err := ts.Client().Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		_ = resp.Body.Close()
+	}
+	const odd = 300
+	for i := 0; i < odd; i++ {
+		send("X" + strconv.Itoa(i))
+	}
+	for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodDelete, "get"} {
+		send(m)
+	}
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	perFamily := map[string]map[string]float64{}
+	for _, family := range families {
+		switch family.GetName() {
+		case "http_requests_total", "http_request_duration_seconds", "http_response_size_bytes":
+		default:
+			continue
+		}
+		methods := map[string]float64{}
+		for _, m := range family.GetMetric() {
+			var n float64
+			switch {
+			case m.GetCounter() != nil:
+				n = m.GetCounter().GetValue()
+			case m.GetHistogram() != nil:
+				n = float64(m.GetHistogram().GetSampleCount())
+			}
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "method" {
+					methods[l.GetValue()] += n
+				}
+			}
+		}
+		perFamily[family.GetName()] = methods
+	}
+	for _, name := range []string{"http_requests_total", "http_request_duration_seconds", "http_response_size_bytes"} {
+		methods, ok := perFamily[name]
+		if !ok {
+			t.Fatalf("%s: family missing from the scrape", name)
+		}
+		if len(methods) != 4 {
+			t.Errorf("%s: %d distinct method labels, want 4 (GET, POST, DELETE, OTHER)", name, len(methods))
+		}
+		// 300 distinct tokens and the lower-case "get" all fold into OTHER.
+		if methods["OTHER"] != odd+1 {
+			t.Errorf("%s: OTHER = %v, want %d", name, methods["OTHER"], odd+1)
+		}
+		for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+			if methods[m] != 1 {
+				t.Errorf("%s: %s = %v, want 1", name, m, methods[m])
+			}
+		}
+	}
+}
+
 func TestHTTPMiddlewareAttachesTraceExemplar(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	coll := NewHTTPCollectors(reg)

@@ -18,7 +18,7 @@ listed under [Known limits](#known-limits).
 | See where one slow request spent its time | [`reqstats`](../reqstats/) | Read the `Server-Timing` / `X-Request-Stats` response headers; add phases with `defer reqstats.From(ctx).Phase("name")()`. |
 | Follow one request across services | [`telemetry`](../telemetry/) | Propagation is always on; spans are exported only once an OTLP endpoint or the fleet vault credential is configured. |
 | Search logs by service, version, trace id | [`logx`](../logx/) | `LOG_FORMAT=json` or `server.WithStructuredLogs()`. Off by default. |
-| Find a leak or a CPU hot spot in one live process | [`obs`](../obs/) | Call `obs.Init()` after `server.New` (loopback pprof; see [Known limits](#known-limits)). For continuous profiles use [`profiling`](../profiling/), see [profiling.md](profiling.md). |
+| Find a leak or a CPU hot spot in one live process | [`obs`](../obs/) | Call `obs.Init()` in `main` (loopback pprof; before v0.102.74 it had to come after `server.New`, see [Known limits](#known-limits)). For continuous profiles use [`profiling`](../profiling/), see [profiling.md](profiling.md). |
 | Know which services call which | [`graph`](../graph/) | `GRAPH_ENABLED=true` plus a collector URL and writer key. Off by default. |
 | See what environment a process is really running with | [`env`](../env/) registry | The start-up check already logs problems; `/debug/config` on the `obs` debug server lists declared variables, redacted; [ENV.md](ENV.md) lists them all. |
 | Read a snapshot with `curl`, with no Prometheus | [`metrics`](../metrics/) | Nothing; `GET /metrics/json` (behind whatever auth the service installed). See [the `metrics` question](#is-metrics-superseded-by-promx). |
@@ -266,16 +266,18 @@ name, an outcome; never an id, a URL or a user.
 
 ## Known limits
 
-True of v0.102.71, found while writing this page. None is fixed by the page;
-they are listed so that an author is not surprised.
+Found against v0.102.71 while writing this page and listed so that an author is
+not surprised. An item says when a later release fixed it; the rest are still true.
 
 Wiring order:
 
-- `obs.Init()` before `server.New` leaves the debug server's `/metrics` mirror
+- `obs.Init()` before `server.New` left the debug server's `/metrics` mirror
   empty for the life of the process: it captured the registry that existed when
   it started, and `promx.Init` had not run. `server.Run` calls `New` and `Start`
-  itself, so the right order can only be had from a custom `server.Option`
-  (options run after the collectors are wired). pprof is not affected.
+  itself, so the right order could only be had from a custom `server.Option`
+  (options run after the collectors are wired). pprof was not affected.
+  **Fixed in v0.102.74:** the mirror looks the registry up on every scrape, so
+  `obs.Init()` can come before or after `server.New`.
 - `promx.Registry()` and `promx.Handler()` before `promx.Init` hand back a
   throwaway registry. Anything you register on it is never served. Register
   after `server.New` returns.
@@ -292,18 +294,25 @@ Label cardinality (`promx` `http_*`):
 
 - The `route` label is the raw `r.URL.Path`, capped at 512 distinct values; the
   first 512 seen keep their own series, everything later is `_other` for the
-  life of the process. `server.New` offers no way to change this:
+  life of the process. `server.New` offered no way to change this:
   `AutoWire` takes no options, `HTTPCollectors` has no setter, and
   `WithRouteFunc` / `WithRouteLimit` only work on a collector you build
-  yourself. The comment on `Server.PromHTTPCollectors` suggests otherwise.
-- The `method` label is `r.Method` with no cap, and Go's server accepts any
+  yourself. The comment on `Server.PromHTTPCollectors` suggested otherwise.
+  **Since v0.102.74** `server.WithPromRoute(fn, limit)` sets the route function
+  and the limit for one server, and the comment points to it. The default is
+  unchanged (the raw path, 512), so a service with parameterised paths has to
+  opt in.
+- The `method` label was `r.Method` with no cap, and Go's server accepts any
   token as a method. A probe sending 300 distinct methods to one path created 300
   new series sets; after about 900 requests the scrape was 2.0 MB and 22,000
   lines (about 27 lines per method-and-route pair). Reachable by anyone who can
-  reach the port, before your auth middleware runs.
+  reach the port, before your auth middleware runs. **Fixed in v0.102.74:** a
+  method other than GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, CONNECT and
+  TRACE is labelled `OTHER`.
 - Because `/metrics` is unauthenticated, an identifier or token embedded in a
   request path becomes a label value readable there. `graph` templates paths
-  (`/{id}`, `/{uuid}`, `/{token}`) and `promx` does not.
+  (`/{id}`, `/{uuid}`, `/{token}`) and `promx` does not. `WithPromRoute` is the
+  way to return a template instead.
 - `fleet_degraded_total{primitive,suffix}` comes from whatever string is passed
   to `degraded.Sink.Append`, uncapped. The host labels are capped (256), and
   `pool`, `gate`, `dep`, `check`, `ruleset`, `upstream` come from names in code:
@@ -335,5 +344,6 @@ Other:
   `env` registry. `DEBUG_ADDR`, `OBS_DISABLE`, `OTEL_*`, `PYROSCOPE_*` and
   `LOG_SKIP_PATHS` are not, so neither the start-up check nor `/debug/config`
   knows about them and a typo in one is silent.
-- The package comment of `promx` says `telemetry.Init` calls `AutoWire`. It does
-  not; only `server.New` (or a direct call) does.
+- The package comment of `promx` said `telemetry.Init` calls `AutoWire`. It does
+  not; only `server.New` (or a direct call) does. **Fixed in v0.102.74** (the
+  comment).
