@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.102.64] - 2026-10-17
+
+### Added
+
+- `egressproxy` package: a credential-injecting forward proxy on 127.0.0.1 (ephemeral port, never another interface) so a browser that cannot
+  authenticate to an upstream proxy can still be forced through one. Chromium ignores credentials in `--proxy-server` and cannot answer a 407 in
+  headless mode, so start it with `--proxy-server=<Proxy.URL()>` and `--proxy-bypass-list=<-loopback>` and let this proxy pick the upstream per
+  connection through `proxysupplier.Supplier` (`ProxyURLForKey` when the supplier is a `KeyedSupplier` and `Config.KeyFunc` gives a key), add
+  `Proxy-Authorization: Basic ...` and relay. It serves `CONNECT host:port` (tunnels spliced with half-close) and absolute-URI plain HTTP
+  (hop-by-hop and `Proxy-*` headers stripped, `Expect: 100-continue` answered locally, WebSocket upgrades spliced after the upstream's 101).
+  - **Fails closed.** There is no direct path to a target in the package; the only direct dial is to the upstream proxy. A supplier that returns
+    "" (nothing configured, every exit IP cooling down), an unusable URL, or the proxy's own address is answered 503/502 and the target is never
+    contacted. `Config.RequireUpstream` (set by `DefaultConfig`) only makes `Start` reject a nil `Supplier`; it opens no direct path.
+  - **SSRF guard** before any dial (`Config.Guard`, default `DefaultGuard` built on `safehttp.GuardHost`): literal and resolved loopback,
+    private, link-local (169.254.169.254), CGNAT and ULA targets and the compliance denylist get 403, honouring `SAFEHTTP_ALLOW_PRIVATE_IPS` /
+    `SAFEHTTP_ALLOW_PRIVATE_HOSTS`; a name that cannot be verified gets 502. Verdicts are cached per host:port (30 s, 4096 entries, unavailable
+    verdicts 2 s). The upstream resolves the target itself, so this is defence in depth, not a DNS-rebinding fix.
+  - **Result feedback and retry.** If the supplier is a `ResultReporter`: `MarkResult(addr, false)` on a dial or handshake failure, a 407 or a 5xx
+    answer to CONNECT, `MarkResult(addr, true)` on an established tunnel (plain HTTP: true on any non-407 answer). At most two attempts, the
+    second on a different upstream when one exists, only before any byte reached the browser, both inside `DialTimeout` (the first uses at
+    most 60% of it); plain HTTP retries only on a dial failure or a body-less GET/HEAD/OPTIONS. A 407 is never passed to the browser (502).
+    `Config.IgnoreUpstream5xx` stops a 5xx from counting as a bad exit IP (webshare_direct puts an IP in a 3 minute cooldown on the first
+    `MarkResult(false)`, so a dead *target* answered 502 would otherwise drain the pool).
+  - **Limits**, all in `Config` and `ConfigFromEnv` (`EGRESSPROXY_MAX_CONNS` 256, `_DIAL_TIMEOUT` 10s, `_IDLE_TIMEOUT` 60s for a tunnel with no
+    traffic in either direction, `_READ_HEADER_TIMEOUT` 15s, `_MAX_TUNNEL_BYTES` 64 MiB per direction with 0 = unlimited, `_REQUIRE_UPSTREAM`,
+    `_IGNORE_UPSTREAM_5XX`, `_GUARD_CACHE_TTL`). Connections over `MaxConns` get an immediate 503. A zero `Config` literal has no byte cap:
+    start from `DefaultConfig()` or `ConfigFromEnv()`.
+  - Seen in a live check with Chromium 142: with `--proxy-server` set, Chromium's own background requests (component updater, `clients2.google.com`
+    time sync, `www.google.com`) also go through the proxy, and a target the upstream cannot reach is a 5xx and so a bad-exit-IP verdict. Start the
+    browser with `--disable-background-networking --disable-component-update --disable-sync` (or set `IgnoreUpstream5xx`).
+  - **Metrics** on `Config.Registerer` (default `promx.Registry()`; collectors already registered are reused):
+    `egressproxy_requests_total{kind,result}` (kind connect|http|unknown; result
+    ok|guard_denied|guard_error|no_upstream|upstream_error|overload|byte_cap|bad_request), `egressproxy_bytes_total{direction}`,
+    `egressproxy_active_tunnels`, `egressproxy_upstream_attempts_total{result}`, `egressproxy_request_duration_seconds{kind}`. No host, upstream
+    address or credential is ever a label, and logs name only the upstream's host:port, scheme and a result (rate limited per cause).
+- `chromeguard` package: keeps a Chromium process tree from taking its container down (no chromedp or browser-driver dependency; the service hands
+  it the browsers' pids). Reads a proc filesystem whose root is `/proc` on Linux and none elsewhere (readers return `ErrUnsupported`, `Monitor.Run`
+  idles), or any root given explicitly, which is how the tests run on a fake tree on every platform.
+  - `Tree(rootPID)` / `TreeRSS(rootPID)` (and the same on `NewInspector(procRoot)`): the browser root and its descendants with pid, ppid, executable,
+    args, role from `--type=` (browser, renderer, gpu, utility, zygote, crashpad, other), `RSSBytes` and, when `smaps_rollup` is readable,
+    `PSSBytes`. Chromium rewrites the argument area of its child processes into one space-joined string, which is split back into arguments.
+    Summed RSS double counts pages shared between processes (the Chromium binary, libraries, shared memory), so a tree's RSS total overstates it;
+    PSS does not (`SumRSS`, `SumPSS`): a live Alpine Chromium 142 tree with three renderers summed to 726 MiB RSS and 142 MiB PSS.
+  - `SetOOMScoreAdj(pid, adj)` raises `oom_score_adj` and never lowers it (raising is allowed unprivileged); `AdjustRenderers(rootPID, adj)` raises it
+    (default 800) for renderer, gpu, utility and zygote children once per process (keyed by pid and start time, so pid reuse is a new process), so
+    the kernel's OOM killer picks a renderer before the browser or the Go service.
+  - `NewMonitor(MonitorConfig)` + `Run(ctx)`: each tick raises the OOM score of new children, SIGKILLs any renderer above `RendererMaxRSS` (one
+    pid, re-checked right before the kill, never a watched browser, init or the calling process) and calls `OnBrowserOverLimit` once per episode
+    when a browser's whole tree exceeds `BrowserMaxRSS` (the episode ends below 90% of it) so the service can drain and recycle that browser.
+    `UsePSS` compares PSS instead of RSS. Metrics on `MonitorConfig.Registerer` (default `promx.Registry()`): `chromeguard_browser_rss_bytes{browser}`
+    (index, at most 16), `chromeguard_renderers`, `chromeguard_renderer_kills_total`, `chromeguard_oom_adjusted_total`,
+    `chromeguard_scan_errors_total`. Start from `DefaultMonitorConfig()` (5 s, renderers killed above 1 GiB, OOM 800): a bare `MonitorConfig`
+    literal has `RendererMaxRSS` 0, which disables killing.
+  - `Size(cgroup.Snapshot, SizingOptions) Sizing{Browsers, Tabs, Reason}`: tabs = clamp(min(CPUQuotaCores x 2.5, (MemLimit x 0.7 - 200 MiB x browsers) /
+    250 MiB), 4, 40), browsers = clamp(ceil(tabs / 6), 1, 6), taking the largest tab count whose memory bill fits; a nil quota or limit falls back to
+    `HostCPUs` / `HostMemBytes`, then `runtime.NumCPU()` and 4 GiB. The function is `Size` rather than `Sizing` because the result type has that name.
+    `Reason` is one line for the start-up log.
+
 ## [0.102.63] - 2026-10-17
 
 ### Added
