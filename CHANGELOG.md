@@ -40,8 +40,8 @@ benchmarks with an allocation gate, a security floor for pins, and release tooli
 
 ## [0.102.69] - 2026-10-17
 
-Wave 1 of the go-common hardening: CI gates, fuzz targets, an API policy, a shared lint config and generated docs. Two bugs the new fuzz
-targets found are fixed. No exported API changed.
+Wave 1 of the go-common hardening: CI gates, fuzz targets, an API policy, a shared lint config and generated docs. Three bugs the new fuzz
+targets found are fixed (one changes behaviour: see `validate` below). No exported API changed.
 
 ### Fixed
 
@@ -51,6 +51,11 @@ targets found are fixed. No exported API changed.
 - `egressproxy`: an upstream proxy URL whose host cannot be dialed (for example `//]`, which `url.Parse` accepts) is rejected when it is
   parsed, instead of producing an address like `]:80` that fails on every connection. Found by `FuzzParseUpstream`; the crashing input is
   committed under `egressproxy/testdata/fuzz/` and replayed by `go test`.
+- **BREAKING (behavioural):** `validate`'s `pattern=` tag now requires the whole value to match, as its documentation has said since the file was created ("anchored").
+  It was applied with an unanchored match, so `pattern=[A-Z]{2}[0-9]{3}` accepted `AA0000` and anything that merely contained a match (`<script>AA123`), and an alternation
+  such as `pattern=a|b` accepted `abc`. The tag is now wrapped in `^(?:...)$`: one that already has `^...$` is unaffected, one that relied on substring matching starts
+  rejecting. No `pattern=` tag exists in any local repository outside go-common's own tests. Found by `FuzzBindBytes` in the first real CI run of the fuzz step on a later
+  PR in this series; the crashing input is committed under `validate/testdata/fuzz/` and replayed by `go test`.
 
 ### Added
 

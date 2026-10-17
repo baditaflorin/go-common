@@ -72,7 +72,12 @@ func applyRule(v reflect.Value, name, rule string) string {
 		if s == "" {
 			break
 		}
-		re, err := reCache.compile(pattern)
+		// The tag is documented as anchored, so the whole value must match. A bare
+		// MatchString only needs a substring: "[A-Z]{2}[0-9]{3}" would accept
+		// "AA0000" and "<script>AA123". Wrapping is harmless for a pattern that
+		// already carries ^ and $, and keeps an alternation (a|b) from matching
+		// a prefix; (?i) and other inline flags stay scoped to the group.
+		re, err := reCache.compile("^(?:" + pattern + ")$")
 		if err != nil {
 			return fmt.Sprintf("%s: invalid pattern %q in tag", name, pattern)
 		}
