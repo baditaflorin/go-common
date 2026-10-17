@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.102.61] - 2026-10-17
+
+### Fixed
+
+- `promx` tests: the egress collector tests hard-coded an empty `service` label, but `NewEgressCollectors` labels with `ServiceID()`, a package
+  global that `TestInitIdempotent` sets. They passed only when run before that test, so `go test -count=2 ./promx` (and any shuffled order) failed
+  with `requests_total = 0, want 1`. They now read the collector's own `service` label. Test-only, no behaviour change.
+
 ## [0.102.60] - 2026-10-17
 
 ### Added
