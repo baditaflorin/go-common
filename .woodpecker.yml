@@ -35,6 +35,8 @@ steps:
       - go run ./scripts/pkgindex -check
       # fuzz.sh retries the Go fuzz engine's spurious timeout; prove it still does.
       - scripts/fuzz-selftest.sh
+      # docs/ENV.md must match the variables the packages declare.
+      - go run ./scripts/envdoc -check
     when:
       - event: pull_request
       - event: push

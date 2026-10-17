@@ -16,6 +16,7 @@ import (
 	"github.com/baditaflorin/go-common/telemetry"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -30,6 +31,10 @@ type Option func(*Server)
 func WithoutRequestStats() Option {
 	return func(s *Server) { s.noRequestStats = true }
 }
+
+// envCheckOnce makes the start-up check of the environment run once per process,
+// however many times New is called (tests call it often).
+var envCheckOnce sync.Once
 
 // New creates a new Server with optional configuration
 func New(cfg *config.Config, opts ...Option) *Server {
@@ -48,6 +53,12 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// in tests) tune once. Operator-set GOGC/GOMEMLIMIT are never
 	// overridden; FLEET_RUNTIME_TUNING=off disables it per service.
 	runtimetune.Apply()
+
+	// Tell the operator about environment variables that cannot work (a value
+	// that does not parse, a variable that was removed, a likely typo of a
+	// declared one). It only logs: a mistyped optional variable must not stop a
+	// service. Once per process, like the tuning above.
+	envCheckOnce.Do(func() { env.Default.Check() })
 
 	// Initialise the fleet-graph identity for this process. Safe to
 	// call multiple times; subsequent calls only update identity.
@@ -110,6 +121,9 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	for _, opt := range opts {
 		opt(srv)
 	}
+
+	// Structured logs, if switched on, before anything below logs.
+	srv.installLogs()
 
 	// Register /health endpoint. Two shapes:
 	//   - no deps registered → flat {"status":"ok", ...}

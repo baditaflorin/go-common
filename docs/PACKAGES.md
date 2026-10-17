@@ -2,7 +2,7 @@
 
 # Package index
 
-69 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
+72 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
 
 | Package | Summary |
 | --- | --- |
@@ -38,6 +38,8 @@
 | [`jsbundle`](../jsbundle/) | Recovers JavaScript source maps from minified bundles. |
 | [`ledger`](../ledger/) | The canonical client for the fleet's token ledger (baditaflorin/go-fleet-token-ledger, ADR-0033). |
 | [`loadshed`](../loadshed/) | Provides a non-blocking concurrency gate ("load shedder") for bounding the number of in-flight calls a service makes to a slow, saturatable shared upstream. |
+| [`logx`](../logx/) | The fleet's structured logger: slog JSON on stdout, with the service, version and node on every line, the trace id when the call is inside a traced request, and credentials redacted before they are… |
+| [`meshclient`](../meshclient/) | The HTTP client for calls to sibling fleet services on the private mesh: a base URL, a timeout, a bounded and strictly decoded JSON body, and one explicit answer to the question every such call has… |
 | [`meshresult`](../meshresult/) | The fleet-wide canonical classification of an enricher's result, plus the HTTP-status mapping its consumer (domainscope) keys on. |
 | [`metrics`](../metrics/) | Provides a lightweight, in-process request statistics collector for JSON-served snapshots at /metrics/json. |
 | [`middleware`](../middleware/) | Provides composable HTTP middleware for fleet services. |
@@ -53,6 +55,7 @@
 | [`qrterm`](../qrterm/) | Turns a short piece of content — a URL, an id, a token — into a QR code an operator can scan straight off a terminal, or an image/png a browser/client can render. |
 | [`ratecoord`](../ratecoord/) | Provides a distributed rate-limit coordination client. |
 | [`reqstats`](../reqstats/) | Emits per-request resource stats on every HTTP response: a W3C Server-Timing header (human/devtools) and an X-Request-Stats JSON header (machine/cost-engine). |
+| [`resilience`](../resilience/) | Composes the fleet's outbound-call protections into one policy: a load-shed gate, a circuit breaker, and retries limited by a budget. |
 | [`response`](../response/) | Provides the canonical fleet HTTP response envelope. |
 | [`retry`](../retry/) | Provides context-aware retry logic with configurable backoff strategies. |
 | [`runtimetune`](../runtimetune/) | Applies conservative, container-aware Go runtime memory/GC tuning at process start. |

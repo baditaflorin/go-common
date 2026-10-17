@@ -38,6 +38,16 @@ func WithLogger(ctx context.Context, logger *slog.Logger) context.Context {
 // Constructed once at package init to avoid repeated allocations.
 var defaultLogger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
+// SetLogger replaces the logger the access log, and the per-request child logger
+// handed out by LoggerFromContext, are built from. server.New calls it when
+// structured logging is switched on. It assigns a plain variable: call it once at
+// start-up, before serving.
+func SetLogger(l *slog.Logger) {
+	if l != nil {
+		defaultLogger = l
+	}
+}
+
 // skipPaths holds the parsed LOG_SKIP_PATHS prefix list.
 // Initialised lazily (once) so tests can set the env var before first use.
 var (
@@ -112,9 +122,9 @@ func Logging(next http.Handler) http.Handler {
 		}
 
 		if isSkipped(r.URL.Path) {
-			reqLogger.Debug("request_completed", attrs...)
+			reqLogger.DebugContext(r.Context(), "request_completed", attrs...)
 		} else {
-			reqLogger.Info("request_completed", attrs...)
+			reqLogger.InfoContext(r.Context(), "request_completed", attrs...)
 		}
 	})
 }

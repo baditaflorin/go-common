@@ -35,26 +35,26 @@ type config struct {
 
 // loadConfig reads env vars once. Called from initOnce.
 func loadConfig() config {
-	collectorURL, collectorErr := normalizeCollectorURL(os.Getenv("GRAPH_COLLECTOR_URL"))
+	collectorURL, collectorErr := normalizeCollectorURL(envCollectorURL.Value())
 	c := config{
-		enabled:      parseBoolEnv("GRAPH_ENABLED", false),
+		enabled:      parseBoolEnv(envEnabled.Name, false),
 		collectorURL: collectorURL,
 		collectorErr: collectorErr,
 		// GRAPH_API_KEY is deliberately writer-only. In particular, do
 		// not fall back to FLEET_API_KEY: a graph event writer should
 		// never inherit broad fleet credentials by accident.
 		writerAPIKey:     loadGraphWriterAPIKey(),
-		writerAPIKeyFile: strings.TrimSpace(os.Getenv("GRAPH_API_KEY_FILE")),
+		writerAPIKeyFile: strings.TrimSpace(envAPIKeyFile.Value()),
 		// Lookup is a separate read capability. It must not reuse the
 		// writer credential while graph route auth is being split.
-		readerAPIKey:     strings.TrimSpace(os.Getenv("GRAPH_READER_API_KEY")),
-		targetAliases:    parseTargetAliases(os.Getenv("GRAPH_TARGET_ALIASES")),
-		trustedCallerIPs: parseTrustedCallerIPs(os.Getenv("GRAPH_TRUSTED_CALLER_IPS")),
+		readerAPIKey:     strings.TrimSpace(envReaderAPIKey.Value()),
+		targetAliases:    parseTargetAliases(envTargetAliases.Value()),
+		trustedCallerIPs: parseTrustedCallerIPs(envTrustedCallerIPs.Value()),
 		node:             loadNode(),
-		sampleRate:       parseFloatEnv("GRAPH_SAMPLE_RATE", 1.0),
-		bufferSize:       parseIntEnv("GRAPH_BUFFER_SIZE", 10000),
-		flushInterval:    time.Duration(parseIntEnv("GRAPH_FLUSH_INTERVAL", 10)) * time.Second,
-		flushBatch:       parseIntEnv("GRAPH_FLUSH_BATCH", 500),
+		sampleRate:       parseFloatEnv(envSampleRate.Name, 1.0),
+		bufferSize:       parseIntEnv(envBufferSize.Name, 10000),
+		flushInterval:    time.Duration(parseIntEnv(envFlushInterval.Name, 10)) * time.Second,
+		flushBatch:       parseIntEnv(envFlushBatch.Name, 500),
 	}
 	// Event emission is deliberately all-or-nothing: it is opt-in and
 	// requires a valid collector URL plus a dedicated writer key. This
@@ -83,10 +83,10 @@ func loadConfig() config {
 // closed instead of falling back to an environment value. The env variable
 // remains a compatibility path for services that have not migrated yet.
 func loadGraphWriterAPIKey() string {
-	if path := strings.TrimSpace(os.Getenv("GRAPH_API_KEY_FILE")); path != "" {
+	if path := strings.TrimSpace(envAPIKeyFile.Value()); path != "" {
 		return readGraphWriterAPIKey(path)
 	}
-	return strings.TrimSpace(os.Getenv("GRAPH_API_KEY"))
+	return strings.TrimSpace(envAPIKey.Value())
 }
 
 func readGraphWriterAPIKey(path string) string {
@@ -278,7 +278,7 @@ func validGraphServiceID(serviceID string) bool {
 // An invalid override fails closed so events are not attributed to a different
 // service than the credential authorizes.
 func configuredServiceID(defaultID string) (string, bool) {
-	raw := strings.TrimSpace(os.Getenv("GRAPH_SERVICE_ID"))
+	raw := strings.TrimSpace(envServiceID.Value())
 	if raw == "" {
 		return defaultID, false
 	}

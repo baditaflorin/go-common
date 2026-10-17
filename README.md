@@ -22,14 +22,16 @@ trustworthy, which is what the API policy and the CI gates below are for.
 | --- | --- |
 | Start an HTTP service with the fleet middleware, `/health`, `/selftest`, graceful drain | [`server`](server/) with [`config`](config/) and [`env`](env/) |
 | Call the **public internet** | [`safehttp.NewClient`](safehttp/) (refuses internal addresses, DNS-rebind safe) |
-| Call a **sibling fleet service** on the private mesh | A plain `net/http.Client` with a 1-3 s `Timeout`; fail open and add `"<primitive>-down"` to [`degraded`](degraded/). `safehttp` rejects private IPs by design, so it cannot be used here |
+| Call a **sibling fleet service** on the private mesh | [`meshclient`](meshclient/): you must choose fail-open or fail-closed, and in fail-open it adds `"<primitive>-down"` to the request's [`degraded`](degraded/) list. `safehttp` rejects private IPs by design, so it cannot be used here |
 | Fetch a page through the fleet fetch cache | [`fleetfetch`](fleetfetch/) |
 | Send a browser through an upstream proxy that needs credentials | [`egressproxy`](egressproxy/) with [`proxysupplier`](proxysupplier/) |
 | Verify an API key, or protect a handler | [`apikey`](apikey/), [`middleware`](middleware/) |
-| Read environment variables | [`env`](env/) |
+| Read environment variables | [`env`](env/); declare the ones your package owns in its registry so they are listed in [docs/ENV.md](docs/ENV.md), checked at start-up and shown redacted on the debug server |
+| Write structured logs with the service, version and trace id | [`logx`](logx/): set `LOG_FORMAT=json` (or pass `server.WithStructuredLogs()`); off by default |
 | Return JSON, typed errors, pages | [`response`](response/), [`errors`](errors/), [`pagination`](pagination/) |
 | Decode and validate a request body | [`validate`](validate/) |
-| Retry, or protect a slow upstream | [`retry`](retry/), [`circuitbreaker`](circuitbreaker/), [`loadshed`](loadshed/), [`backoffcoord`](backoffcoord/), [`ratecoord`](ratecoord/) |
+| Retry, or protect a slow upstream | [`resilience`](resilience/) (retries limited by a budget, plus a breaker and a load-shed gate), built from [`retry`](retry/), [`circuitbreaker`](circuitbreaker/) and [`loadshed`](loadshed/); also [`backoffcoord`](backoffcoord/), [`ratecoord`](ratecoord/) |
+| Decide which result type to return | [docs/outcomes.md](docs/outcomes.md): `errors`, `meshresult`, `degraded`, `nullify` and what each is for |
 | Fake time or an upstream in a test | [`clock`](clock/) (`testhelpers/testclock`), [`testhelpers/httpmock`](testhelpers/httpmock/) |
 | Test a URL or host guard against known SSRF bypasses, or fail a test that leaks goroutines | [`testhelpers/ssrfcorpus`](testhelpers/ssrfcorpus/), [`testhelpers/leakcheck`](testhelpers/leakcheck/) |
 
@@ -66,6 +68,7 @@ Every change to the module has to pass, in CI (Woodpecker, `.woodpecker.yml`):
 | `scripts/release-check.sh` | A CHANGELOG version that is malformed, already tagged, or not the next free one |
 | `scripts/fuzz.sh` (short smoke) | Panics and hangs on hostile input in the parsers |
 | `go run ./scripts/pkgindex -check` | A stale package index, or a package with no doc comment |
+| `go run ./scripts/envdoc -check` | A stale `docs/ENV.md`, or a package that declares environment variables but is not imported by the generator |
 | `lint/selftest.sh` | The shared lint config no longer firing |
 
 Most of these are CPU-heavy. Run them in CI or on a build host rather than a
