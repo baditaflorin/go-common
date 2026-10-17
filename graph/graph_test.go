@@ -287,10 +287,17 @@ func TestInitUsesCanonicalGraphServiceIDOverride(t *testing.T) {
 	}
 }
 
+// unreachableCollectorURL is the collector for every test that needs a valid-looking configuration but must never talk to the real
+// collector. These tests used the production URL with a fake writer key; the "fully configured, valid id" case really flushed an event
+// on Shutdown, so each go-common test run on a builder, CI worker or laptop sent a POST /events as "domain-example" and the collector
+// answered 401 (38 of them on 2026-10-17, which looked like a writer without a key). A loopback address is a valid collector URL, and
+// port 1 refuses the connection at once.
+const unreachableCollectorURL = "http://127.0.0.1:1"
+
 func TestInvalidGraphServiceIDOverrideFailsClosed(t *testing.T) {
 	resetState(t)
 	t.Setenv("GRAPH_ENABLED", "true")
-	t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
+	t.Setenv("GRAPH_COLLECTOR_URL", unreachableCollectorURL)
 	t.Setenv("GRAPH_API_KEY", "writer-test-key")
 	t.Setenv("GRAPH_SERVICE_ID", "")
 
@@ -314,7 +321,7 @@ func TestInvalidGraphServiceIDIsCountedAndLoggedOnce(t *testing.T) {
 	resetState(t)
 	buf := captureLog(t)
 	t.Setenv("GRAPH_ENABLED", "true")
-	t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
+	t.Setenv("GRAPH_COLLECTOR_URL", unreachableCollectorURL)
 	t.Setenv("GRAPH_API_KEY", "writer-test-key")
 	t.Setenv("GRAPH_SERVICE_ID", "go_domain_example")
 
@@ -365,7 +372,7 @@ func TestInvalidGraphServiceIDIsCountedAtTheChokepoints(t *testing.T) {
 	resetState(t)
 	captureLog(t)
 	t.Setenv("GRAPH_ENABLED", "true")
-	t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
+	t.Setenv("GRAPH_COLLECTOR_URL", unreachableCollectorURL)
 	t.Setenv("GRAPH_API_KEY", "writer-test-key")
 	t.Setenv("GRAPH_SERVICE_ID", "not_a_label")
 	Init("go_domain_example", "1.0.0")
@@ -416,19 +423,19 @@ func TestInvalidIdentitySignalsStayQuietWhenNothingWouldEmit(t *testing.T) {
 	cases := map[string]func(t *testing.T){
 		"graph disabled, invalid id": func(t *testing.T) {
 			t.Setenv("GRAPH_ENABLED", "")
-			t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
+			t.Setenv("GRAPH_COLLECTOR_URL", unreachableCollectorURL)
 			t.Setenv("GRAPH_API_KEY", "writer-test-key")
 			t.Setenv("GRAPH_SERVICE_ID", "not_a_label")
 		},
 		"no writer key, invalid id": func(t *testing.T) {
 			t.Setenv("GRAPH_ENABLED", "true")
-			t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
+			t.Setenv("GRAPH_COLLECTOR_URL", unreachableCollectorURL)
 			t.Setenv("GRAPH_API_KEY", "")
 			t.Setenv("GRAPH_SERVICE_ID", "not_a_label")
 		},
 		"fully configured, valid id": func(t *testing.T) {
 			t.Setenv("GRAPH_ENABLED", "true")
-			t.Setenv("GRAPH_COLLECTOR_URL", "https://fleet-graph.0exec.com")
+			t.Setenv("GRAPH_COLLECTOR_URL", unreachableCollectorURL)
 			t.Setenv("GRAPH_API_KEY", "writer-test-key")
 			t.Setenv("GRAPH_SERVICE_ID", "domain-example")
 		},
