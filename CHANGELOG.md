@@ -1,5 +1,41 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `egressproxy` package: a credential-injecting forward proxy on 127.0.0.1 (ephemeral port, never another interface) so a browser that cannot
+  authenticate to an upstream proxy can still be forced through one. Chromium ignores credentials in `--proxy-server` and cannot answer a 407 in
+  headless mode, so start it with `--proxy-server=<Proxy.URL()>` and `--proxy-bypass-list=<-loopback>` and let this proxy pick the upstream per
+  connection through `proxysupplier.Supplier` (`ProxyURLForKey` when the supplier is a `KeyedSupplier` and `Config.KeyFunc` gives a key), add
+  `Proxy-Authorization: Basic ...` and relay. It serves `CONNECT host:port` (tunnels spliced with half-close) and absolute-URI plain HTTP
+  (hop-by-hop and `Proxy-*` headers stripped, `Expect: 100-continue` answered locally, WebSocket upgrades spliced after the upstream's 101).
+  - **Fails closed.** There is no direct path to a target in the package; the only direct dial is to the upstream proxy. A supplier that returns
+    "" (nothing configured, every exit IP cooling down), an unusable URL, or the proxy's own address is answered 503/502 and the target is never
+    contacted. `Config.RequireUpstream` (set by `DefaultConfig`) only makes `Start` reject a nil `Supplier`; it opens no direct path.
+  - **SSRF guard** before any dial (`Config.Guard`, default `DefaultGuard` built on `safehttp.GuardHost`): literal and resolved loopback,
+    private, link-local (169.254.169.254), CGNAT and ULA targets and the compliance denylist get 403, honouring `SAFEHTTP_ALLOW_PRIVATE_IPS` /
+    `SAFEHTTP_ALLOW_PRIVATE_HOSTS`; a name that cannot be verified gets 502. Verdicts are cached per host:port (30 s, 4096 entries, unavailable
+    verdicts 2 s). The upstream resolves the target itself, so this is defence in depth, not a DNS-rebinding fix.
+  - **Result feedback and retry.** If the supplier is a `ResultReporter`: `MarkResult(addr, false)` on a dial or handshake failure, a 407 or a 5xx
+    answer to CONNECT, `MarkResult(addr, true)` on an established tunnel (plain HTTP: true on any non-407 answer). At most two attempts, the
+    second on a different upstream when one exists, only before any byte reached the browser, both inside `DialTimeout` (the first uses at
+    most 60% of it); plain HTTP retries only on a dial failure or a body-less GET/HEAD/OPTIONS. A 407 is never passed to the browser (502).
+    `Config.IgnoreUpstream5xx` stops a 5xx from counting as a bad exit IP (webshare_direct puts an IP in a 3 minute cooldown on the first
+    `MarkResult(false)`, so a dead *target* answered 502 would otherwise drain the pool).
+  - **Limits**, all in `Config` and `ConfigFromEnv` (`EGRESSPROXY_MAX_CONNS` 256, `_DIAL_TIMEOUT` 10s, `_IDLE_TIMEOUT` 60s for a tunnel with no
+    traffic in either direction, `_READ_HEADER_TIMEOUT` 15s, `_MAX_TUNNEL_BYTES` 64 MiB per direction with 0 = unlimited, `_REQUIRE_UPSTREAM`,
+    `_IGNORE_UPSTREAM_5XX`, `_GUARD_CACHE_TTL`). Connections over `MaxConns` get an immediate 503. A zero `Config` literal has no byte cap:
+    start from `DefaultConfig()` or `ConfigFromEnv()`.
+  - Seen in a live check with Chromium 142: with `--proxy-server` set, Chromium's own background requests (component updater, `clients2.google.com`
+    time sync, `www.google.com`) also go through the proxy, and a target the upstream cannot reach is a 5xx and so a bad-exit-IP verdict. Start the
+    browser with `--disable-background-networking --disable-component-update --disable-sync` (or set `IgnoreUpstream5xx`).
+  - **Metrics** on `Config.Registerer` (default `promx.Registry()`; collectors already registered are reused):
+    `egressproxy_requests_total{kind,result}` (kind connect|http|unknown; result
+    ok|guard_denied|guard_error|no_upstream|upstream_error|overload|byte_cap|bad_request), `egressproxy_bytes_total{direction}`,
+    `egressproxy_active_tunnels`, `egressproxy_upstream_attempts_total{result}`, `egressproxy_request_duration_seconds{kind}`. No host, upstream
+    address or credential is ever a label, and logs name only the upstream's host:port, scheme and a result (rate limited per cause).
+
 ## [0.102.63] - 2026-10-17
 
 ### Added
