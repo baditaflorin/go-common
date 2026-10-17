@@ -7,7 +7,8 @@
 go-common is one Go module, but a service only builds, and only lists in its own `go.mod` and `go.sum`, the
 third-party modules that the packages it imports reach. This page measures that for every package, so that
 the small packages many services import can be kept small. `scripts/dep-budget.sh` enforces it for the
-budgeted ones; see [How to change a budget](#how-to-change-a-budget).
+budgeted ones; see [How to change a budget](#how-to-change-a-budget). The measurements behind the budget, and why
+go-common is not split into nested modules, are in [ADR-0002](adr/0002-dependency-budget.md).
 
 ## How to read it
 
