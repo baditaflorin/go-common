@@ -40,8 +40,9 @@ type Server struct {
 
 	// PromHTTPCollectors is the inbound HTTP collector set, auto-
 	// registered into the shared promx registry. Exposed so callers can
-	// inspect or, in rare cases, supply a custom RouteFunc (e.g. when
-	// wrapping a router that exposes a templated-path API).
+	// inspect it. To change the "route" label or its cap use WithPromRoute:
+	// replacing this field after New has no effect, because the middleware
+	// is built from the collectors New wired.
 	PromHTTPCollectors *promx.HTTPCollectors
 	// PromAuthCollectors is the keystore-auth collector set. Passed to
 	// WithKeystoreAuth automatically so apikey_auth_total and friends
@@ -51,6 +52,12 @@ type Server struct {
 	// OTEL_EXPORTER_OTLP_ENDPOINT; the HTTP middleware remains a no-op when
 	// tracing is disabled or no endpoint is configured.
 	tracing *telemetry.Config
+
+	// promRouteFn and promRouteLimit are set by WithPromRoute and applied
+	// to the promx HTTP collectors in New, once the options have run. Zero
+	// values keep the collectors' defaults (raw path, 512 distinct routes).
+	promRouteFn    func(*http.Request) string
+	promRouteLimit int
 
 	// promMetricsHandler is the default Prometheus /metrics handler.
 	// Start() wraps the final handler so it serves this only when the

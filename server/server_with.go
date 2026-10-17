@@ -31,6 +31,47 @@ func WithMaxBodyBytes(n int64) Option {
 	return func(s *Server) { s.maxBodyBytes = n }
 }
 
+// WithPromRoute sets what the Prometheus HTTP collectors
+// (http_requests_total, http_request_duration_seconds, http_response_size_bytes)
+// put in their "route" label, and how many distinct values they keep.
+//
+// fn maps a request to its route label; nil keeps the default, the raw
+// r.URL.Path. limit is how many distinct route values are kept: the first ones
+// seen keep their own series, and every later one is folded into "_other" for
+// the life of the process. limit <= 0 keeps the default, 512. Either argument
+// may be left at its zero value to change only the other.
+//
+// The default is unchanged, so a dashboard that selects on today's route label
+// keeps working until a service opts in. A service with parameterised paths
+// should opt in: with the default, the first 512 distinct paths each get their
+// own series and everything after that is "_other", so the label stops being
+// useful on a busy or probed service. A router that knows the pattern can supply
+// it (for a http.ServeMux, the pattern that its Handler method returns; it is
+// empty for a request no route matches, and an empty route is labelled
+// "_unknown"); otherwise return a template such as "/things/{id}" yourself.
+//
+// Two things to know before choosing fn:
+//
+//   - GET /metrics is unauthenticated on every server.New service, so whatever
+//     fn returns is readable by anyone who can reach the port. Under the
+//     default, a token, id or user name embedded in a path becomes a readable
+//     label value there (and an untemplated path is an unbounded stream of
+//     them); return the template, not the path.
+//   - graph templates paths before it records them (/{id}, /{uuid}, /{token})
+//     and promx does not, so the two views of one request can disagree on
+//     what "the route" is. That is why this option exists; there is no shared
+//     helper, so fn has to do its own templating.
+//
+// The new labelling covers requests recorded after New returns; it applies to
+// this server only. Two server.New calls in one process share the collectors
+// and the series, but each keeps its own route function and its own limit.
+func WithPromRoute(fn func(*http.Request) string, limit int) Option {
+	return func(s *Server) {
+		s.promRouteFn = fn
+		s.promRouteLimit = limit
+	}
+}
+
 // WithDrainTimeout sets how long Start() waits for in-flight requests
 // to complete after receiving SIGTERM before forcing closure.
 // Default: DefaultDrainTimeout (30 s).

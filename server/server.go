@@ -122,6 +122,14 @@ func New(cfg *config.Config, opts ...Option) *Server {
 		opt(srv)
 	}
 
+	// WithPromRoute: a view of the shared collectors with this server's route
+	// label, so the process-wide set (and any other server.New in the process)
+	// keeps the defaults. It records into the same registered series.
+	if srv.promRouteFn != nil || srv.promRouteLimit > 0 {
+		httpColl = httpColl.WithRoute(srv.promRouteFn, srv.promRouteLimit)
+		srv.PromHTTPCollectors = httpColl
+	}
+
 	// Structured logs, if switched on, before anything below logs.
 	srv.installLogs()
 

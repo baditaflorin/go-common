@@ -116,6 +116,40 @@ func TestHTTPRouteLimitDefaultAndOverride(t *testing.T) {
 	}
 }
 
+// TestHTTPWithRouteIsAView: WithRoute changes what a view records without
+// touching the collectors it came from, and both record into the same series.
+func TestHTTPWithRouteIsAView(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	base := NewHTTPCollectors(reg)
+	view := base.WithRoute(func(*http.Request) string { return "/t/{id}" }, 2)
+	serve := func(c *HTTPCollectors, path string) {
+		c.Middleware()(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).
+			ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", path, nil))
+	}
+
+	serve(view, "/t/1")
+	serve(view, "/t/2")
+	serve(base, "/t/3")
+
+	count := func(route string) float64 {
+		return testutil.ToFloat64(base.requestsTotal.WithLabelValues(base.service, "GET", route, "200"))
+	}
+	if got := count("/t/{id}"); got != 2 {
+		t.Errorf(`view route="/t/{id}" = %v, want 2`, got)
+	}
+	if got := count("/t/3"); got != 1 {
+		t.Errorf("the original collectors changed: route=/t/3 = %v, want 1 (raw path)", got)
+	}
+
+	keep := base.WithRoute(nil, 0)
+	if keep.routeFn == nil || keep.routeCap == base.routeCap || keep.routeCap.limit != base.routeCap.limit {
+		t.Errorf("WithRoute(nil, 0) must keep the route function and limit, with its own admitted set: %+v", keep)
+	}
+	if view.routeCap.limit != 2 {
+		t.Errorf("view limit = %d, want 2", view.routeCap.limit)
+	}
+}
+
 // TestMethodLabel: the nine standard methods keep their own label; any other
 // token, including a standard one in another case, is "OTHER".
 func TestMethodLabel(t *testing.T) {

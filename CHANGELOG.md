@@ -14,6 +14,20 @@ Metrics-wiring fixes for the problems the wave-4 observability review found ([do
   counted and only the label changed: a dashboard or alert that selects a non-standard method by name (`method="PROPFIND"` on a WebDAV service) must select `"OTHER"` instead.
   The nine standard methods are unchanged.
 
+### Added
+
+- `server.WithPromRoute(fn, limit)`: sets the route function and the limit of distinct route values for the Prometheus HTTP collectors of one server. `server.New` had no way to
+  do either (`promx.AutoWire` takes no options, and `WithRouteFunc` and `WithRouteLimit` only work on a collector you build yourself), so every `server.New` service labelled
+  routes with the raw path, kept the first 512 and folded the rest into `_other`. The default is unchanged. Its comment says that `GET /metrics` is unauthenticated, so a token
+  embedded in a path is a readable label value, and that `graph` templates paths while `promx` does not.
+- `promx.(*HTTPCollectors).WithRoute(fn, limit)`: a view of existing collectors with its own route function and limit, recording into the same series. The collectors it was
+  called on, and the set `AutoWire` shares, do not change.
+
+### Fixed
+
+- The comment on `Server.PromHTTPCollectors` said a caller could supply a custom `RouteFunc` through it. Replacing the field after `New` never did anything; the comment now
+  points to `WithPromRoute`.
+
 ## [0.102.73] - 2026-10-18
 
 `server.Run` and `server.RunTier` no longer let a service that cannot serve end with exit status 0 and no log line.

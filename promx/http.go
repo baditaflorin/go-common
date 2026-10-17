@@ -171,6 +171,28 @@ func NewHTTPCollectors(reg prometheus.Registerer, opts ...HTTPOption) *HTTPColle
 	return c
 }
 
+// WithRoute returns a view of c that labels "route" with fn and keeps at most
+// limit distinct route values, recording into the same registered collectors as
+// c. It is how a caller that did not build the collectors (server.New, through
+// AutoWire, builds them with the defaults) changes the route label: c itself is
+// not modified, so the process-wide set AutoWire hands out stays as it was for
+// every other caller, and nothing is registered twice.
+//
+// A nil fn keeps c's route function. A limit <= 0 keeps c's limit. The view has
+// its own admitted-route set, so it starts empty. Series already recorded
+// through c stay in the registry: a view changes what is recorded from now on.
+func (c *HTTPCollectors) WithRoute(fn func(*http.Request) string, limit int) *HTTPCollectors {
+	v := *c
+	if fn != nil {
+		v.routeFn = fn
+	}
+	if limit <= 0 {
+		limit = c.routeCap.limit
+	}
+	v.routeCap = newHostCardCap(limit)
+	return &v
+}
+
 // Middleware returns the net/http middleware that records every request
 // on the collectors. Use middleware.Chain to compose it with logging,
 // auth, etc. The /metrics endpoint should NOT be wrapped — it would

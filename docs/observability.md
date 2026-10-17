@@ -292,10 +292,14 @@ Label cardinality (`promx` `http_*`):
 
 - The `route` label is the raw `r.URL.Path`, capped at 512 distinct values; the
   first 512 seen keep their own series, everything later is `_other` for the
-  life of the process. `server.New` offers no way to change this:
+  life of the process. `server.New` offered no way to change this:
   `AutoWire` takes no options, `HTTPCollectors` has no setter, and
   `WithRouteFunc` / `WithRouteLimit` only work on a collector you build
-  yourself. The comment on `Server.PromHTTPCollectors` suggests otherwise.
+  yourself. The comment on `Server.PromHTTPCollectors` suggested otherwise.
+  **Since v0.102.74** `server.WithPromRoute(fn, limit)` sets the route function
+  and the limit for one server, and the comment points to it. The default is
+  unchanged (the raw path, 512), so a service with parameterised paths has to
+  opt in.
 - The `method` label was `r.Method` with no cap, and Go's server accepts any
   token as a method. A probe sending 300 distinct methods to one path created 300
   new series sets; after about 900 requests the scrape was 2.0 MB and 22,000
@@ -305,7 +309,8 @@ Label cardinality (`promx` `http_*`):
   TRACE is labelled `OTHER`.
 - Because `/metrics` is unauthenticated, an identifier or token embedded in a
   request path becomes a label value readable there. `graph` templates paths
-  (`/{id}`, `/{uuid}`, `/{token}`) and `promx` does not.
+  (`/{id}`, `/{uuid}`, `/{token}`) and `promx` does not. `WithPromRoute` is the
+  way to return a template instead.
 - `fleet_degraded_total{primitive,suffix}` comes from whatever string is passed
   to `degraded.Sink.Append`, uncapped. The host labels are capped (256), and
   `pool`, `gate`, `dep`, `check`, `ruleset`, `upstream` come from names in code:
