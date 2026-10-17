@@ -12,6 +12,14 @@ type WebshareDirectPoolState struct {
 	Total      int
 	InCooldown int
 	Eligible   int
+
+	// Catalog refresh health. A pool that never fills (the first fetch failed and
+	// the retries keep failing) shows as Total 0 with ConsecutiveRefreshFailures
+	// growing and LastRefreshAgeSeconds -1.
+	RefreshSuccesses           uint64
+	RefreshFailures            uint64
+	ConsecutiveRefreshFailures int
+	LastRefreshAgeSeconds      float64 // seconds since the last successful refresh, -1 if there has been none
 }
 
 // activeWebshareDirectSupplier is the process's configured webshare_direct
@@ -45,9 +53,18 @@ func (s *webshareDirectSupplier) poolSnapshot(nowUnixNano int64) WebshareDirectP
 	}
 	s.mu.RUnlock()
 
+	age := -1.0
+	if last := s.lastOKUnixNano.Load(); last != 0 {
+		age = float64(nowUnixNano-last) / float64(time.Second)
+	}
 	return WebshareDirectPoolState{
 		Total:      total,
 		InCooldown: inCooldown,
 		Eligible:   total - inCooldown,
+
+		RefreshSuccesses:           s.refreshOK.Load(),
+		RefreshFailures:            s.refreshFail.Load(),
+		ConsecutiveRefreshFailures: int(s.consecFail.Load()),
+		LastRefreshAgeSeconds:      age,
 	}
 }

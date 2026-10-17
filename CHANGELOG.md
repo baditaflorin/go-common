@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.102.65] - 2026-10-17
+
+### Fixed
+
+- `proxysupplier` `webshare_direct`: a failed pool fetch is retried with backoff instead of after a whole refresh interval.
+  The initial fetch ran once and, when it failed (network error, 429, 5xx, an undecodable body or zero valid entries), the
+  pool stayed empty until the 10-minute ticker fired. Seen live on 2026-10-17: five go-js-proxy-network replicas restarted
+  within three minutes, the Webshare account API throttled the last one, and it answered `503 egress_unavailable` (the
+  egress proxy correctly failing closed) from 12:37 to 12:48. Now a failed fetch is retried after about 1 s, doubling to a
+  1 minute cap, with half-random jitter so replicas that failed together do not retry together, never later than the
+  refresh interval, and not sooner than the API's own `Retry-After` (seconds or HTTP date, capped at 5 minutes). A failed
+  refresh with a live pool keeps serving the previous list and retries on the same schedule. The regular refresh interval is
+  spread by +/- 10% so a fleet restarted together stops refreshing in lockstep.
+
+### Added
+
+- `proxysupplier.WebshareDirectPoolState` gains `RefreshSuccesses`, `RefreshFailures`, `ConsecutiveRefreshFailures` and
+  `LastRefreshAgeSeconds` (-1 until the first success), exported by `promx` as
+  `proxysupplier_webshare_direct_refresh_total{result="ok|error"}`,
+  `proxysupplier_webshare_direct_refresh_consecutive_failures` and
+  `proxysupplier_webshare_direct_last_refresh_age_seconds`. An empty pool is now visible as consecutive failures growing
+  with an age of -1, instead of only as `pool_size 0`.
+- The webshare_direct supplier has a `Close()` (stops the refresh goroutine) for tests and tools that build suppliers
+  repeatedly; services never need it. Failed refreshes are logged for the first three in a row and then every tenth,
+  recovery is always logged.
+
 ## [0.102.64] - 2026-10-17
 
 ### Added
