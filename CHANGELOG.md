@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.102.71] - 2026-10-17
+
+Wave 3 of the go-common hardening: the building blocks for calling a sibling service well, a catalogue of environment variables, and structured logs.
+Everything is additive and the defaults are unchanged: nothing is switched on for a service that does not ask.
+
+### Added
+
+- `meshclient`: the HTTP client for calls to sibling services on the private mesh, where `safehttp` cannot be used because it refuses private addresses. The caller must
+  choose `FailOpen` or `FailClosed` (there is no default). A failure that means the sibling is unusable (connection error, timeout, 5xx or 429, an unreadable reply, or a
+  refusal by the resilience policy) is an `*UnavailableError` (`meshclient.IsUnavailable`); in fail-open mode it also appends `<name>-down`, `-timeout`, `-rate_limited` or
+  `-degraded` to the request's `degraded.Sink`. A 4xx is a `*StatusError`, never "unavailable". Response bodies are capped, JSON is decoded strictly (one value, nothing after
+  it), redirects are not followed, and the default transport carries trace context and fleet-graph events. `degraded` gains `NewContext` and `FromContext` for this.
+- `resilience`: one policy over the existing pieces. A load-shed gate, a circuit breaker and retries limited by a **retry budget** (a token bucket that gets a fraction of a token
+  per call and a small steady refill), so that during an outage retries stay a small share of traffic instead of multiplying it by the attempt count. `resilience.Retryable` is the
+  single answer to "can a retry fix this?" (an error's own `Retryable() bool`, `retry.Transient`, a fleet error's HTTP status, network failures); only upstream-trouble failures
+  count against the breaker, a 404 does not. `docs/outcomes.md` says which of `errors`, `meshresult`, `degraded` and `nullify` to use for what.
+- `env` registry: packages declare their variables (`env.Declare`, `env.Removed`), and the process can list them, validate the ones that are set and show them redacted.
+  Validation catches a value that does not parse, a removed variable that is still set, and a likely typo of a declared name (`GRAPH_COLLECTER_URL`), all of which were silent
+  before. Redaction hides a variable declared secret, any whose name looks like a credential, and any whose value carries one. `server.New` runs the check once at start-up and
+  only logs; the `obs` debug server (localhost only) serves it at `/debug/config`; `go run ./scripts/envdoc` generates `docs/ENV.md`, and CI fails if it is stale or a package that
+  declares variables is not imported by the generator. `graph` (13 variables) and `runtimetune` (6) are declared as the first users, and `GRAPH_USE_EGRESS_PROXY`, removed in 0.102.60,
+  is recorded as removed. Their parsing is unchanged; their tests pass untouched, and new tests keep each declared `Check` in step with the real reader.
+- `logx`: structured logging. `logx.Install` makes slog JSON the process logger with the service, version and node on every line and the trace id inside a traced request, and,
+  because `slog.SetDefault` also redirects the standard library, makes every existing `log.Printf` structured too. Credentials are redacted from string attributes and from the
+  message (bearer tokens, URL user:password, `token=` and `password=` values). It is opt-in: `server.New` installs it when `LOG_FORMAT=json` (`LOG_LEVEL` sets the level) or the
+  service passes `server.WithStructuredLogs()`; otherwise output is unchanged. `middleware.SetLogger` replaces the access-log logger, and the access log now logs with the request's
+  context so the trace id reaches it; its output is byte-for-byte the same without logx.
+- Fuzz targets for the new parsers (`logx` redaction idempotence, the `env` secret-never-leaks property, `compat`, the `meshclient` response decoder), benchmarks for
+  `resilience` and `logx`, and runnable examples for `meshclient`.
+
 ## [0.102.70] - 2026-10-17
 
 Wave 2 of the go-common hardening: a shared SSRF test corpus (which found a hole in the guard), tests for the packages that had none, hot-path
