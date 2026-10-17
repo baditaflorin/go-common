@@ -1,0 +1,60 @@
+# Shared golangci-lint (v2) config for services that depend on go-common.
+#
+# It turns the "use the go-common primitive, do not reinvent it" rules in
+# CLAUDE.md into checks. It is deliberately small: every rule here has to be high
+# signal, because a noisy shared config gets dropped.
+#
+# Use it straight from your pinned go-common, so the rules move with the
+# version you depend on (golangci-lint v2 has no `extends`, and this needs no
+# network):
+#
+#   golangci-lint run \
+#     --config "$(go list -m -f '{{.Dir}}' github.com/baditaflorin/go-common)/lint/golangci.yml" ./...
+#
+# Adopting it in an old service? Ratchet instead of fixing everything at once:
+# add --new-from-rev=origin/main and only new findings fail. See lint/README.md.
+version: "2"
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused. staticcheck includes
+  # SA1019, which flags use of anything go-common marks `// Deprecated:`
+  # (docs/api-policy.md rule 4), so a deprecation reaches consumers' CI.
+  default: standard
+  enable:
+    - bodyclose # a response body that is never closed leaks the connection
+    - noctx # http.NewRequest / http.Get without a context cannot be cancelled
+    - forbidigo
+  settings:
+    forbidigo:
+      # analyze-types matches the resolved identifier written as <package name>.<Name>
+      # (so `import h "net/http"; h.Get` is still caught as http.Get), not the
+      # import path and not the literal source text.
+      analyze-types: true
+      forbid:
+        - pattern: '^http\.(Get|Head|Post|PostForm)$'
+          msg: >-
+            net/http's package-level helpers use http.DefaultClient: no timeout and no
+            SSRF guard. For the public internet use safehttp.NewClient; for sibling
+            fleet services use a net/http.Client with a short Timeout.
+        - pattern: '^http\.DefaultClient$'
+          msg: >-
+            http.DefaultClient has no timeout and no SSRF guard. For the public
+            internet use safehttp.NewClient; for sibling fleet services use a
+            net/http.Client with a short Timeout.
+        - pattern: '^http\.(ListenAndServe|ListenAndServeTLS)$'
+          msg: >-
+            The package-level ListenAndServe sets no timeouts and has no graceful
+            drain. Use go-common/server, which sets both.
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+      - legacy
+    rules:
+      # Tests may use the helpers above against httptest servers.
+      - path: _test\.go
+        linters:
+          - forbidigo
+          - noctx
