@@ -327,7 +327,7 @@ func (s *webshareDirectSupplier) refresh(ctx context.Context) error {
 	var all []webshareEntry
 	nextURL := fmt.Sprintf("%s?mode=direct&page=1&page_size=%d", s.baseURL, webshareDirectDefaultPageSize)
 	for nextURL != "" {
-		page, err := s.fetchPage(ctx, nextURL)
+		page, err := s.fetchPageRetrying(ctx, nextURL)
 		if err != nil {
 			return err
 		}
@@ -377,6 +377,50 @@ func (s *webshareDirectSupplier) refresh(ctx context.Context) error {
 	s.list = list
 	s.mu.Unlock()
 	return nil
+}
+
+// webshareDirectPageAttempts is how many times one catalog page is tried before the whole refresh
+// is given up (and retried later by refreshLoop).
+const webshareDirectPageAttempts = 6
+
+// retryablePageError reports whether a failed page fetch is worth repeating at once: transport
+// errors, 429 and 5xx. An authentication or request error (401, 403, 404...) will not fix itself.
+func retryablePageError(err error) bool {
+	var apiErr *webshareAPIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Status == http.StatusTooManyRequests || apiErr.Status >= 500
+	}
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+// fetchPageRetrying fetches one catalog page, repeating it with the same jittered backoff (and the
+// API's Retry-After) as the refresh loop. The catalog is paginated (about 18 requests for 1,800
+// entries), so a throttled API (429) used to abort the refresh and restart it from page 1 every
+// time: traced 2026-10-17, replicas needed 2.5 to 6 minutes and up to 11 whole attempts to get
+// through. Repeating only the page that failed keeps the pages already fetched and finishes in
+// seconds. The caller's context (the refresh budget) bounds the total time.
+func (s *webshareDirectSupplier) fetchPageRetrying(ctx context.Context, pageURL string) (*webshareListResponse, error) {
+	var err error
+	for attempt := 1; ; attempt++ {
+		var page *webshareListResponse
+		page, err = s.fetchPage(ctx, pageURL)
+		if err == nil {
+			return page, nil
+		}
+		if attempt >= webshareDirectPageAttempts || !retryablePageError(err) {
+			return nil, err
+		}
+		timer := time.NewTimer(s.nextDelay(err, attempt))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, err
+		case <-s.stop:
+			timer.Stop()
+			return nil, err
+		case <-timer.C:
+		}
+	}
 }
 
 func (s *webshareDirectSupplier) fetchPage(ctx context.Context, pageURL string) (*webshareListResponse, error) {
