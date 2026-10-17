@@ -72,14 +72,14 @@ func setProxyEnv(t *testing.T) {
 	t.Setenv("no_proxy", "")
 }
 
-// The collector is reached directly by default, whatever proxy variables the
-// environment carries; this is the path batches and lookups both use.
-func TestGraphHTTPClientIsDirectByDefault(t *testing.T) {
-	for _, value := range []string{"", "false", "0", "off", "garbage"} {
+// The collector is one of our own services: it is reached directly whatever
+// proxy variables the environment carries, including the removed
+// GRAPH_USE_EGRESS_PROXY switch. Batches and lookups both use this client.
+func TestGraphHTTPClientIsAlwaysDirect(t *testing.T) {
+	for _, value := range []string{"", "false", "true", "1"} {
 		t.Run("GRAPH_USE_EGRESS_PROXY="+value, func(t *testing.T) {
 			setProxyEnv(t)
 			t.Setenv("GRAPH_USE_EGRESS_PROXY", value)
-			t.Setenv("NO_PROXY", "")
 
 			client := newGraphHTTPClient(time.Second)
 			transport, ok := client.Transport.(*http.Transport)
@@ -93,45 +93,12 @@ func TestGraphHTTPClientIsDirectByDefault(t *testing.T) {
 						t.Fatalf("proxy for %s = %v, %v; want a direct connection", host, proxy, err)
 					}
 				}
-				t.Fatal("transport.Proxy set by default; want nil (direct)")
+				t.Fatal("transport.Proxy is set; want nil (direct)")
 			}
 			if client.CheckRedirect == nil {
 				t.Fatal("redirects must stay disabled so the writer key stays bound to the collector")
 			}
 		})
-	}
-}
-
-func TestGraphHTTPClientUsesConfiguredProxyDespiteNoProxy(t *testing.T) {
-	t.Setenv("GRAPH_USE_EGRESS_PROXY", "true")
-	t.Setenv("HTTPS_PROXY", "http://graph-proxy.example.test:8080")
-	t.Setenv("https_proxy", "")
-	t.Setenv("HTTP_PROXY", "")
-	t.Setenv("http_proxy", "")
-	t.Setenv("NO_PROXY", ".0exec.com")
-	t.Setenv("no_proxy", "")
-
-	client := newGraphHTTPClient(time.Second)
-	transport, ok := client.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("transport type = %T, want *http.Transport", client.Transport)
-	}
-	req := &http.Request{URL: &url.URL{Scheme: "https", Host: "fleet-graph.0exec.com"}}
-	proxy, err := transport.Proxy(req)
-	if err != nil {
-		t.Fatalf("resolve graph proxy: %v", err)
-	}
-	if proxy == nil || proxy.String() != "http://graph-proxy.example.test:8080" {
-		t.Fatalf("graph proxy = %v, want configured HTTPS proxy despite NO_PROXY", proxy)
-	}
-
-	loopback := &http.Request{URL: &url.URL{Scheme: "http", Host: "127.0.0.1:8090"}}
-	proxy, err = transport.Proxy(loopback)
-	if err != nil {
-		t.Fatalf("resolve loopback proxy: %v", err)
-	}
-	if proxy != nil {
-		t.Fatalf("loopback proxy = %v, want direct local development traffic", proxy)
 	}
 }
 

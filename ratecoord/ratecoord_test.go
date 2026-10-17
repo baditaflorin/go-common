@@ -3,8 +3,10 @@ package ratecoord
 import (
 	"context"
 	"encoding/json"
+	"github.com/baditaflorin/go-common/egress"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -99,5 +101,24 @@ func TestWaitMissingHost(t *testing.T) {
 	c := New()
 	if _, err := c.Wait(context.Background(), "", 1, time.Second); err == nil {
 		t.Fatalf("empty host should error")
+	}
+}
+
+// The coordinator is one of our own services: its client sends fleet hosts
+// direct, whatever proxy variables or NO_PROXY the host carries.
+func TestNewClientReachesFleetHostsDirectly(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://egress.example.test:8080")
+	t.Setenv("NO_PROXY", "")
+	c := New()
+	tr, ok := c.HTTP.Transport.(*http.Transport)
+	if !ok || tr.Proxy == nil {
+		t.Fatalf("transport = %T (proxy set: %v); want *http.Transport with the egress policy", c.HTTP.Transport, ok && tr.Proxy != nil)
+	}
+	if reflect.ValueOf(tr.Proxy).Pointer() != reflect.ValueOf(egress.Proxy).Pointer() {
+		t.Fatal("coordinator client must use egress.Proxy")
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://rate-coordinator.0exec.com/take", nil)
+	if proxy, err := tr.Proxy(req); err != nil || proxy != nil {
+		t.Fatalf("proxy for a fleet host = %v, %v; want direct", proxy, err)
 	}
 }

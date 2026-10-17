@@ -5,13 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/baditaflorin/go-common/header"
-	"golang.org/x/net/http/httpproxy"
 )
 
 const graphAuthFailureCooldown = time.Minute
@@ -251,36 +249,19 @@ func (s *sender) canWriteAt(now time.Time) bool {
 	return until == 0 || !now.Before(time.Unix(0, until))
 }
 
-// newGraphHTTPClient is shared by event writes and read-only lookups. It
-// connects to the collector directly: the fleet egress proxy is for third-party
-// targets, and measured against the collector it only added failures (replicas
-// saw 18-27% of batches time out through it while a direct POST answers in
-// under 100 ms from every pool host). The environment proxy is ignored, so a
-// stray HTTPS_PROXY cannot capture the writer key or the batches.
-//
-// GRAPH_USE_EGRESS_PROXY=true restores the 0.102.46 behaviour for a host with
-// no direct route out: the configured HTTP(S)_PROXY is used even when the
-// fleet-wide NO_PROXY suffix matches .0exec.com; loopback development
-// collectors stay direct. Redirects remain disabled so X-API-Key stays bound
-// to the canonical endpoint.
+// newGraphHTTPClient is shared by event writes and read-only lookups. The
+// collector is one of our own services, so it is always reached directly: the
+// egress proxy is for third-party targets only (see package egress), and no
+// environment proxy variable can capture the writer key or the batches.
+// Redirects stay disabled so X-API-Key stays bound to the canonical endpoint.
 func newGraphHTTPClient(timeout time.Duration) *http.Client {
-	var proxy func(*http.Request) (*url.URL, error) // nil: connect directly
-	if parseBoolEnv("GRAPH_USE_EGRESS_PROXY", false) {
-		proxyConfig := httpproxy.FromEnvironment()
-		proxyConfig.NoProxy = ""
-		proxyForURL := proxyConfig.ProxyFunc()
-		proxy = func(req *http.Request) (*url.URL, error) {
-			return proxyForURL(req.URL)
-		}
-	}
-
 	return &http.Client{
 		Timeout: timeout,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 		Transport: &http.Transport{
-			Proxy:               proxy,
+			Proxy:               nil, // direct
 			MaxIdleConns:        4,
 			MaxIdleConnsPerHost: 2,
 			IdleConnTimeout:     60 * time.Second,

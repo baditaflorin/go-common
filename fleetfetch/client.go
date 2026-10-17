@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baditaflorin/go-common/egress"
 	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/safehttp"
 )
@@ -232,12 +233,14 @@ func WithoutCache() Option {
 }
 
 // cacheProxyForURL keeps the Docker-network default off the environment
-// proxy. An explicitly configured HTTPS endpoint is external to that local
-// network and must use the service's configured egress proxy.
+// proxy. An explicitly configured HTTPS endpoint is reached across hosts, but
+// the cache is one of our own services (infrastructure-fetch-cache.0exec.com),
+// so egress.Proxy sends it direct; only a cache outside our domains would use
+// the service's configured egress proxy.
 func cacheProxyForURL(cacheURL string) func(*http.Request) (*url.URL, error) {
 	u, err := url.Parse(cacheURL)
 	if err == nil && strings.EqualFold(u.Scheme, "https") {
-		return http.ProxyFromEnvironment
+		return egress.Proxy
 	}
 	return nil
 }
