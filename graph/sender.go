@@ -193,6 +193,9 @@ func (s *sender) send(parent context.Context, events []Event) sendResult {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "go-common-graph/"+version+" ("+serviceID+")")
 	req.Header.Set(header.APIKey, writerAPIKey)
+	if s.cfg.node != "" {
+		req.Header.Set(NodeHeader, s.cfg.node)
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		atomic.AddInt64(&s.counters.BatchesFailed, 1)

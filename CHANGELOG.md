@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.102.63] - 2026-10-17
+
+### Added
+
+- `graph`: batches say which server/VM they come from. `FLEET_NODE` (the logical host name from the host-placement policy, e.g. `dockerhost`,
+  `infer-runtime`; a lowercase DNS label, anything else is ignored with one log line) is sent as the `X-Fleet-Node` header on every batch POST
+  (`graph.NodeHeader`, `graph.Node()`). Replicas of one service share a service id, so until now nothing in the Graph could attribute events to a
+  host or VM. A header and not a JSON field on purpose: the collector decodes batches with `DisallowUnknownFields`, so a new field would make an
+  older collector reject every batch from a newer sender, while an unknown header is ignored. The value is self-asserted diagnostic metadata,
+  never an authorization input. Nothing changes for a process without `FLEET_NODE`.
+
 ## [0.102.62] - 2026-10-17
 
 ### Added
