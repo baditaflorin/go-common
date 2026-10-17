@@ -10,10 +10,22 @@ import (
 )
 
 // Client wraps http.Client to inject headers from context
+//
+// Deprecated: use safehttp.NewClient for calls to the public internet, or
+// meshclient for calls to a sibling fleet service; both propagate the W3C trace
+// context by default. Client only copies the X-Request-ID header from the
+// request context (see middleware.GetRequestID); a caller that needs that can
+// set header.RequestID itself. The rest of this package (Fetch, JSProxy,
+// Capability, the network-extraction helpers) is not deprecated and has no
+// replacement. Removal no earlier than v0.104.0.
 type Client struct {
 	HTTPClient *http.Client
 }
 
+// New returns a Client with a 30 second timeout.
+//
+// Deprecated: use safehttp.NewClient (public internet) or meshclient (sibling
+// fleet services); see Client. Removal no earlier than v0.104.0.
 func New() *Client {
 	return &Client{
 		HTTPClient: &http.Client{
@@ -43,6 +55,12 @@ func (c *Client) Get(ctx context.Context, url string) (*http.Response, error) {
 }
 
 // Post helper
+//
+// Deprecated: Post never sends its body argument (the request goes out with an
+// empty body), so it cannot be used for a real POST. Build the request with
+// http.NewRequestWithContext and send it with safehttp.NewClient (public
+// internet) or meshclient (sibling fleet services). Removal no earlier than
+// v0.104.0.
 func (c *Client) Post(ctx context.Context, url string, contentType string, body interface{}) (*http.Response, error) {
 	// Implementation omitted for brevity to keep it simple for now,
 	// typically needs standard body handling.
