@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
@@ -33,7 +34,9 @@ import (
 //  5. srv.Mux.HandleFunc("/"+serviceName, handler)  — direct/internal entry
 //  6. srv.Mux.HandleFunc("/"+kebab, handler)        — public kebab alias
 //     (only if different)
-//  7. srv.Start()                                   — listen forever
+//  7. srv.Start()                                   — listen forever; if it
+//     returns an error (the port is taken, a drain timed out) Run logs it and
+//     exits with status 1
 //
 // Callers that need extra routes or custom middleware should use
 // server.New(cfg, opts...) + manual srv.Mux.HandleFunc(...) + srv.Start()
@@ -50,7 +53,7 @@ func Run(serviceName, version string, handler http.HandlerFunc, opts ...Option) 
 		srv.Mux.HandleFunc("/"+alias, handler)
 	}
 
-	srv.Start()
+	serve(srv)
 }
 
 // RunTier is Run with the prepended auth swapped from WithKeystoreAuth to
@@ -74,7 +77,18 @@ func RunTier(serviceName, version string, handler http.HandlerFunc, requiredTier
 		srv.Mux.HandleFunc("/"+alias, handler)
 	}
 
-	srv.Start()
+	serve(srv)
+}
+
+// serve runs srv until it stops. Start returns an error when it cannot listen
+// (the port is taken, for example) or when a drain runs out of time. A service
+// has nothing left to do after either, so log the error and exit with status 1:
+// dropping it let main return, and a supervisor reads exit status 0 as "stopped
+// cleanly" (a restart policy of on-failure would not restart the service).
+func serve(srv *Server) {
+	if err := srv.Start(); err != nil {
+		log.Fatalf("%s: %v", srv.Config.AppName, err)
+	}
 }
 
 // KebabAlias derives the public kebab-case slug from a Go service name.

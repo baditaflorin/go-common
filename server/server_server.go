@@ -156,7 +156,9 @@ func (s *Server) buildHTTPServer(addr string, h http.Handler) *http.Server {
 //
 // Exception: with WithGracefulDrain a listen failure is not returned. Start
 // logs it and exits the process with status 1 (log.Fatalf), without running
-// its deferred cleanup. Run and RunTier ignore the error that Start returns.
+// its deferred cleanup. Run and RunTier log any error Start returns and exit
+// with status 1 too, so only a service that calls Start itself and ignores its
+// result can still end with status 0 after a listen failure.
 func (s *Server) Start() error {
 	stopProfiling := startServerProfiling(s.Config.AppName, profiling.StartFromEnv)
 	defer stopProfiling()
