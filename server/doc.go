@@ -16,5 +16,7 @@
 // server.New wires the full fleet middleware stack (graph, requestID,
 // logging, body limit, metrics, promx), /health, /version, /capabilities,
 // /schema, /metrics, and /selftest default endpoints automatically.
-// Start() performs a graceful SIGTERM drain.
+// Start() performs a graceful SIGTERM drain. New also gives the process's plain
+// http.Clients the fleet-direct proxy rule (egress.InstallDefaultTransport), so a
+// call to a sibling service never goes through the egress proxy.
 package server

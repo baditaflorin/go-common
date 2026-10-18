@@ -49,8 +49,9 @@ The request path, outermost first (from `Server.Handler` in
 5. The mux, with `/health`, `/readyz`, `/version`, `/metrics/json`, `/capabilities`
    and `/schema` registered.
 
-At construction, once: `runtimetune.Apply`, the environment check (it only logs),
-`graph.Init`, `telemetry.Init`, `promx.AutoWire` (creates the collector sets and
+At construction, once: `runtimetune.Apply`, `egress.InstallDefaultTransport` (the
+fleet-direct proxy rule for plain HTTP clients, see [ENV.md](ENV.md)), the environment
+check (it only logs), `graph.Init`, `telemetry.Init`, `promx.AutoWire` (creates the collector sets and
 installs the process-wide observers listed below), and structured logs if asked.
 In `Start()`: `profiling.StartFromEnv`, and on shutdown a flush of `graph` and
 `telemetry`.
@@ -340,7 +341,7 @@ Other:
 - Importing `obs` links `net/http/pprof`, whose `init` registers handlers on
   `http.DefaultServeMux`. A service that serves the default mux on a public
   listener must not import `obs`. (Go's behaviour; not tested here.)
-- Only `graph`, `runtimetune` and `LOG_FORMAT` / `LOG_LEVEL` are declared in the
+- Only `egress`, `graph`, `runtimetune` and `LOG_FORMAT` / `LOG_LEVEL` are declared in the
   `env` registry. `DEBUG_ADDR`, `OBS_DISABLE`, `OTEL_*`, `PYROSCOPE_*` and
   `LOG_SKIP_PATHS` are not, so neither the start-up check nor `/debug/config`
   knows about them and a typo in one is silent.

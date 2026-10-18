@@ -4,6 +4,13 @@
 
 The variables that go-common packages declare in the `env` registry, with what they default to and what they do. Each package still parses its own values; the registry lists them, checks the ones that are set when a service starts (a value that does not parse, a variable that was removed, a likely typo of a declared name) and shows them, redacted, on the debug server's `/debug/config`. To document a variable, declare it with `env.Declare` in its package; CI fails if this file is stale.
 
+## `egress`
+
+| Variable | Kind | Default | Description |
+| --- | --- | --- | --- |
+| `FLEET_DIRECT_DOMAINS` | list | unset | Comma-separated apex domains, each with at least one dot, that egress treats as the fleet's own in addition to the built-in ones: requests to them and to their subdomains never use the egress proxy. |
+| `FLEET_EGRESS_DEFAULT_TRANSPORT` | string | `enabled` | Set to off, false, 0 or no to keep http.DefaultTransport on the plain environment proxy rule (NO_PROXY only), so that plain http.Clients send requests to the fleet's own hosts through HTTP_PROXY/HTTPS_PROXY again. By default server.New makes them go direct (package egress). Anything unrecognised also turns it off. |
+
 ## `graph`
 
 | Variable | Kind | Default | Description |
