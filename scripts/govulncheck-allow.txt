@@ -10,10 +10,5 @@
 # Do not add a line to make CI green. Add one only for a vulnerability that
 # cannot be fixed yet, with the reason and the date by which it must be revisited.
 
-# golang.org/x/net@v0.58.0, HTTP/2. Fixed in x/net v0.60.0, which requires go 1.26.0;
-# go.mod says go 1.25.0, so taking the fix raises the minimum Go version for every
-# consumer. Blocked on that fleet-wide decision (Go 1.25 is out of support anyway).
-GO-2026-6617 2026-11-30 x/net@v0.58.0 http2: HPACK encoder race crashes an HTTP/2 server; fix needs go 1.26
-GO-2026-6612 2026-11-30 x/net@v0.58.0 http2: double flow-control refund on server streams; fix needs go 1.26
-GO-2026-6611 2026-11-30 x/net@v0.58.0 http2: excessive CPU from repeated initial window changes; fix needs go 1.26
-GO-2026-6603 2026-11-30 x/net@v0.58.0 http2: server memory exhaustion via Trailer headers; fix needs go 1.26
+# No entries: the four golang.org/x/net HTTP/2 advisories that were listed here (GO-2026-6603,
+# 6611, 6612, 6617) are fixed by x/net v0.61.0, which needs go 1.26.0 (the minimum Go since 0.104.0).

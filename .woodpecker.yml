@@ -23,7 +23,7 @@ clone:
 
 steps:
   validate:
-    image: golang:1.25
+    image: golang:1.26
     environment:
       CGO_ENABLED: "0"
     commands:
@@ -50,7 +50,7 @@ steps:
 
   # Data races. -race needs cgo, so this step cannot share validate's CGO_ENABLED=0.
   race:
-    image: golang:1.25
+    image: golang:1.26
     environment:
       CGO_ENABLED: "1"
     commands:
@@ -107,13 +107,13 @@ steps:
   # `go` line, in a copy of the tree (scripts/forward-compat.sh; docs/releasing.md says
   # what to do when it fails). Go takes the default of each GODEBUG setting from the
   # `go` line of the module it builds, not from the toolchain, so the steps above run
-  # with the 1.25 defaults on any image; this is the only step that sees what Go
+  # with the 1.26 defaults on any image; this is the only step that sees what Go
   # changes for a newer line before go-common's minimum Go moves. The image must
   # provide the minor version in FORWARD_COMPAT_GO_MINOR (scripts/tool-versions.sh),
   # which the script uses when it is given no argument. An exact patch, as in `vuln`.
   # Blocking: a failure means the code is wrong under a newer Go's defaults.
   forward-compat:
-    image: golang:1.26.9
+    image: golang:1.27.2
     environment:
       CGO_ENABLED: "0"
     commands:
@@ -126,7 +126,7 @@ steps:
   # An incompatible exported-API change must be declared BREAKING in CHANGELOG.md.
   # See docs/api-policy.md.
   api:
-    image: golang:1.25
+    image: golang:1.26
     environment:
       CGO_ENABLED: "0"
     commands:
@@ -140,7 +140,7 @@ steps:
   # A hot-path benchmark must not start allocating more: allocs/op is compared
   # with the merge base (see scripts/bench-gate.sh for why not ns/op).
   bench:
-    image: golang:1.25
+    image: golang:1.26
     environment:
       CGO_ENABLED: "0"
     commands:
@@ -151,7 +151,7 @@ steps:
 
   # The version this change claims in CHANGELOG.md must be the next free one.
   release:
-    image: golang:1.25
+    image: golang:1.26
     commands:
       - git config --global --add safe.directory '*'
       - scripts/release-check.sh
@@ -162,7 +162,7 @@ steps:
   # committed crash) already runs in `go test`; this is the part that mutates.
   # Long runs belong in a nightly job: scripts/fuzz.sh 5m.
   fuzz:
-    image: golang:1.25
+    image: golang:1.26
     environment:
       CGO_ENABLED: "0"
     commands:

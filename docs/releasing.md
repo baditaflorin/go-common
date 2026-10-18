@@ -49,13 +49,14 @@ and by anything that calls `compat.CheckGoMod`.
 ## Forward compatibility: the next `go` line
 
 Go takes the default of each `GODEBUG` setting from the `go` line of the module
-being built, not from the toolchain. go-common says `go 1.25.0`, so its tests
-run with the 1.25 defaults on a 1.26 or 1.27 image as well, and a default Go
+being built, not from the toolchain. go-common says `go 1.26.0`, so its tests
+run with the 1.26 defaults on a 1.27 image as well, and a default Go
 changes for a newer line cannot fail anything until a service raises its own `go`
-line (which then breaks that service, not go-common's CI). An example: Go 1.26
-flipped `urlstrictcolons`, so `url.Parse` rejects `http://::1:3001/`, and a guard
-in `proxysupplier` that parsed such a URL failed open on any service built with
-`go 1.26` (fixed in 0.103.1). Nothing in go-common's CI showed it.
+line (which then breaks that service, not go-common's CI). An example, from when
+the minimum was 1.25: Go 1.26 flipped `urlstrictcolons`, so `url.Parse` rejects
+`http://::1:3001/`, and a guard in `proxysupplier` that parsed such a URL failed
+open on any service built with `go 1.26` (fixed in 0.103.1). Nothing in
+go-common's CI showed it then; the `forward-compat` step exists so the next one does.
 
 The `forward-compat` step (`scripts/forward-compat.sh`) is what shows it: it copies
 the tree to a temporary directory, runs `go mod edit -go=<version>.0` there, then
