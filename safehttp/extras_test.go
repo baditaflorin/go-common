@@ -178,6 +178,132 @@ func TestTraceCollector_FailureIsSilent(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
+// recordKeys is a tracer or coordinator stub that remembers the X-API-Key of
+// each post it gets. Loopback is a fleet host for the key rule, so the stub
+// stands in for a sibling service behind the keystore.
+type recordKeys struct {
+	mu   sync.Mutex
+	keys []string
+}
+
+func (r *recordKeys) handler(reply string) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		r.mu.Lock()
+		r.keys = append(r.keys, req.Header.Get("X-API-Key"))
+		r.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, reply)
+	}
+}
+
+func (r *recordKeys) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.keys)
+}
+
+func (r *recordKeys) first() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.keys) == 0 {
+		return "<no post>"
+	}
+	return r.keys[0]
+}
+
+func TestTraceCollector_CarriesServiceKey(t *testing.T) {
+	allowLoopback(t)
+	t.Setenv("FLEET_API_KEY", "ak_test_trace_key_not_a_real_key")
+
+	tracer := &recordKeys{}
+	ts := httptest.NewServer(tracer.handler(`{"accepted":1}`))
+	defer ts.Close()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	c := safehttp.NewClient(
+		safehttp.WithUserAgent("test-svc/1.0"),
+		safehttp.WithTraceCollector(ts.URL),
+	)
+	resp, err := c.Get(upstream.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+
+	waitFor(t, 2*time.Second, func() bool { return tracer.count() >= 1 })
+	if got := tracer.first(); got != "ak_test_trace_key_not_a_real_key" {
+		t.Errorf("trace post X-API-Key = %q, want the service key (the tracer is behind the keystore: no key is a 401)", got)
+	}
+}
+
+func TestTraceCollector_NoKeyWhenUnsetOrPlaceholder(t *testing.T) {
+	for _, value := range []string{"", "   ", "default_token"} {
+		t.Run("FLEET_API_KEY="+value, func(t *testing.T) {
+			allowLoopback(t)
+			t.Setenv("FLEET_API_KEY", value)
+
+			tracer := &recordKeys{}
+			ts := httptest.NewServer(tracer.handler(`{"accepted":1}`))
+			defer ts.Close()
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer upstream.Close()
+
+			c := safehttp.NewClient(
+				safehttp.WithUserAgent("test-svc/1.0"),
+				safehttp.WithTraceCollector(ts.URL),
+			)
+			resp, err := c.Get(upstream.URL)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			resp.Body.Close()
+
+			waitFor(t, 2*time.Second, func() bool { return tracer.count() >= 1 })
+			if got := tracer.first(); got != "" {
+				t.Errorf("trace post X-API-Key = %q, want none (unset or placeholder key must not be sent)", got)
+			}
+		})
+	}
+}
+
+func TestBackoffCoordinator_CarriesServiceKey(t *testing.T) {
+	allowLoopback(t)
+	t.Setenv("FLEET_API_KEY", "ak_test_backoff_key_not_a_real_key")
+
+	coord := &recordKeys{}
+	cs := httptest.NewServer(coord.handler(`{"wait_ms":0,"classification":"healthy"}`))
+	defer cs.Close()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+
+	c := safehttp.NewClient(
+		safehttp.WithUserAgent("test-svc/1.0"),
+		safehttp.WithBackoffCoordinator(cs.URL),
+	)
+	// The first call records the failure; the second consults the coordinator.
+	for i := 0; i < 2; i++ {
+		resp, err := c.Get(upstream.URL)
+		if err != nil {
+			t.Fatalf("call %d: %v", i+1, err)
+		}
+		resp.Body.Close()
+	}
+
+	if coord.count() == 0 {
+		t.Fatal("the coordinator was never consulted")
+	}
+	if got := coord.first(); got != "ak_test_backoff_key_not_a_real_key" {
+		t.Errorf("backoff post X-API-Key = %q, want the service key", got)
+	}
+}
+
 func TestBackoffCoordinator_Timeout(t *testing.T) {
 	allowLoopback(t)
 

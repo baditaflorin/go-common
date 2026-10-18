@@ -21,6 +21,32 @@ The minimum Go version is now 1.26 (it was 1.25).
 - Four reachable `golang.org/x/net` HTTP/2 advisories (GO-2026-6603, GO-2026-6611, GO-2026-6612, GO-2026-6617) are closed: `x/net` goes from v0.58.0 to v0.61.0, which needs `go 1.26.0`, and the
   allowlist in `scripts/govulncheck-allow.txt` is empty. Taking `x/net` also moves `x/sync` to v0.24.0, `x/crypto` to v0.58.0, `x/text` to v0.43.0 and `x/sys` to v0.49.0.
 
+## [0.103.3] - 2026-10-18
+
+`safehttp`'s trace and backoff posts carry the service's own key, so a scanner's call trace and backoff consult reach the tracer and the coordinator instead of being refused with 401.
+
+### Fixed
+
+- `WithTraceCollector` (POST `<url>/traces`) and `WithBackoffCoordinator` (POST `<url>/backoff`) sent no `X-API-Key`. `go-fleet-call-tracer` and `go-fleet-backoff-coordinator` sit behind the
+  keystore, so every post was answered 401 (on a replica that reaches them by their public name the gateway refuses it first, on the same host the container does), the span or the consult
+  was dropped, and the only trace of it was one `safehttp: trace emit failed: collector returned 401` line a minute. The posts now carry `FLEET_API_KEY`, the key a service already sends to
+  every sibling it calls. The key goes only to a fleet host (`egress.Direct`: a name under the fleet's domains, a bare container name, a loopback, private or tailnet address), never to a
+  URL a caller configured that points elsewhere; a key already on the request is kept; an unset variable or the `default_token` placeholder sends nothing, as before. The post is still
+  bounded by the same connect and read budget and still fails open: a refused post changes nothing for the caller. A service whose key does not carry the tracer's or the
+  coordinator's vhost in its scope (the gateway checks `X-Expected-Scope` against it) is refused exactly as before, so a key has to be granted that scope for the trace to arrive.
+- Not changed: `backoffcoord.Client` (the standalone client for non-HTTP code paths) has the same keyless post; no repository in the organisation imports it, and its default URL differs from
+  the name the services are configured with, so it is left for the day a service does.
+
+### Added
+
+- Tests: the trace post and the backoff consult carry the key (a stub tracer and a stub coordinator record the header); no key is sent when `FLEET_API_KEY` is unset, blank or
+  `default_token`; the helper's rule for fleet and third-party hosts (the fleet apex, a public fleet name, a bare container name, a private and a loopback address get the key; a
+  foreign host, `0exec.com.evil.example`, `evil0exec.com` and a public address do not), a key the caller already set is kept, the value is trimmed, and a nil request does not
+  panic. Six deliberate breaks of the change (dropping either call, the fleet-host guard, the placeholder guard, the existing-key guard or the trim) each fail a test.
+
+Verified: the new tests with `-race`; the six breaks above; against the live services a keyless post to the tracer and to the coordinator is 401 on the dockerhost and the same post with
+a service key passes authentication (400 for an empty body).
+
 ## [0.103.2] - 2026-10-18
 
 A CI check for the behaviour changes Go makes for a newer `go` line, so that a floor move does not find them first. No package changes.
