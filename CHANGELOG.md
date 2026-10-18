@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.103.2] - 2026-10-18
+
+A CI check for the behaviour changes Go makes for a newer `go` line, so that a floor move does not find them first. No package changes.
+
+### Added
+
+- `scripts/forward-compat.sh [GO_MINOR]`: copies the working tree to a temporary directory, runs `go mod edit -go=<GO_MINOR>.0` there, then `go vet ./...` and
+  `go test -count=1 ./...`, and ends with the packages and tests that failed. The checkout is never edited and the raised line is never committed. Why: Go takes the default of
+  each `GODEBUG` setting from the `go` line of the module it builds, not from the toolchain, and go.mod says `go 1.25.0`, so the suite on a 1.26 or 1.27 toolchain still ran
+  with the 1.25 defaults. With the line at 1.26 `proxysupplier`'s `TestSelfProxyGuard_Loopback` fails (`urlstrictcolons`: `url.Parse` rejects `http://::1:3001/`, so the
+  self-proxy guard failed open; fixed in 0.103.1), and nothing in CI showed it. GOTOOLCHAIN is forced to `local`, so the Go that runs is the Go that is tested; it exits 2, before running anything,
+  for a toolchain older than the line asked for, a line that is not newer than go.mod's (a check that tests nothing is worse than none), and an argument that is not a minor
+  version. `FORWARD_COMPAT_KEEP=1` keeps the copy to debug in. Only the root module is covered (`lint/fixture` is a module of its own).
+  `FORWARD_COMPAT_GO_MINOR=1.26` in `scripts/tool-versions.sh` is the default minor.
+- `scripts/forward-compat-selftest.sh`, in the `validate` step: runs the script with a fake `go` and checks that the checkout is byte-identical afterwards and the copy is gone,
+  that vet and test run in the copy (without `.git`) on the requested line and with `GOTOOLCHAIN=local` even when the caller sets `auto`, that failing tests or a failing vet exit
+  1 and are named while the other still runs, and that the three refusals exit 2 without running Go. Five deliberate breaks of the script (editing the checkout, not forcing the
+  toolchain, swallowing the test exit code, a wrong line, copying `.git`) each fail it.
+- A `forward-compat` step in `.woodpecker.yml` (pull requests and pushes to main, `golang:1.26.9`). **It blocks.** It was first written as informational (`failure: ignore`) because
+  main still failed it with the one `proxysupplier` test above, and a blocking step would have turned every pull request red until the 0.103.1 fix merged. That fix is on main, the
+  script passes on Go 1.26 and 1.27, and the step no longer carries `failure: ignore`.
+- `docs/releasing.md` has a section on the check: what it is for, how to run it (`scripts/forward-compat.sh 1.27`) and what to do when it fails (fix the code; a `godebug` pin in
+  a service is the last resort).
+
+Verified: the script on this tree, rebased onto the 0.103.1 fix, with Go 1.26.9 and Go 1.27.2 in the `golang` images: `go vet` is clean and every test passes on both; before the fix
+both failed on `proxysupplier` `TestSelfProxyGuard_Loopback` alone; the checkout and the synced tree both still say `go 1.25.0` afterwards; `woodpecker-cli lint` (v3.17.0) accepts the file.
+
 ## [0.103.1] - 2026-10-18
 
 `proxysupplier` writes an IPv6 proxy host in the form Go 1.26 accepts, so its self-proxy guard fires for `::1` again on a service built with a go 1.26 line.

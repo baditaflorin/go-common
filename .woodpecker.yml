@@ -7,8 +7,8 @@
 #
 # Steps run in order. `validate` keeps its original name and commands so
 # anything keyed on it is unaffected; the rest were added by the hardening work
-# (race, lint, vuln, API compatibility, benchmarks, release number, fuzz smoke,
-# package index). Tool versions
+# (race, lint, vuln, forward compatibility, API compatibility, benchmarks, release
+# number, fuzz smoke, package index). Tool versions
 # live in scripts/tool-versions.sh, except the lint image tag below, which has to
 # be kept equal to GOLANGCI_LINT_VERSION by hand.
 # Woodpecker's default clone is shallow (depth 1) and treeless. That has no HEAD^
@@ -40,6 +40,9 @@ steps:
       # A budgeted small package may not gain a third-party module (scripts/dep-budget.txt),
       # and docs/dependencies.md must match what the packages import.
       - scripts/dep-budget-selftest.sh && scripts/dep-budget.sh && scripts/dep-budget.sh --check-doc
+      # forward-compat.sh edits only a copy, passes the go line it was given and fails when
+      # the tests do.
+      - scripts/forward-compat-selftest.sh
     when:
       - event: pull_request
       - event: push
@@ -95,6 +98,26 @@ steps:
       CGO_ENABLED: "0"
     commands:
       - scripts/vuln-check.sh
+    when:
+      - event: pull_request
+      - event: push
+        branch: main
+
+  # Forward compatibility: go-common's own go vet and tests with a temporary newer
+  # `go` line, in a copy of the tree (scripts/forward-compat.sh; docs/releasing.md says
+  # what to do when it fails). Go takes the default of each GODEBUG setting from the
+  # `go` line of the module it builds, not from the toolchain, so the steps above run
+  # with the 1.25 defaults on any image; this is the only step that sees what Go
+  # changes for a newer line before go-common's minimum Go moves. The image must
+  # provide the minor version in FORWARD_COMPAT_GO_MINOR (scripts/tool-versions.sh),
+  # which the script uses when it is given no argument. An exact patch, as in `vuln`.
+  # Blocking: a failure means the code is wrong under a newer Go's defaults.
+  forward-compat:
+    image: golang:1.26.9
+    environment:
+      CGO_ENABLED: "0"
+    commands:
+      - scripts/forward-compat.sh
     when:
       - event: pull_request
       - event: push

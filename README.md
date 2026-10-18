@@ -66,6 +66,7 @@ Every change to the module has to pass, in CI (Woodpecker, `.woodpecker.yml`):
 | `go test -race` | Data races |
 | `golangci-lint` (new findings only) | Bugs and dead code; legacy findings do not block |
 | `scripts/vuln-check.sh` (`govulncheck`) | A reachable known vulnerability that is not in the reviewed, expiring allowlist `scripts/govulncheck-allow.txt` |
+| `scripts/forward-compat.sh` | A behaviour change Go makes for a newer `go` line (GODEBUG defaults): vet and the tests are run on a copy with the line raised, see [docs/releasing.md](docs/releasing.md) |
 | `scripts/apidiff-check.sh` | An incompatible API change that the changelog does not call BREAKING |
 | `scripts/bench-gate.sh` | A hot-path benchmark that started allocating more (allocs/op, against the merge base) |
 | `scripts/release-check.sh` | A CHANGELOG version that is malformed, already tagged, or not the next free one |
