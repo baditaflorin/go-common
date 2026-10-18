@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/baditaflorin/go-common/config"
 	"github.com/baditaflorin/go-common/depcheck"
+	"github.com/baditaflorin/go-common/egress"
 	"github.com/baditaflorin/go-common/env"
 	"github.com/baditaflorin/go-common/fleetfetch"
 	"github.com/baditaflorin/go-common/graph"
@@ -14,6 +15,7 @@ import (
 	"github.com/baditaflorin/go-common/runtimetune"
 	"github.com/baditaflorin/go-common/safehttp"
 	"github.com/baditaflorin/go-common/telemetry"
+	"log"
 	"net/http"
 	"os"
 	"sync"
@@ -36,6 +38,30 @@ func WithoutRequestStats() Option {
 // however many times New is called (tests call it often).
 var envCheckOnce sync.Once
 
+// egressOnce does the same for the egress rule on the default transport.
+var egressOnce sync.Once
+
+// installDefaultTransport is the egress call New makes; a variable so a test can
+// observe the wiring without changing the process's default transport.
+var installDefaultTransport = egress.InstallDefaultTransport
+
+// applyEgressRule puts the fleet-direct rule on http.DefaultTransport, once per
+// process, and says in the log what it did. It runs first in New, before anything
+// of the process makes a request of its own: net/http reads the proxy function
+// without a lock, so the one write must not meet a request in flight.
+func applyEgressRule() {
+	egressOnce.Do(func() {
+		switch st := installDefaultTransport(); st {
+		case egress.DefaultInstalled:
+			log.Printf("server: egress: plain HTTP clients now reach the fleet's own hosts directly, not through the egress proxy (%s=off turns this off)", egress.DefaultTransportEnv)
+		case egress.DefaultAlready:
+			// Another New in this process got there first; nothing to say.
+		default:
+			log.Printf("server: egress: default transport unchanged (%s)", st)
+		}
+	})
+}
+
 // New creates a new Server with optional configuration
 func New(cfg *config.Config, opts ...Option) *Server {
 	// Apply container-aware Go runtime memory/GC tuning before the
@@ -53,6 +79,17 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// in tests) tune once. Operator-set GOGC/GOMEMLIMIT are never
 	// overridden; FLEET_RUNTIME_TUNING=off disables it per service.
 	runtimetune.Apply()
+
+	// Plain http.Clients (http.DefaultClient, a client with no Transport, a
+	// dependency probe) use http.DefaultTransport, whose proxy rule is NO_PROXY
+	// alone: a request to one of our own hosts that NO_PROXY does not list left
+	// through the egress proxy (a 502 for a bare container name, a gateway source
+	// refusal or a flapping probe for a public fleet name). Give them the rule the
+	// fleet's own clients already use: our destinations are direct, everything else
+	// follows the environment as before. safehttp has its own transport and its own
+	// proxy policy, and is not affected. FLEET_EGRESS_DEFAULT_TRANSPORT=off keeps
+	// the old behaviour for one service.
+	applyEgressRule()
 
 	// Tell the operator about environment variables that cannot work (a value
 	// that does not parse, a variable that was removed, a likely typo of a

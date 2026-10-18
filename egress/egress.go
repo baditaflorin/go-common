@@ -10,10 +10,13 @@
 // environment behaviour (http.ProxyFromEnvironment, so NO_PROXY still applies).
 //
 // Use it for the clients that talk to our own services (the fetch cache, the
-// rate coordinator, the Graph collector). It is deliberately NOT applied to
-// safehttp: that is the generic public-web client, and the runner's strict
-// egress policy (go_fleet_runner #428) keeps even our own public hostnames on
-// the proxy for proxy_egress services that use it to scan targets.
+// rate coordinator, the Graph collector). server.New also applies it to
+// http.DefaultTransport (InstallDefaultTransport), so a plain http.Client, which
+// is what a service uses for calls to its siblings and for its dependency
+// probes, follows the same rule without any code of its own. It is deliberately
+// NOT applied to safehttp: that is the generic public-web client, and the runner's
+// strict egress policy (go_fleet_runner #428) keeps even our own public hostnames
+// on the proxy for proxy_egress services that use it to scan targets.
 package egress
 
 import (
@@ -110,7 +113,9 @@ func Proxy(req *http.Request) (*url.URL, error) {
 }
 
 // Transport returns a clone of http.DefaultTransport whose proxy policy is
-// Proxy. Each call returns a fresh transport; callers own its lifetime.
+// Proxy. Each call returns a fresh transport; callers own its lifetime. Prefer it
+// to relying on InstallDefaultTransport for a client that must keep the rule
+// whatever the rest of the program does to the default transport.
 func Transport() *http.Transport {
 	t := &http.Transport{}
 	if base, ok := http.DefaultTransport.(*http.Transport); ok {

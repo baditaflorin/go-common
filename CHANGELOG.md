@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.103.0] - 2026-10-18
+
+A plain `http.Client` now follows the same proxy rule as the fleet's own clients: requests to the fleet's own hosts go direct, everything else still follows the environment.
+This is the first release tagged since v0.102.68; the entries 0.102.69 to 0.102.74 below were merged without tags and ship with it.
+
+### Changed
+
+- **BREAKING (behavioural):** `server.New` calls `egress.InstallDefaultTransport()` first, before anything else in the process starts a request. It replaces the proxy function of
+  `http.DefaultTransport` (the standard one, `http.ProxyFromEnvironment`, which applies `NO_PROXY` and nothing else) with `egress.Proxy`. Everything that uses the default transport
+  follows it: `http.DefaultClient`, an `http.Client` with no `Transport`, `http.Get`, the dependency probes services register with `depcheck`, and libraries that build their client the
+  standard way. A destination that is ours (a bare container name, a loopback, private or tailnet address, `host.docker.internal`, a name under 0exec.com, 0crawl.com, 0own.com,
+  0docker.com or 0infer.com, or a domain in `FLEET_DIRECT_DOMAINS`) is now direct; anything else still goes where `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` say.
+  Why: a service that runs with an egress proxy and calls a sibling by a name that `NO_PROXY` does not list sent that call through the proxy. A bare container name reached the proxy,
+  which cannot resolve it (502); a public fleet name reached the gateway from the proxy's exit address, which a vhost with a source allowlist refuses, or which fails on and off as the
+  proxy rotates its exits (a dependency probe that failed 4 runs in 16). An audit of the URLs in the environment of the containers on two runtime hosts found 23 and 16 destination hosts
+  that a plain client would have sent to the proxy. `egress.Proxy` already gave the fleet-direct rule to the Graph, the fetch cache and the rate coordinator; this gives it to the rest,
+  so one release closes the gap for every service instead of a `NO_PROXY` edit per service and host. A service with no proxy variables set is unchanged, since there is no proxy to skip.
+  What is not affected: `safehttp` builds its own transport with its own proxy policy (it is the public-web client, and the runner's `proxy_egress` rule keeps our public names on the
+  proxy for scanners that use it), `secrets.DirectTransport`, `egress.Transport()` and `fleetfetch`'s transports, third-party destinations, and a program that set its own proxy function
+  on the default transport (`nil`, a fixed proxy, a wrapper): that choice is kept, because replacing it could only widen the use of the proxy. A service that does not call `server.New`
+  (a few proxies and brokers) is unchanged until it calls `egress.InstallDefaultTransport()` itself.
+  To go back for one service without a release, set `FLEET_EGRESS_DEFAULT_TRANSPORT=off` (also `false`, `0`, `no`, `disabled`; any value that is not an "on" spelling reads as off, and the
+  start-up check names a value it does not recognise). `server.New` logs one line saying what it did, never a proxy value.
+  The write happens once, early, because `net/http` reads the proxy function without a lock: a service that starts requests on the default transport before `server.New` runs can race
+  with it (the race detector reports it; in practice it is one word written once), and should call `egress.InstallDefaultTransport()` at the top of `main` instead.
+
+### Added
+
+- `egress.InstallDefaultTransport() InstallStatus`: the call above. Idempotent and safe for concurrent callers; the status (`DefaultInstalled`, `DefaultAlready`, `DefaultDisabled`,
+  `DefaultCustom`, `DefaultForeign`, with `Active()` and `String()`) says what happened and why. `egress.DefaultTransportInstalled()` reports whether the default transport follows the rule,
+  and `egress.DefaultTransportEnv` names the switch.
+- `FLEET_EGRESS_DEFAULT_TRANSPORT` and `FLEET_DIRECT_DOMAINS` are declared in the `env` registry, so they are in `docs/ENV.md` and the start-up check flags a likely typo of either. The
+  parsing of `FLEET_DIRECT_DOMAINS` is unchanged.
+- Tests: the install replaces only the standard function (`nil`, a fixed proxy and a wrapper are left alone, as is a transport that is not an `*http.Transport`); the switch and its
+  spellings; the status of 64 concurrent callers (exactly one installs); a real client against an origin and a recording proxy, showing that a fleet name, a bare container name, a
+  private address and a tailnet address go straight to the origin while `example.com`, a look-alike domain and an API host go to the proxy, with the stock transport as the contrast;
+  and in `server`, that `New` calls the install once per process however many times it is called, that the default transport follows the rule afterwards, and that the log line says what
+  happened without carrying a proxy value. Nine deliberate breaks of the code (no assignment, replacing a custom function, ignoring the switch, remembering a failed install, dropping the
+  call from `New`, no once, always-equal and nil-only comparisons, an unrecognised value reading as on, a log line with the proxy) each fail a test.
+
 ## [0.102.74] - 2026-10-18
 
 Metrics-wiring fixes for the problems the wave-4 observability review found ([docs/observability.md](docs/observability.md), "Known limits"). One behaviour change: the

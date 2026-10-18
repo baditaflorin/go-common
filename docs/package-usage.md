@@ -88,7 +88,7 @@ questions about: see "Before removing a package".
 | [`deploymentauthorization`](../deploymentauthorization/) | 1 | 0 | 1 | 0 | One adopter (added 2026-10). |
 | [`deploymentintent`](../deploymentintent/) | 1 | 0 | 2 | 0 | One adopter (added 2026-10). |
 | [`deploymentlease`](../deploymentlease/) | 1 | 0 | 0 | 0 | One adopter (added 2026-10). |
-| [`egress`](../egress/) | 0 | 0 | 2 | 0 | Linked in through other go-common packages. |
+| [`egress`](../egress/) | 0 | 0 | 2 | 0 | Linked in through other go-common packages; `server.New` puts its rule on the default transport. |
 | [`egressproxy`](../egressproxy/) | 0 | 0 | 0 | 0 | Opt-in, new (2026-10). |
 | [`env`](../env/) | 8 | 0 | 9 | 0 |  |
 | [`errors`](../errors/) | 0 | 0 | 2 | 0 | Linked in through other go-common packages. No service imports it directly. |
