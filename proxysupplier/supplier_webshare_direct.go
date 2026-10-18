@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"log"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -353,7 +354,10 @@ func (s *webshareDirectSupplier) refresh(ctx context.Context) error {
 		if !e.Valid {
 			continue
 		}
-		addr := fmt.Sprintf("%s:%d", e.ProxyAddress, e.Port)
+		// JoinHostPort: an IPv6 proxy_address is bracketed, which keeps the URL
+		// below parseable and makes addr the "[host]:port" form that
+		// conn.RemoteAddr() reports (MarkResult's key).
+		addr := net.JoinHostPort(e.ProxyAddress, strconv.Itoa(e.Port))
 		if old, ok := prevByAddr[addr]; ok {
 			list = append(list, old)
 			continue
