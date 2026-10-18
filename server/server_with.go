@@ -187,6 +187,32 @@ func WithKeystoreAuth(localTokens ...string) Option {
 	}
 }
 
+// WithKeystoreAuthPublicPrefixes is WithKeystoreAuth plus a set of request
+// path prefixes that bypass the keystore gate entirely — for a handler whose
+// own unguessable value is its access control (go-pentest-oob-collector's
+// GET /c/<token> catch endpoint: the random token in the path is the secret,
+// not a keystore key, and the caller is a scanned target that can never hold
+// this service's credential). "/c/" also exempts "/c/<token>/<id>" (a prefix
+// match, not exact); "" and "/" are ignored rather than honored, so neither
+// can turn the whole service public by mistake. localTokens behave exactly
+// as in WithKeystoreAuth.
+//
+// Never declare a prefix that also serves a keystore-gated route under it.
+func WithKeystoreAuthPublicPrefixes(publicPrefixes []string, localTokens ...string) Option {
+	return func(s *Server) {
+		ks := apikey.NewCache(apikey.New())
+		if s.PromAuthCollectors != nil {
+			ks.Observer = s.PromAuthCollectors
+		}
+		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
+			Verifier:           ks,
+			LocalTokens:        commonCrawlStageLocalTokens(localTokens),
+			Observer:           s.PromAuthCollectors,
+			PublicPathPrefixes: publicPrefixes,
+		}))
+	}
+}
+
 // WithKeystoreAuthMesh is WithKeystoreAuth plus middleware.TrustPrivateMesh:
 // a request whose actual TCP peer is a private/loopback/mesh IP and that
 // carries no gateway trust header is treated as already-authenticated. Use

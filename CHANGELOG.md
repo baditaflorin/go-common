@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.104.1] - 2026-10-19
+
+`middleware.KeystoreOpts` and `server.WithKeystoreAuthPublicPrefixes` let a service declare request path prefixes that bypass the keystore gate, for a handler whose own unguessable value is its access control.
+
+### Added
+
+- `KeystoreOpts.PublicPathPrefixes []string`: a prefix match checked in `TokenAuthKeystore`'s existing bypass step, alongside the fixed `/health`, `/version`, `/selftest`, ... list. `""` and `"/"` are
+  ignored rather than honored — either would make the whole service public by a configuration mistake, which this field exists to avoid, not enable.
+- `server.WithKeystoreAuthPublicPrefixes(publicPrefixes []string, localTokens ...string) Option`: `WithKeystoreAuth` plus the field above, with the same `PromAuthCollectors` auto-wiring.
+  Why: `go-pentest-oob-collector`'s public out-of-band catch endpoint, `GET /c/<token>[/<probe-id>]`, is answered 401 by the keystore gate before its handler ever runs — the caller is a vulnerable
+  scanned target reporting a callback, which can never be handed this service's own key. The token in the path is the access control (random, one-shot, TTL-bounded, rate-limited; unknown and expired
+  tokens both answer the same 1x1 GIF so a prober cannot distinguish live from dead), not a keystore credential. The gateway's own `auth_request` has carried the same gap on its side since the
+  endpoint was built; closing it is a `go_fleet_runner` nginx-template change, not a `go-common` one. Declaring the prefix here only reaches the container-level gate; the public fleet vhost still
+  needs the matching template declaration before an external caller can reach it. `"/c/"` exempts `/c/<token>/<id>` too (prefix, not exact); never declare a prefix that also serves a keystore-gated
+  route under it.
+- Tests: the prefix bypasses with no key; an unrelated path (including one that merely contains the prefix string later in its path) still requires one; `""`/`"/"`/both never widen the whole
+  service; the option wired end to end against `srv.Handler()`. Two deliberate reverts (drop the bypass check, drop the `""`/`"/"` guard) each fail a test.
+
+Verified: `apidiff-check` reports no incompatible API changes (a new struct field and a new exported function are additive); the four deliberate breaks above each fail the test that names them.
+
 ## [0.104.0] - 2026-10-18
 
 The minimum Go version is now 1.26 (it was 1.25).

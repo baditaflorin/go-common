@@ -152,6 +152,40 @@ type KeystoreOpts struct {
 	// reason: don't cliff-edge a new authorization rule into production.
 	// Has no effect when RequiredTier == "".
 	TierEnforce bool
+
+	// PublicPathPrefixes name request paths that bypass the keystore gate
+	// entirely, in addition to the fixed /health, /version, /selftest, ...
+	// list — a prefix match, so "/c/" also covers "/c/<token>/<id>". For a
+	// handler whose OWN unguessable value is its access control (an
+	// out-of-band callback catcher keyed on a random token in the path,
+	// not a keystore credential — the caller is a scanned target that can
+	// never be handed a service's key), declaring its exact prefix here is
+	// the supported way to exempt it, in place of hand-rolling a bypass
+	// inside the handler. An empty string or "/" is ignored rather than
+	// honored: either would make every route public, the one widening this
+	// field must never cause by a configuration mistake. Default nil — no
+	// effect on any service that doesn't opt in.
+	//
+	// Never declare a prefix that also serves a keystore-gated route:
+	// everything under it is unauthenticated, for every method, with no
+	// per-route override.
+	PublicPathPrefixes []string
+}
+
+// isPublicPathPrefix reports whether path starts with one of prefixes. "" and
+// "/" are never treated as a match even if present in the list — either
+// would make every route public, which PublicPathPrefixes exists to avoid
+// by a configuration mistake.
+func isPublicPathPrefix(path string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if p == "" || p == "/" {
+			continue
+		}
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // ScopeChecker is the abstract interface for out-of-band scope

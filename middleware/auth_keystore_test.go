@@ -598,3 +598,45 @@ func TestKeystore_RequiredTier_NotSet_NoEffect(t *testing.T) {
 type observerFunc func(AuthEvent)
 
 func (f observerFunc) ObserveAuth(e AuthEvent) { f(e) }
+
+func TestKeystore_PublicPathPrefixBypasses(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		t.Fatal("verifier should not be called for a declared public prefix")
+		return nil, nil
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v, PublicPathPrefixes: []string{"/c/"}})
+	for _, path := range []string{"/c/tok123", "/c/tok123/probe1"} {
+		code, _ := run(t, mw, newReq(path))
+		if code != http.StatusOK {
+			t.Fatalf("%s: want 200 (public prefix), got %d", path, code)
+		}
+	}
+}
+
+func TestKeystore_PublicPathPrefixDoesNotWidenOtherPaths(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		return nil, apikey.ErrInvalidKey
+	}}
+	mw := TokenAuthKeystore(KeystoreOpts{Verifier: v, PublicPathPrefixes: []string{"/c/"}})
+	// An unrelated path, and a path that merely contains the prefix string
+	// later in the path, must still require a key.
+	for _, path := range []string{"/", "/hits", "/poll/tok", "/x/c/tok"} {
+		code, _ := run(t, mw, newReq(path))
+		if code == http.StatusOK {
+			t.Fatalf("%s: a declared prefix must not widen auth to unrelated paths", path)
+		}
+	}
+}
+
+func TestKeystore_PublicPathPrefixEmptyOrRootIsIgnored(t *testing.T) {
+	v := &stubVerifier{verify: func(ctx context.Context, k string) (*apikey.VerifyResult, error) {
+		return nil, apikey.ErrInvalidKey
+	}}
+	for _, bad := range [][]string{{""}, {"/"}, {"", "/"}} {
+		mw := TokenAuthKeystore(KeystoreOpts{Verifier: v, PublicPathPrefixes: bad})
+		code, _ := run(t, mw, newReq("/anything"))
+		if code == http.StatusOK {
+			t.Fatalf("PublicPathPrefixes=%v must not make every route public, got 200 for /anything", bad)
+		}
+	}
+}
