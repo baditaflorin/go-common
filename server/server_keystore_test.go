@@ -150,3 +150,27 @@ func TestWithKeystoreAuthAcceptsCommonCrawlStageKeyOnlyInIsolatedStaging(t *test
 		})
 	}
 }
+
+// TestWithKeystoreAuthPublicPrefixes_BypassesOnlyTheDeclaredPrefix exercises
+// the option end to end against srv.Handler(): a declared prefix serves with
+// no key, while everything else keeps requiring one — the shape
+// go-pentest-oob-collector needs for its public GET /c/<token> catch route.
+func TestWithKeystoreAuthPublicPrefixes_BypassesOnlyTheDeclaredPrefix(t *testing.T) {
+	cfg := &config.Config{AppName: "test", Version: "0.0.0", Port: "0"}
+	srv := New(cfg, WithKeystoreAuthPublicPrefixes([]string{"/c/"}, "default_token"))
+	srv.Mux.HandleFunc("/c/", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	srv.Mux.HandleFunc("/hits", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := srv.Handler()
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/c/sometoken", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("/c/sometoken with no key: want 200, got %d", rr.Code)
+	}
+
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, httptest.NewRequest(http.MethodGet, "/hits", nil))
+	if rr2.Code == http.StatusOK {
+		t.Fatal("/hits with no key must still be gated — the declared prefix must not widen the whole service")
+	}
+}
