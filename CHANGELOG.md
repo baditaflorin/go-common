@@ -12,7 +12,7 @@ The minimum Go version is now 1.26 (it was 1.25).
   Moving the builder image to 1.26 first, without touching the `go` line, is safe in that order: an image newer than the `go` line always builds.
 - A service's own `go` line decides the default of each `GODEBUG` setting, so raising it to 1.26.0 flips four defaults for that service (each can be put back with a `godebug name=value` line in its go.mod):
   `urlstrictcolons` (`net/url.Parse` now rejects a host with colons outside brackets, such as `http://localhost:1:2`), `cryptocustomrand` (most `crypto/*` APIs ignore a custom random `io.Reader`),
-  `tlssecpmlkem` (the default TLS key exchange adds the hybrid post-quantum shares SecP256r1MLKEM768 and SecP384r1MLKEM1024, so the ClientHello and its JA3/JA4 fingerprint change), and
+  `tlssecpmlkem` (the default TLS key exchange offers two more hybrid post-quantum groups, SecP256r1MLKEM768 and SecP384r1MLKEM1024: the ClientHello is 4 bytes larger and its JA3/JA4 fingerprint changes, and no extra key share is sent; measured with a Go 1.26 client against a local listener), and
   `httpservecontentmaxranges` (`http.ServeContent` allows up to 200 ranges per request).
 - CI builds on `golang:1.26`. The `forward-compat` step now tests the next line, Go 1.27 (`FORWARD_COMPAT_GO_MINOR`), so the step keeps showing what Go changes before the minimum moves again.
 
