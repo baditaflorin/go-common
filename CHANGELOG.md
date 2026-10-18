@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.103.1] - 2026-10-18
+
+`proxysupplier` writes an IPv6 proxy host in the form Go 1.26 accepts, so its self-proxy guard fires for `::1` again on a service built with a go 1.26 line.
+
+### Fixed
+
+- `proxysupplier` built the proxy URL from `PROXY_HOST` / `PROXY_PORT` with `"%s:%s"`, so an IPv6 host gave `http://::1:3001/`, which is not a URL. Go 1.26 changed the default of
+  GODEBUG `urlstrictcolons`: `net/url.Parse` refuses a host with a colon outside brackets (for a module whose go line is 1.26 or later; go-common's own is still 1.25). The guard
+  against a proxy that routes back to this process (`isSelfProxy`) reads a parse error as "not this process", so for the loopback host `::1` it stopped firing on such a service and
+  `NewFromConfig` kept a `plain_proxies` / `env` supplier pointing at itself. `buildURL` now brackets an IPv6 host (`http://[::1]:3001/`); a name and an IPv4 host give the same URL
+  as before, and the user name and password are written as before. Found by running go-common's own tests with a `go 1.26.0` line, where `TestSelfProxyGuard_Loopback` failed.
+- `webshare_direct`: an IPv6 `proxy_address` is bracketed the same way, so the URL parses and the pool key is the `[host]:port` form that `conn.RemoteAddr()` reports, which is what
+  `MarkResult` expects. Webshare lists IPv4 addresses today; nothing changes for those.
+- Tests: `buildURL` for a name, an IPv4 host and an IPv6 host with and without credentials; the guard for `::1` with the strict parser forced (`t.Setenv("GODEBUG",
+  "urlstrictcolons=1")`, which `net/url` reads again at run time; it needs a Go 1.26 toolchain and skips on older ones); and the webshare IPv6 entry.
+
 ## [0.103.0] - 2026-10-18
 
 A plain `http.Client` now follows the same proxy rule as the fleet's own clients: requests to the fleet's own hosts go direct, everything else still follows the environment.

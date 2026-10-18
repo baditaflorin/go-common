@@ -427,10 +427,15 @@ func buildURL(protocol, host, port, username, password string) string {
 	if protocol == "" {
 		protocol = "http"
 	}
+	// JoinHostPort brackets an IPv6 literal ("[::1]:3001"); a bare "::1:3001"
+	// is not a URL authority, and net/url rejects it from Go 1.26 on
+	// (GODEBUG urlstrictcolons). Trim first so a host given as "[::1]" is
+	// not bracketed twice.
+	hostport := net.JoinHostPort(strings.Trim(host, "[]"), port)
 	if username != "" && password != "" {
-		return fmt.Sprintf("%s://%s:%s@%s:%s/", protocol, username, password, host, port)
+		return fmt.Sprintf("%s://%s:%s@%s/", protocol, username, password, hostport)
 	}
-	return fmt.Sprintf("%s://%s:%s/", protocol, host, port)
+	return fmt.Sprintf("%s://%s/", protocol, hostport)
 }
 
 // isSelfProxy returns true when rawURL would route back to this process.
