@@ -9,10 +9,15 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/baditaflorin/go-common/egress"
+	"github.com/baditaflorin/go-common/header"
 )
 
 // coordinatorClient is the shared HTTP client for the fleet coordinator and
@@ -34,6 +39,26 @@ var coordinatorClient = &http.Client{
 		MaxIdleConnsPerHost:   4,
 		IdleConnTimeout:       30 * time.Second,
 	},
+}
+
+// setServiceKey puts this service's own keystore key on a trace or backoff
+// post. The tracer and the backoff coordinator sit behind the keystore (the
+// containers check it themselves, and so does the gateway vhost a replica on
+// another host reaches them through), so a post with no key is answered 401
+// and the span or the consult is lost. The key is the one the service already
+// uses for every call to a sibling: FLEET_API_KEY. It goes only to a fleet
+// host (egress.Direct), never to an arbitrary URL a caller configured, and a
+// key the request already carries is kept. An unset variable or the
+// "default_token" placeholder sends nothing, as before.
+func setServiceKey(req *http.Request) {
+	if req == nil || req.URL == nil || req.Header.Get(header.APIKey) != "" {
+		return
+	}
+	key := strings.TrimSpace(os.Getenv("FLEET_API_KEY"))
+	if key == "" || key == "default_token" || !egress.Direct(req.URL.Hostname()) {
+		return
+	}
+	req.Header.Set(header.APIKey, key)
 }
 
 // extrasTransport wraps the underlying RoundTripper with the three
@@ -428,6 +453,7 @@ func (t *extrasTransport) consultBackoff(parentCtx context.Context, host string,
 		return -1
 	}
 	req.Header.Set("Content-Type", "application/json")
+	setServiceKey(req)
 	resp, err := cli.Do(req)
 	if err != nil {
 		return -1 // fail-open: silent fall-through
@@ -503,6 +529,7 @@ func (t *extrasTransport) emitTrace(s traceFields) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	setServiceKey(req)
 	resp, err := cli.Do(req)
 	if err != nil {
 		t.maybeLogTraceErr("post: %v", err)
