@@ -9,7 +9,7 @@ would otherwise write for itself.
 import "github.com/baditaflorin/go-common/safehttp"
 ```
 
-Module `github.com/baditaflorin/go-common`, Go 1.25. This repository is public:
+Module `github.com/baditaflorin/go-common`, Go 1.26. This repository is public:
 nothing sensitive belongs in it.
 
 **Change go-common, not the consumers.** When a fix would touch every service,

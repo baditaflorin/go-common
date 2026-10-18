@@ -7,9 +7,9 @@
 #
 # Why this exists: Go picks the default value of every GODEBUG setting from the
 # `go` line of the module being built, not from the toolchain. go.mod says
-# `go 1.25.0`, so the tests on a Go 1.26 or 1.27 toolchain still run with the
-# 1.25 defaults, and a setting Go flips for 1.26 (url.Parse and urlstrictcolons,
-# for one) cannot fail anything until a service raises its own go line. This
+# `go 1.26.0`, so the tests on a Go 1.27 toolchain still run with the 1.26
+# defaults, and a setting Go flips for 1.27 (tracebacklabels, for one) cannot fail
+# anything until a service raises its own go line. This
 # script copies the working tree to a temporary directory, runs
 # `go mod edit -go=<GO_MINOR>.0` there, then `go vet ./...` and
 # `go test -count=1 ./...`, and names what fails. The working tree is never

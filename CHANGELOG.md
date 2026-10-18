@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.104.0] - 2026-10-18
+
+The minimum Go version is now 1.26 (it was 1.25).
+
+### Changed
+
+- **BREAKING:** `go.mod` says `go 1.26.0`. A service that adopts this release needs a Go 1.26 builder (`golang:1.26` or newer), and `go get` raises its own `go` line to 1.26.0. The official `golang`
+  images set `GOTOOLCHAIN=local`, so an older image fails with `go: go.mod requires go >= 1.26.0 (running go 1.25.14; GOTOOLCHAIN=local)` instead of downloading a toolchain. A service that cannot move
+  yet stays on 0.103.x, and `scripts/backport.sh` cuts a `release/0.103` line only when a real service needs a security fix (`docs/releasing.md`).
+  Moving the builder image to 1.26 first, without touching the `go` line, is safe in that order: an image newer than the `go` line always builds.
+- A service's own `go` line decides the default of each `GODEBUG` setting, so raising it to 1.26.0 flips four defaults for that service (each can be put back with a `godebug name=value` line in its go.mod):
+  `urlstrictcolons` (`net/url.Parse` now rejects a host with colons outside brackets, such as `http://localhost:1:2`), `cryptocustomrand` (most `crypto/*` APIs ignore a custom random `io.Reader`),
+  `tlssecpmlkem` (the default TLS key exchange adds the hybrid post-quantum shares SecP256r1MLKEM768 and SecP384r1MLKEM1024, so the ClientHello and its JA3/JA4 fingerprint change), and
+  `httpservecontentmaxranges` (`http.ServeContent` allows up to 200 ranges per request).
+- CI builds on `golang:1.26`. The `forward-compat` step now tests the next line, Go 1.27 (`FORWARD_COMPAT_GO_MINOR`), so the step keeps showing what Go changes before the minimum moves again.
+
+### Fixed
+
+- Four reachable `golang.org/x/net` HTTP/2 advisories (GO-2026-6603, GO-2026-6611, GO-2026-6612, GO-2026-6617) are closed: `x/net` goes from v0.58.0 to v0.61.0, which needs `go 1.26.0`, and the
+  allowlist in `scripts/govulncheck-allow.txt` is empty. Taking `x/net` also moves `x/sync` to v0.24.0, `x/crypto` to v0.58.0, `x/text` to v0.43.0 and `x/sys` to v0.49.0.
+
 ## [0.103.2] - 2026-10-18
 
 A CI check for the behaviour changes Go makes for a newer `go` line, so that a floor move does not find them first. No package changes.
