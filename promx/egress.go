@@ -15,14 +15,20 @@ import (
 // Metrics exposed (labels in order):
 //
 //	safehttp_egress_requests_total{service, host, scheme, via_proxy, outcome}
-//	safehttp_egress_duration_seconds{service, host, via_proxy}
+//	safehttp_egress_duration_seconds{service, via_proxy}
 //	safehttp_egress_response_bytes_total{service, host, channel}
 //	safehttp_egress_blocked_total{service, reason}
 //
-// "host" cardinality is capped — see HostLimit option. Hosts beyond the
-// cap are folded into the literal label "_other" so a runaway scanner
-// cannot blow up Prometheus storage. "outcome" is a fixed-size enum drawn
-// from safehttp.EgressOutcome (~9 values), so the product label space is
+// "host" is bounded per process: at most 32 hosts get their own value (see
+// WithHostLimit), and a host earns one only once it has made 64 requests
+// (see WithHostMinHits). Every other request counts under host="_other",
+// so a crawler's long tail of domains costs one series instead of one per
+// domain, while the upstreams it calls all the time keep their names; sums
+// over "host" stay exact. The duration histogram carries no "host" at all:
+// a histogram costs a series per bucket, and per-host latency was the
+// largest single cost in the fleet's Prometheus (611k of 1.42M head series
+// on 2026-10-19). "outcome" is a fixed-size enum drawn from
+// safehttp.EgressOutcome (~9 values), so the product label space is
 // bounded.
 //
 // "via_proxy" is "true" / "false". Pair the requests_total counter with
@@ -57,16 +63,28 @@ type EgressCollectors struct {
 type EgressOption func(*egressOpts)
 
 type egressOpts struct {
-	hostLimit int
-	buckets   []float64
+	hostLimit   int
+	hostMinHits int
+	buckets     []float64
 }
 
-// WithHostLimit caps the number of distinct host label values that will be
-// emitted. Hosts beyond the cap get folded into "_other". Default: 256 —
-// big enough for normal fleet egress, small enough to keep TSDB sane if a
-// service starts scanning the internet.
+// WithHostLimit caps the number of hosts that get their own "host" label
+// value; every other request counts under "_other". Admitted hosts keep
+// their value for the life of the process, so the label never takes more
+// than n+2 values ("_other", and "_unknown" for an event with no host).
+// Default: 32 (256 before 0.105.0); n <= 0 keeps the default.
 func WithHostLimit(n int) EgressOption {
 	return func(o *egressOpts) { o.hostLimit = n }
+}
+
+// WithHostMinHits sets how many requests a host must make before it gets
+// its own "host" label value; until then its requests count under
+// "_other". The count has to be reached before 1024 other not-yet-admitted
+// hosts appear, so a crawler's one-off domains never qualify and the
+// upstreams it calls for every domain do. Default: 64. n <= 1 restores the
+// rule from before 0.105.0: the first hosts seen take the slots.
+func WithHostMinHits(n int) EgressOption {
+	return func(o *egressOpts) { o.hostMinHits = n }
 }
 
 // WithDurationBuckets overrides the default histogram buckets. The
@@ -86,9 +104,12 @@ func WithDurationBuckets(b []float64) EgressOption {
 //
 // reg can be nil, in which case the shared promx.Registry() is used.
 func NewEgressCollectors(reg prometheus.Registerer, opts ...EgressOption) *EgressCollectors {
-	o := &egressOpts{hostLimit: 256, buckets: prometheus.DefBuckets}
+	o := &egressOpts{hostLimit: defaultHostLimit, hostMinHits: defaultHostMinHits, buckets: prometheus.DefBuckets}
 	for _, opt := range opts {
 		opt(o)
+	}
+	if o.hostLimit <= 0 {
+		o.hostLimit = defaultHostLimit
 	}
 	if reg == nil {
 		reg = Registry()
@@ -97,7 +118,7 @@ func NewEgressCollectors(reg prometheus.Registerer, opts ...EgressOption) *Egres
 
 	c := &EgressCollectors{
 		service: service,
-		hosts:   newHostCardCap(o.hostLimit),
+		hosts:   newHeavyHitterCap(o.hostLimit, o.hostMinHits, 0),
 		requestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "safehttp_egress_requests_total",
 			Help: "Total outbound HTTP requests made via safehttp clients, labelled by destination host, scheme, proxy usage, and outcome bucket.",
@@ -106,7 +127,7 @@ func NewEgressCollectors(reg prometheus.Registerer, opts ...EgressOption) *Egres
 			Name:    "safehttp_egress_duration_seconds",
 			Help:    "Outbound HTTP request duration in seconds (full round-trip including TLS + body fetch).",
 			Buckets: o.buckets,
-		}, []string{"service", "host", "via_proxy"}),
+		}, []string{"service", "via_proxy"}),
 		bytesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "safehttp_egress_response_bytes_total",
 			Help: "Total response bytes actually read per outbound host (falls back to Content-Length only when the caller closed the body unread), labeled by channel (direct/proxy/cache_hit) so a cache hit doesn't look like real network spend.",
@@ -126,7 +147,7 @@ func (c *EgressCollectors) ObserveEgress(ev safehttp.EgressEvent) {
 	viaProxy := boolLabel(ev.ViaProxy)
 
 	c.requestsTotal.WithLabelValues(c.service, host, ev.Scheme, viaProxy, string(ev.Outcome)).Inc()
-	c.duration.WithLabelValues(c.service, host, viaProxy).Observe(ev.Duration.Seconds())
+	c.duration.WithLabelValues(c.service, viaProxy).Observe(ev.Duration.Seconds())
 	if ev.Bytes > 0 {
 		channel := ev.Channel
 		if channel == "" {

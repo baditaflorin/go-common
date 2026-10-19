@@ -12,7 +12,15 @@ import (
 //
 //	fleet_fetch_total{service, host, result}
 //	fleet_fetch_duration_seconds{service, result}
-//	fleet_fetch_cache_age_seconds{service, host}
+//	fleet_fetch_cache_age_seconds{service}
+//
+// "host" follows the same bound as the egress collectors: at most 32 hosts
+// get their own value, each only after 64 fetches, and everything else is
+// host="_other" (see WithHostLimit and WithHostMinHits on
+// NewEgressCollectors; this collector always uses those defaults). The
+// cache-age histogram has no "host": by host it was the largest single
+// metric in the fleet's Prometheus (145k series on 2026-10-19), and its
+// dashboards only read the fleet-wide mean.
 //
 // "result" is one of: hit, miss, fallback, timeout, error. Cache hit
 // rate per service is one PromQL line:
@@ -44,7 +52,7 @@ func NewFleetFetchCollectors(reg prometheus.Registerer) *FleetFetchCollectors {
 	}
 	c := &FleetFetchCollectors{
 		service: ServiceID(),
-		cap:     newHostCardCap(256),
+		cap:     newHeavyHitterCap(defaultHostLimit, defaultHostMinHits, 0),
 		total: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "fleet_fetch_total",
 			Help: "Total fleetfetch.Client.Get calls, labelled by upstream host and outcome.",
@@ -58,7 +66,7 @@ func NewFleetFetchCollectors(reg prometheus.Registerer) *FleetFetchCollectors {
 			Name:    "fleet_fetch_cache_age_seconds",
 			Help:    "Age in seconds of the cache entry served on a hit. Long ages = warm cache; growing = cache TTLs are loose.",
 			Buckets: []float64{1, 10, 60, 300, 900, 3600, 21600, 86400},
-		}, []string{"service", "host"}),
+		}, []string{"service"}),
 	}
 	reg.MustRegister(c.total, c.duration, c.cacheAge)
 	return c
@@ -70,6 +78,6 @@ func (c *FleetFetchCollectors) ObserveFleetFetch(ev fleetfetch.Event) {
 	c.total.WithLabelValues(c.service, host, ev.Result).Inc()
 	c.duration.WithLabelValues(c.service, ev.Result).Observe(ev.Duration.Seconds())
 	if ev.Result == "hit" && ev.AgeSeconds > 0 {
-		c.cacheAge.WithLabelValues(c.service, host).Observe(float64(ev.AgeSeconds))
+		c.cacheAge.WithLabelValues(c.service).Observe(float64(ev.AgeSeconds))
 	}
 }

@@ -25,7 +25,9 @@ func TestEgressCollectorsCountsSuccess(t *testing.T) {
 	defer srv.Close()
 
 	reg := prometheus.NewRegistry()
-	coll := NewEgressCollectors(reg)
+	// One request: first-come admission so the host keeps its own label
+	// value (the default makes a host earn it, see TestEgressHostAdmission).
+	coll := NewEgressCollectors(reg, WithHostMinHits(1))
 
 	// 127.0.0.1 is blocked by safehttp by default — allow it for this test.
 	safehttp.SetAllowedPrivateIPs([]net.IP{net.ParseIP("127.0.0.1")})
@@ -96,7 +98,7 @@ func TestEgressCollectorsCountsBlocked(t *testing.T) {
 // no access to safehttp's internal stubDelegate test helper.
 func TestEgressCollectorsSeparatesCacheHitBytesFromDirect(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	coll := NewEgressCollectors(reg)
+	coll := NewEgressCollectors(reg, WithHostMinHits(1))
 
 	c := safehttp.NewClient(
 		safehttp.WithFetchDelegate(fakeCacheDelegate{body: "cached body"}),

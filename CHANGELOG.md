@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.105.0] - 2026-10-19
+
+The egress and fleetfetch collectors no longer give every site a process fetches its own series: `host` is bounded at 32 heavy hitters per process, and the two histograms
+lose `host`. This is the durable fix for the Metrics Hub Prometheus OOM loop of 2026-10-19 (19 kills at 2 and 3 GiB); services pick it up with the next go-common bump.
+
+### Changed
+
+- **BREAKING (behavioural):** `safehttp_egress_duration_seconds` is labelled `{service, via_proxy}`, without `host`, and `fleet_fetch_cache_age_seconds` is labelled `{service}`,
+  without `host`. A query that filters or groups these two histograms by `host` now gets one series per service. go-fleet-metrics-hub's dashboards read both only as a fleet-wide
+  `sum(rate(..._sum)) / sum(rate(..._count))`, which is unchanged. Why: a histogram costs a series per bucket, so per host it was the largest cost in the fleet's Prometheus:
+  `safehttp_egress_duration_seconds_bucket` was 611,628 of 1.42 M head series on 2026-10-19 (go-fleet-metrics-hub #112 now drops it at scrape), and
+  `fleet_fetch_cache_age_seconds_bucket` then became the largest metric, 145,170 series, after growing from 90k to 140k in three hours.
+- **BREAKING (behavioural):** `host` on `safehttp_egress_requests_total`, `safehttp_egress_response_bytes_total` and `fleet_fetch_total` takes at most 32 named values per process
+  (was 256), and a host gets one only on its 64th request, provided those 64 come before 1024 other unnamed hosts have been seen (the count restarts then). Every other request
+  counts under `host="_other"`, so sums over `host` stay exact. Named hosts are never evicted: the label takes at most 34 values (`_other` and `_unknown` included) whatever a
+  process fetches. Why: the old rule named the first 256 hosts a process saw. 92 of the 130 processes exporting `safehttp_egress_requests_total` sat at that cap (25k host values
+  in all), 94% of their requests already counted under `_other` (97% for `fleet_fetch_total`), and every restart named a new random 256: the head held 74,295
+  `safehttp_egress_requests_total` series for 34,406 live ones. The hosts that recur (upstream APIs, the selftest target, deep-crawled sites) keep their names, so
+  `topk(15, sum by (host) (...))` on the fleet-egress dashboard shows them instead of the first domains crawled after boot. The cost: a process's first 63 requests to a host
+  count under `_other`, so a host a low-volume service calls rarely gets its name late or never.
+- `WithHostLimit(n)` with `n <= 0` keeps the default (now 32); it meant 256 before.
+- A host without a slot, once every slot is taken, costs one read-locked map lookup. It took the write lock on every call before, which for a crawler was 94% of its requests.
+
+### Added
+
+- `promx.WithHostMinHits(n)`: how many requests a host needs before it gets its own `host` value (default 64). `WithHostMinHits(1)` restores first-come naming for an
+  `EgressCollectors` a service builds itself. The fleetfetch collectors always use the defaults.
+- Tests: `TestEgressSeriesBound` and `TestFleetFetchSeriesBound` run one synthetic crawler process (144,224 requests over 20,003 hosts, shaped on the live per-host distribution:
+  most domains fetched 1-10 times, every 100th 100 times, three upstreams taking every 10th request) through the default collectors and count the series Prometheus would store.
+  The same test file run against 0.104.1: 7,960 egress series (6,804 of them the duration histogram, 258 host values) and 3,256 fleetfetch series (2,761 the cache-age histogram),
+  against 219 and 101 here; the upstreams keep their names and no domain fetched 1-10 times gets one. `TestHostCardCapBound` feeds both admission rules four adversarial inputs
+  (every host new; each host exactly `minHits` times in a row; round robin over 1000 hosts; empty hosts mixed in) and pins at most `limit` named values plus `_other` and
+  `_unknown`, and at most `window` candidates tracked; a concurrent variant runs under `-race`.
+
+Expected effect on the Metrics Hub (measured 2026-10-19): these five metric families hold 222,880 live series (about 470k of the 967k head series, counting the ones restarts leave
+behind); with every service on 0.105.0, an estimated 3k to 14k live. The rollout is a separate `fleet-runner update-dep` / `rollout`. Once it is done, go-fleet-metrics-hub's
+scrape-time drop of `safehttp_egress_duration_seconds_bucket` can go: without `host` the buckets are about 3,100 series fleet-wide.
+
 ## [0.104.1] - 2026-10-19
 
 `middleware.KeystoreOpts` and `server.WithKeystoreAuthPublicPrefixes` let a service declare request path prefixes that bypass the keystore gate, for a handler whose own unguessable value is its access control.
