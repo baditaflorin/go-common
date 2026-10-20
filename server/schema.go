@@ -87,10 +87,10 @@ func mountSchema(s *Server) {
 		Version:       s.Config.Version,
 		SchemaVersion: s.SchemaVersion,
 	})
-	s.Mux.HandleFunc("/schema", func(w http.ResponseWriter, r *http.Request) {
+	s.mount("/schema", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(body)
-	})
+	}))
 }
 
 // publishSchemaVersion writes the Server's schema version (defaulting

@@ -103,7 +103,7 @@ func WithGracefulDrain(drainPeriod, shutdownTimeout time.Duration) Option {
 // is not configured the handler always returns 200; when configured it
 // returns 503 once BeginDrain has been called.
 func mountReadyz(s *Server) {
-	s.Mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+	s.mount("/readyz", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.drain != nil && s.drain.draining.Load() {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -121,7 +121,7 @@ func mountReadyz(s *Server) {
 			"service": s.Config.AppName,
 			"version": s.Config.Version,
 		})
-	})
+	}))
 }
 
 // BeginDrain triggers the graceful-drain sequence. Returns immediately

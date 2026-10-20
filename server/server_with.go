@@ -197,9 +197,19 @@ func WithKeystoreAuth(localTokens ...string) Option {
 // can turn the whole service public by mistake. localTokens behave exactly
 // as in WithKeystoreAuth.
 //
+// A request under a prefix is exempt only if its path is canonical (no dot
+// segments, no "//", no encoded dot or slash: see
+// middleware.KeystoreOpts.PublicPathPrefixes); any other path that starts with one
+// is answered 400 by the gate.
+//
 // Never declare a prefix that also serves a keystore-gated route under it.
+// Start enforces that for the routes registered through Handle, HandleFunc and
+// the server's own mounts: it returns an error, and does not listen, if one of
+// them lies under a declared prefix. A route meant to be public is registered
+// with HandlePublic. Routes registered directly on s.Mux are not checked.
 func WithKeystoreAuthPublicPrefixes(publicPrefixes []string, localTokens ...string) Option {
 	return func(s *Server) {
+		s.declarePublicPrefixes(publicPrefixes)
 		ks := apikey.NewCache(apikey.New())
 		if s.PromAuthCollectors != nil {
 			ks.Observer = s.PromAuthCollectors

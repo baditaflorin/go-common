@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -119,6 +120,14 @@ type Server struct {
 	// after every option has run, so WithAgent/WithAgentFromEmbed and
 	// WithMCP can be passed in either order.
 	mcpEnabled bool
+
+	// routes are the patterns registered through Handle, HandleFunc,
+	// HandlePublic and the server's own mounts, and publicPrefixes are the
+	// path prefixes WithKeystoreAuthPublicPrefixes exempted from the keystore
+	// gate; Start checks the one against the other (routes.go).
+	routesMu       sync.Mutex
+	routes         []routeRecord
+	publicPrefixes []string
 }
 
 // Handler returns the fully-wrapped HTTP handler — middleware chain
@@ -166,7 +175,16 @@ func (s *Server) buildHTTPServer(addr string, h http.Handler) *http.Server {
 // its deferred cleanup. Run and RunTier log any error Start returns and exit
 // with status 1 too, so only a service that calls Start itself and ignores its
 // result can still end with status 0 after a listen failure.
+//
+// Before it listens, Start checks the routes registered through Handle,
+// HandleFunc and the server's own mounts against the prefixes declared with
+// WithKeystoreAuthPublicPrefixes, and returns an error, without listening, if a
+// keystore-gated route lies under one: the gate would let requests to it through
+// without a key.
 func (s *Server) Start() error {
+	if err := s.validateRoutes(); err != nil {
+		return err
+	}
 	stopProfiling := startServerProfiling(s.Config.AppName, profiling.StartFromEnv)
 	defer stopProfiling()
 	defer s.shutdownTelemetry()
