@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.105.3] - 2026-10-20
+
+A per-package coverage ratchet in CI: a package that loses test coverage, or a new tested package nobody tracked, fails the pipeline of main (pull requests can run it by hand). Stacked on the CI stages change (0.105.1): it adds one step, to the second stage of main's pipeline. No package changes.
+
+Why: statement coverage is 84.5% on average over 72 tested packages (v0.105.0) but nothing stopped a package from falling, and the weakest ones sit on the per-request path: `middleware` 67.6% (`server` wires it into 357 repositories), `response` 69.9% (163 importers), `openapi` 72.6% (99), and `spiffe` 34.9%, `shutdown` 56.7%, `backoffcoord` 58.9%.
+
+### Added
+
+- `coverage/floors.txt`: one line per tested package, `<package> <percent>`; initial values are the measured coverage minus 2 points, rounded down (`middleware` 65, `response` 67, `openapi` 70, `spiffe` 32). The 2 points are slack for timing-dependent tests: three runs of the whole suite on one tree differed by at most 0.5 points in a package (`server`).
+- `scripts/coverage-ratchet.sh`: runs `go test -cover ./...`, prints a table (package, floor, now, status) and fails when a package is below its floor, when `go test` fails, or when a tested package has no floor yet. `--update` raises floors to measured minus the margin (`COVERAGE_MARGIN`, default 2) and never lowers one,
+  adds new packages and keeps stale lines; it refuses to write while a package is below its floor or tests fail, so it cannot paper over a regression. A package with a floor whose tests are gone counts as 0%, below it. `--from FILE` judges a saved output without running Go; `COVERAGE_ADVISORY=1` prints the verdict but never fails (the rollback switch). It compares in tenths of a percent, so 82.0 against a floor of 82 is a pass.
+- `scripts/coverage-ratchet-selftest.sh`, in the `validate` step: a fake `go` with canned output, 36 checks (rounding, never lowering, new and stale packages, a regression of 0.1 point, a failing `go test`, no-test and no-statement packages, `--from`, the margin, bad input). Six deliberate breaks of the script (`<=`, lowering on update, no margin, ignoring `go test`'s exit code, forgetting a package whose tests vanished, advisory always on) each fail it.
+- A `coverage` step in `.woodpecker.yml`, **on pushes to main only**, after `validate` (second stage). It is another full test run, about 450 CPU-seconds, on a single agent shared with the fleet's pull requests (a pull request pipeline measured 400 s wall with queue contention), so pull requests do not pay it. The cost of that choice: a pull request can lower coverage and only main turns red, so `coverage/README.md` says to run `scripts/coverage-ratchet.sh` by hand before a change that removes or rewrites tests. A nightly run needs a cron schedule on the Woodpecker server and is not set up here. `COVERAGE_ADVISORY: "0"` is the step's switch.
+- `coverage/README.md`: what to do when it fails, how to raise a floor, and how to turn it off.
+- Tests, in a separate commit: `response` (`Success`, `ErrorResp`, `NewError`, `FromError`, `(*Error).Error`, the default observer) 69.9% to 90.4%, and `openapi` (`ScanDir`, hidden and vendor directories, an unreadable file, every `AddRoute` method) 72.6% to 93.4%; their floors are raised to 88 and 91 with `--update`. `middleware` (67.6%) is not touched here: another change owns that directory, so its floor stays at 65.
+
+Verified: three runs of `go test -count=1 -cover ./...` in `golang:1.26` on the build host (72 packages, mean 84.6%, no failures); floors written from run 1 and runs 2 and 3 pass them; the selftest passes; `woodpecker-cli lint` (3.17) accepts the file. Line coverage is not quality: it keeps tests from disappearing, it does not say they assert anything.
+
 ## [0.105.2] - 2026-10-20
 
 The `**BREAKING...**` bullets of this file now end with a one-line summary and, when there is one, the way back to the old behaviour. A generator reads them into `compat/changes.json`,

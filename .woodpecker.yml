@@ -74,6 +74,8 @@ steps:
       # fuzz-changed.sh hands scripts/fuzz.sh the packages a change touches, and every package
       # when it cannot tell.
       - scripts/fuzz-changed-selftest.sh
+      # coverage-ratchet.sh reads the floors, fails below one, raises them and never lowers them.
+      - scripts/coverage-ratchet-selftest.sh
     when:
       - event: pull_request
       - event: push
@@ -214,5 +216,26 @@ steps:
     depends_on: [refs]
     when:
       - event: pull_request
+      - event: push
+        branch: main
+
+  # Per-package coverage floors (coverage/floors.txt, coverage/README.md): a package whose
+  # statement coverage falls below its floor, or a tested package with no floor, fails. The
+  # floors are measured minus 2 points and only ever go up. It is another full test run
+  # (about 450 CPU-seconds) on an agent shared with the fleet's pull requests, so it runs on
+  # pushes to main only, not on every pull request: run scripts/coverage-ratchet.sh by hand
+  # before a change that removes or rewrites tests. A nightly run would be `event: cron`, but
+  # the schedule is repository configuration on the Woodpecker server, so none is added here.
+  coverage:
+    image: golang:1.26
+    environment:
+      CGO_ENABLED: "0"
+      # "1" prints the table and the verdict but never fails: the switch for a floor that
+      # blocks work it should not, until the floors are fixed.
+      COVERAGE_ADVISORY: "0"
+    commands:
+      - scripts/coverage-ratchet.sh
+    depends_on: [validate]
+    when:
       - event: push
         branch: main
