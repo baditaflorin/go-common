@@ -1,8 +1,11 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/baditaflorin/go-common/compat"
 )
 
 // doc wraps bullets in one entry, so a case only has to write the part it is about.
@@ -97,6 +100,16 @@ func TestBulletShapes(t *testing.T) {
 			name:  "a patch-safe behaviour change carries its reason",
 			body:  "- **BEHAVIOURAL (patch-safe):** only a request that failed before is refused now.\n  - summary: requests that failed before are refused.\n  - reason: no accepted request changes.\n",
 			class: "behavioural", qualifier: "patch-safe", summary: "requests that failed before are refused.", reason: "no accepted request changes.",
+		},
+		{
+			name:  "a security fix",
+			body:  "- **SECURITY:** a header was forwarded.\n  - summary: a header was forwarded.\n",
+			class: "security", summary: "a header was forwarded.",
+		},
+		{
+			name:  "older entries keep the first sentence of a security bullet in bold",
+			body:  "- **SECURITY: `x` was a denylist.** More.\n  - summary: x is an allowlist now.\n",
+			class: "security", summary: "x is an allowlist now.",
 		},
 		{
 			name:  "a bare marker line",
@@ -201,6 +214,10 @@ func TestMarkerProblems(t *testing.T) {
 		{"a reason on a BREAKING bullet", "- **BREAKING (behavioural):** x\n  - summary: a\n  - reason: r\n", "reason: belongs to a BEHAVIOURAL"},
 		{"BEHAVIOURAL colon outside the bold", "- **BEHAVIOURAL (patch-safe)**: x\n  - summary: a\n  - reason: r\n", "bullet but not as"},
 		{"BEHAVIOURAL on a wrapped line", "- an ordinary bullet that\n  **BEHAVIOURAL (patch-safe):** carries on\n", "has to open a top-level"},
+		{"SECURITY with a qualifier", "- **SECURITY (high):** x\n  - summary: a\n", "SECURITY takes no qualifier"},
+		{"SECURITY without a summary", "- **SECURITY:** x\n", "no summary: line"},
+		{"a reason on a SECURITY bullet", "- **SECURITY:** x\n  - summary: a\n  - reason: r\n", "reason: belongs to a BEHAVIOURAL"},
+		{"SECURITY colon outside the bold", "- **SECURITY**: x\n  - summary: a\n", "bullet but not as"},
 		{"another bullet character", "* **BREAKING:** x\n  - summary: a\n", "has to open a top-level"},
 		{"a paragraph", "**BREAKING:** x\n", "has to open a top-level"},
 		{"a nested bullet", "- an ordinary bullet\n  - **BREAKING:** nested\n", "has to open a top-level"},
@@ -333,5 +350,59 @@ func TestReleaseProblems(t *testing.T) {
 				t.Errorf("problem %v: want the first bullet (line 5) and the way out", p)
 			}
 		}
+	}
+}
+
+func manifest(t *testing.T, doc string) *compat.Manifest {
+	t.Helper()
+	m, err := compat.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &m
+}
+
+func TestSecurityProblems(t *testing.T) {
+	t.Parallel()
+	const head = `{"schema":1,"min_safe":"v0.102.2","min_safe_date":"2026-09-27T15:03:06Z","reasons":[{"version":"v0.102.2","summary":"x"}%s]`
+	reasons := func(extra string) string { return strings.Replace(head, "%s", extra, 1) }
+	mkEntry := func(version, date string, bullets ...string) *entry {
+		return mustParse(t, "# Changelog\n\n## ["+version+"] - "+date+"\n\n"+strings.Join(bullets, ""))[0]
+	}
+	sec := "- **SECURITY:** a\n  - summary: a\n"
+	for _, tc := range []struct {
+		name string
+		e    *entry
+		m    *compat.Manifest
+		want string // "" for no problem
+	}{
+		{"no security bullet needs no decision", mkEntry("0.106.0", "2026-10-20", "- **BREAKING:** a\n  - summary: a\n"), manifest(t, reasons("")+"}"), ""},
+		{"no decision", mkEntry("0.106.0", "2026-10-20", sec), manifest(t, reasons("")+"}"), "has to settle what the fix does to the floor"},
+		{"a record for another release", mkEntry("0.106.0", "2026-10-20", sec), manifest(t, reasons("")+`,"min_safe_unchanged":[{"version":"v0.105.9","reason":"r"}]}`), "has to settle"},
+		{"a record for this release", mkEntry("0.106.0", "2026-10-20", sec), manifest(t, reasons("")+`,"min_safe_unchanged":[{"version":"v0.106.0","reason":"a latent hole"}]}`), ""},
+		{"one record covers two bullets", mkEntry("0.106.0", "2026-10-20", sec, sec), manifest(t, reasons("")+`,"min_safe_unchanged":[{"version":"v0.106.0","reason":"r"}]}`), ""},
+		{"the floor raised to this release", mkEntry("0.106.0", "2026-10-20", sec), manifest(t, `{"schema":1,"min_safe":"v0.106.0","min_safe_date":"2026-10-20T09:00:00Z","reasons":[{"version":"v0.106.0","summary":"closes it"}]}`), ""},
+		{"raised without the reason listed", mkEntry("0.106.0", "2026-10-20", sec), manifest(t, `{"schema":1,"min_safe":"v0.106.0","min_safe_date":"2026-10-20T09:00:00Z","reasons":[{"version":"v0.102.2","summary":"x"}]}`), `"reasons" has no entry`},
+		{"raised without the date moved", mkEntry("0.106.0", "2026-10-20", sec), manifest(t, `{"schema":1,"min_safe":"v0.106.0","min_safe_date":"2026-09-27T15:03:06Z","reasons":[{"version":"v0.106.0","summary":"closes it"}]}`), "is before the entry's date"},
+		{"raised and unchanged", mkEntry("0.106.0", "2026-10-20", sec), manifest(t, `{"schema":1,"min_safe":"v0.106.0","min_safe_date":"2026-10-20T09:00:00Z","reasons":[{"version":"v0.106.0","summary":"s"}],"min_safe_unchanged":[{"version":"v0.106.0","reason":"r"}]}`), "it is one or the other"},
+	} {
+		probs := securityProblems(tc.e, tc.m, nil)
+		switch {
+		case tc.want == "" && len(probs) != 0:
+			t.Errorf("%s: unexpected %v", tc.name, probs)
+		case tc.want != "" && (len(probs) == 0 || !strings.Contains(probs[0].msg, tc.want)):
+			t.Errorf("%s: problems %v, want one with %q", tc.name, probs, tc.want)
+		}
+	}
+	// Two bullets are named together, once; and an unreadable manifest is a problem, not a pass.
+	probs := securityProblems(mkEntry("0.106.0", "2026-10-20", sec, sec), manifest(t, reasons("")+"}"), nil)
+	if len(probs) != 1 || !strings.Contains(probs[0].msg, "line 5, 7") {
+		t.Errorf("two bullets: %v", probs)
+	}
+	if probs := securityProblems(mkEntry("0.106.0", "2026-10-20", sec), nil, os.ErrNotExist); len(probs) != 1 || !strings.Contains(probs[0].msg, "cannot read") {
+		t.Errorf("unreadable: %v", probs)
+	}
+	if probs := securityProblems(mkEntry("0.106.0", "2026-10-20", "- plain\n"), nil, os.ErrNotExist); len(probs) != 0 {
+		t.Errorf("an entry with no SECURITY bullet must not need compat.json: %v", probs)
 	}
 }

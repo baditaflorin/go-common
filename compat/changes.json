@@ -83,6 +83,12 @@
       "summary": "`GRAPH_USE_EGRESS_PROXY` is removed and `graph` is always direct: only a service on 0.102.59 that set it is affected (nothing used it)."
     },
     {
+      "version": "v0.80.0",
+      "date": "2026-08-07",
+      "class": "security",
+      "summary": "`server/mcp.go`'s MCP bridge copied any request header a caller sent into the replayed request; it now forwards only an explicit allowlist of headers."
+    },
+    {
       "version": "v0.63.0",
       "date": "2026-06-08",
       "class": "breaking",

@@ -14,7 +14,7 @@ import (
 //
 //	entry   = "## [X.Y.Z] - YYYY-MM-DD" | "## vX.Y.Z - YYYY-MM-DD" | "## vX.Y.Z — YYYY-MM-DD"
 //	bullet  = "- **" CLASS [ " (" qualifier ")" ] ":" ... , at column 0, inside an entry
-//	CLASS   = "BREAKING" | "BEHAVIOURAL"   (BEHAVIOURAL takes the qualifier "patch-safe", and only that)
+//	CLASS   = "BREAKING" | "BEHAVIOURAL" | "SECURITY"   (BEHAVIOURAL takes the qualifier "patch-safe", and only that; SECURITY takes none)
 //	field   = "  - summary: " text | "  - off-switch: " text | "  - reason: " text   (two spaces, inside the bullet)
 //
 // A bullet runs from its "- " line to the line before the next line that starts in
@@ -36,12 +36,12 @@ var (
 	headingRe = regexp.MustCompile(`^## (?:\[(\d+\.\d+\.\d+)\]|v(\d+\.\d+\.\d+)) [-—] (\d{4}-\d{2}-\d{2})$`)
 	// markerRe opens a feed bullet. The colon is inside the bold text; what follows it
 	// is either the closing ** or, in older entries, the first sentence in bold.
-	markerRe = regexp.MustCompile(`^- \*\*(BREAKING|BEHAVIOURAL)(?: \(([^()]*)\))?:(?:\*\*| |$)`)
+	markerRe = regexp.MustCompile(`^- \*\*(BREAKING|BEHAVIOURAL|SECURITY)(?: \(([^()]*)\))?:(?:\*\*| |$)`)
 	// looseMarkerRe is anything that reads as an attempt to write a marker, on any line:
 	// a superset of what scripts/apidiff-check.sh accepts as "declared BREAKING". A line
 	// that matches it but is not a well-formed marker at the start of a top-level bullet
 	// is an error, so a bullet cannot be left out of the feed by a typo.
-	looseMarkerRe = regexp.MustCompile(`^\s*(?:[-*+]\s+)?\*\*(?:BREAKING|BEHAVIOURAL)`)
+	looseMarkerRe = regexp.MustCompile(`^\s*(?:[-*+]\s+)?\*\*(?:BREAKING|BEHAVIOURAL|SECURITY)`)
 	// fieldRe is a field line: exactly two spaces, "- ", the name, ": " and a value
 	// that has no space at either end.
 	fieldRe = regexp.MustCompile(`^  - (summary|off-switch|reason): (\S(?:.*\S)?)$`)
@@ -183,14 +183,14 @@ func parseChangelog(src []byte) ([]*entry, []problem) {
 				cur.bullets = append(cur.bullets, b)
 				open = b
 			case looseMarkerRe.MatchString(line):
-				bad(n, "starts a BREAKING or BEHAVIOURAL bullet but not as \"- **BREAKING:** ...\", \"- **BREAKING (qualifier):** ...\" or \"- **BEHAVIOURAL (patch-safe):** ...\"; the feed cannot carry it")
+				bad(n, "starts a BREAKING, BEHAVIOURAL or SECURITY bullet but not as \"- **BREAKING:** ...\", \"- **BREAKING (qualifier):** ...\", \"- **BEHAVIOURAL (patch-safe):** ...\" or \"- **SECURITY:** ...\"; the feed cannot carry it")
 			}
 
 		case line != "" && line[0] != ' ' && line[0] != '\t':
 			// A heading, a paragraph or a list in another style, in column 0: the bullet is over.
 			finish()
 			if looseMarkerRe.MatchString(line) {
-				bad(n, "a BREAKING or BEHAVIOURAL marker has to open a top-level \"- \" bullet; this line is not one")
+				bad(n, "a BREAKING, BEHAVIOURAL or SECURITY marker has to open a top-level \"- \" bullet; this line is not one")
 			}
 
 		default: // blank or indented: inside the bullet if there is one
@@ -198,7 +198,7 @@ func parseChangelog(src []byte) ([]*entry, []problem) {
 				open.lines = append(open.lines, bulletLine{n, line, false})
 			}
 			if looseMarkerRe.MatchString(line) {
-				bad(n, "a BREAKING or BEHAVIOURAL marker has to open a top-level \"- \" bullet; a nested or wrapped line cannot carry one")
+				bad(n, "a BREAKING, BEHAVIOURAL or SECURITY marker has to open a top-level \"- \" bullet; a nested or wrapped line cannot carry one")
 			}
 		}
 	}
@@ -255,6 +255,56 @@ func releaseProblems(e *entry, latestTag string) []problem {
 	return probs
 }
 
+// securityProblems are the rules for an entry with a SECURITY bullet: the same change
+// has to settle what the fix does to the floor in compat/compat.json, either by raising
+// min_safe to this release (with the fix in reasons) or by a min_safe_unchanged record,
+// with its reason, for this release. A decision is about the release, so one covers
+// every SECURITY bullet in it. m is nil when compat.json could not be read; err says why.
+func securityProblems(e *entry, m *compat.Manifest, err error) []problem {
+	var lines []string
+	first := 0
+	for _, b := range e.bullets {
+		if b.class == "security" {
+			if first == 0 {
+				first = b.line
+			}
+			lines = append(lines, fmt.Sprint(b.line))
+		}
+	}
+	if first == 0 {
+		return nil
+	}
+	at := fmt.Sprintf("SECURITY of %s (CHANGELOG.md line %s)", e.version, strings.Join(lines, ", "))
+	if err != nil {
+		return []problem{{first, at + ": cannot read the decision: " + err.Error()}}
+	}
+	raised := m.MinSafe == e.version
+	var recorded bool
+	for _, u := range m.MinSafeUnchanged {
+		recorded = recorded || u.Version == e.version
+	}
+	switch {
+	case raised && recorded:
+		return []problem{{first, at + ": compat/compat.json both raises min_safe to " + e.version + " and records min_safe_unchanged for it; it is one or the other"}}
+	case raised:
+		var listed bool
+		for _, r := range m.Reasons {
+			listed = listed || (r.Version == e.version && strings.TrimSpace(r.Summary) != "")
+		}
+		var probs []problem
+		if !listed {
+			probs = append(probs, problem{first, at + ": min_safe is raised to " + e.version + " but \"reasons\" has no entry for it; add {\"version\": \"" + e.version + "\", \"summary\": ...}"})
+		}
+		if d, perr := time.Parse(time.DateOnly, e.date); perr == nil && m.MinSafeDate.Before(d) {
+			probs = append(probs, problem{first, at + ": min_safe is raised to " + e.version + " but min_safe_date " + m.MinSafeDate.Format(time.RFC3339) + " is before the entry's date " + e.date + "; set it to the release's commit time"})
+		}
+		return probs
+	case recorded:
+		return nil
+	}
+	return []problem{{first, at + ": compat/compat.json has to settle what the fix does to the floor, in this change: raise min_safe to " + e.version + " (set min_safe_date, add the fix to reasons), or add {\"version\": \"" + e.version + "\", \"reason\": ...} to min_safe_unchanged (docs/releasing.md). The floor is " + m.MinSafe}}
+}
+
 // checkBullet reads the field lines of a closed feed bullet and says what is wrong
 // with it. A bullet that passes has its summary and off-switch set.
 func checkBullet(e *entry, b *bullet) []problem {
@@ -306,6 +356,9 @@ func checkBullet(e *entry, b *bullet) []problem {
 			bad(b.line, "no reason: line; say why a patch release may carry it: \"  - reason: <one line, at most %d characters>\" (docs/api-policy.md)", maxFieldLen)
 		}
 	default:
+		if b.class == "security" && b.qualifier != "" {
+			bad(b.line, "SECURITY takes no qualifier: \"- **SECURITY:** ...\"")
+		}
 		if n, ok := have[fieldReason]; ok {
 			bad(n, "reason: belongs to a BEHAVIOURAL (patch-safe) bullet only")
 		}

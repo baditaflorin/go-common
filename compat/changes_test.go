@@ -17,7 +17,7 @@ func TestEmbeddedChangesAreConsistent(t *testing.T) {
 		t.Fatal("the feed holds no change")
 	}
 	for _, c := range f.Changes {
-		if c.Class != "breaking" && c.Class != "behavioural" {
+		if c.Class != "breaking" && c.Class != "behavioural" && c.Class != "security" {
 			t.Errorf("%s: class %q is not one the feed knows", c.Version, c.Class)
 		}
 		if (c.Class == "behavioural") != (c.Reason != "") {

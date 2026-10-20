@@ -35,6 +35,7 @@ import (
 const (
 	changelogPath = "CHANGELOG.md"
 	feedPath      = "compat/changes.json"
+	manifestPath  = "compat/compat.json"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -103,12 +104,17 @@ func runPrint(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "whatchanged:", err)
 		return 2
 	}
+	manifest, err := compat.Load()
+	if err != nil {
+		fmt.Fprintln(stderr, "whatchanged:", err)
+		return 2
+	}
 	changes, err := feed.Between(from, to)
 	if err != nil {
 		fmt.Fprintln(stderr, "whatchanged:", err)
 		return 2
 	}
-	fmt.Fprint(stdout, render(from, to, changes))
+	fmt.Fprint(stdout, render(from, to, changes, manifest))
 	return 0
 }
 
@@ -224,6 +230,15 @@ func runRelease(root, version, latestTag string, stdout, stderr io.Writer) int {
 		probs = append(probs, problem{0, fmt.Sprintf("%s has no entry for %s", changelogPath, version)})
 	} else if len(probs) == 0 {
 		probs = append(probs, releaseProblems(claimed, latestTag)...)
+		var m *compat.Manifest
+		data, err := os.ReadFile(filepath.Join(root, manifestPath))
+		if err == nil {
+			var parsed compat.Manifest
+			if parsed, err = compat.Parse(data); err == nil {
+				m = &parsed
+			}
+		}
+		probs = append(probs, securityProblems(claimed, m, err)...)
 	}
 	if len(probs) > 0 {
 		report(stderr, probs)

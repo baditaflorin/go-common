@@ -41,7 +41,7 @@ each bullet ends with its own short form, and a generator reads it into `compat/
 The grammar (`scripts/whatchanged` parses exactly this, and refuses what it cannot place):
 
 - **The bullet** is a top-level `- ` bullet of an entry whose text starts `**BREAKING:**`,
-  `**BREAKING (qualifier):**` or `**BEHAVIOURAL (patch-safe):**`. No qualifier means the API or a build requirement
+  `**BREAKING (qualifier):**`, `**BEHAVIOURAL (patch-safe):**` or `**SECURITY:**`. No qualifier means the API or a build requirement
   changed; `(behavioural)` is a change no compiler sees; any other qualifier says who is
   affected (`(only for 0.102.59)`). Older entries put the first sentence in bold after the
   colon; that reads the same. The bullet runs to the next line in column 0, so its
@@ -56,6 +56,11 @@ The grammar (`scripts/whatchanged` parses exactly this, and refuses what it cann
   behaviour change that a patch release may carry, which is that marker (it has no other
   qualifier) with its `summary:` and a `reason:` of 1 to 200 characters saying why a service
   can take it in a patch. The feed carries these bullets like the BREAKING ones.
+- **`**SECURITY:**`** marks the bullet for a fix to a vulnerability in go-common itself. It
+  takes a `summary:` (and an `off-switch:` if there is one), no qualifier and no `reason:`,
+  and it is in the feed like the others. It does not decide the version: a fix that
+  changes behaviour is also a **BREAKING (behavioural):** or **BEHAVIOURAL (patch-safe):**
+  bullet of its own, and the floor decision is in `compat/compat.json` (see below).
 - **`off-switch:`** is optional: 1 to 200 characters naming the setting, option or call
   that restores the old behaviour without waiting for a release. Leave it out when there is
   none; do not write "none".
@@ -84,7 +89,7 @@ as older than its own release, so the notes of that release are included: a note
 not apply is better than a missing one.
 
 CI enforces it twice. `scripts/release-check.sh` (the `release` step) runs
-`scripts/whatchanged -release` for the entry the change adds (which also applies the minor-bump rule above), and `go test ./...` runs
+`scripts/whatchanged -release` for the entry the change adds (which also applies the minor-bump rule above and the floor decision for a `**SECURITY:**` bullet, below), and `go test ./...` runs
 `TestFeedIsCurrent` and `TestEveryBreakingBulletIsInTheFeed` in `scripts/whatchanged`, so
 a change that adds or edits a bullet without its fields and the regenerated file cannot
 merge. `scripts/release-check-selftest.sh` tests the script itself (it runs from a Go test
@@ -97,10 +102,25 @@ fix go-common itself shipped (`min_safe`). Services pinned below it are reported
 `go run github.com/baditaflorin/go-common/scripts/compatcheck@latest -gomod go.mod`
 and by anything that calls `compat.CheckGoMod`.
 
-- **Raise the floor** in the same change that ships a security fix: set `min_safe`
-  and `min_safe_date` to that release and add the fix to `reasons`. It is a
-  claim about go-common's own fixes, not about its dependencies or the Go
-  toolchain; those advisories are tracked in `scripts/govulncheck-allow.txt`.
+- **Every security fix settles the floor in the same change.** The entry's bullet for it
+  is marked `**SECURITY:**` (with its `summary:`, see above; it takes no qualifier), and
+  `scripts/release-check.sh` then requires `compat/compat.json` to say what the fix does
+  to the floor, in one of two ways:
+  - **Raise it**: set `min_safe` to that release, `min_safe_date` to its commit time (it
+    cannot be before the entry's date), and add the fix to `reasons`. It is a claim about
+    go-common's own fixes, not about its dependencies or the Go toolchain; those
+    advisories are tracked in `scripts/govulncheck-allow.txt`.
+  - **Leave it, and say why**: add `{"version": "vX.Y.Z", "reason": "..."}` to
+    `min_safe_unchanged`, naming what the fix closes and why a service on an older release
+    is not left exposed (for example, a latent hole that a typical host cannot reach).
+    The decision is about the release, so one record covers every `**SECURITY:**` bullet
+    in its entry, and it is keyed by the version, so a renumbered release has to move it.
+  Which of the two is a human decision; the check only makes sure a decision exists. The
+  field is optional and ignored by readers that predate it (schema 1 is unchanged), so
+  `compatcheck` and `compat.CheckGoMod` of older releases read the file as before.
+  `scripts/whatchanged` prints the decision under each `**SECURITY:**` bullet it lists
+  (`compat.Manifest.FloorDecision`): covered by the floor, left alone on purpose with the
+  reason, or not decided, which is what a fix that predates the rule shows.
 - **Backport only when a service cannot move.** Most services should take the
   newest release. When one cannot (it is stuck on an old line for a reason that
   will take a while to fix), cut a backport:
@@ -171,7 +191,7 @@ still on main; it blocks now that the fix (0.103.1) has merged. Do not add
 
 | Script | Checks |
 | --- | --- |
-| `scripts/release-check.sh` | The claimed version is well formed, unique and the next free one, the entry's `**BREAKING...**` bullets carry their fields (see above), and a behaviour change is not in a patch release |
+| `scripts/release-check.sh` | The claimed version is well formed, unique and the next free one, the entry's `**BREAKING...**` bullets carry their fields (see above), a behaviour change is not in a patch release, and a `**SECURITY:**` bullet comes with a decision on `min_safe` |
 | `scripts/whatchanged` | Generates `compat/changes.json` from the bullets, fails when it is stale, and prints the changes between two versions |
 | `scripts/forward-compat.sh` | `go vet` and the tests still pass with a newer `go` line in go.mod (run on a copy) |
 | `scripts/apidiff-check.sh` | An incompatible API change is declared BREAKING |

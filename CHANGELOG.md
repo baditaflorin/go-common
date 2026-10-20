@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.105.5] - 2026-10-20
+
+A security fix has to settle `min_safe` in the same change: `scripts/release-check.sh` now requires it, and the decision is written down. The mechanism only: `min_safe` is not moved here,
+and no package behaves differently.
+
+### Added
+
+- A `**SECURITY:**` bullet class, written like the others (a `summary:` line, an optional `off-switch:`; no qualifier). For an entry that has one, `release-check` requires
+  `compat/compat.json`, in the same change, to either raise `min_safe` to this release (with the fix in `reasons`, and `min_safe_date` not before the entry's date) or carry a
+  `min_safe_unchanged` record for this release with a reason. One decision covers every `**SECURITY:**` bullet of the entry. It is keyed by the version, so a release that is
+  renumbered at merge has to move its record or the check fails. Why: `min_safe` is v0.102.2 (2026-09-27). 0.102.70 (2026-10-17) closed SSRF classification bypasses (NAT64, 6to4) and
+  guarded `jsbundle`'s default client, and the floor did not move and no entry says why, so nothing tells a reader whether a pin that is below 0.102.70 is exposed or whether someone
+  judged it fine. Which of the two is a human decision about go-common's own fixes; the check only makes sure that a decision exists.
+- `compat/compat.json` gains the optional `min_safe_unchanged` list (`{"version", "reason"}`), and `compat` gains `Manifest.MinSafeUnchanged`, `FloorDecision` (covered by the floor,
+  left alone on purpose with the reason, or undecided) and the validation of the records (a release version, a reason, once per release). The schema is still 1 and no record is
+  added: older releases of the package decode the file with `encoding/json` and ignore the field (`TestMinSafeUnchangedIsInvisibleToAnOlderReader` pins that, and the check
+  below ran the previous release's own tests against a manifest that has a record). 0.102.70 stays undecided; it is not for this change to decide it.
+- `scripts/whatchanged` lists the `**SECURITY:**` bullets like the others, with the decision under each (`Floor: ...`). The one bullet of this kind that predates the class, in
+  v0.80.0, was written `**SECURITY:` with the colon inside the bold, which the grammar already reads; it gets its `summary:` and so shows in `compat/changes.json`, as
+  "covered by the floor".
+- `scripts/release-check-selftest.sh` gains 13 cases (34 to 47 in all): no decision, a record for the release, one record for two bullets, a record for another release (the
+  renumbering case), a record without a reason, the floor raised properly, without its reason listed, with the old date, and both raised and recorded, an unreadable `compat.json`, a
+  `**SECURITY:**` bullet without a summary or with a qualifier, and an entry with no such bullet and an unreadable `compat.json` (not read).
+- `docs/releasing.md` describes the class and the two ways to settle the floor.
+
+Verified: every step of `.woodpecker.yml` against the pushed branch, by hand, in the pipeline's own images on the build host: `validate`, `race`, `lint` (0 issues), `vuln`, `forward-compat` on Go 1.27.2, `api`, `bench`, `release` and
+`fuzz` (23 targets); the previous release's own `compat` package (v0.105.0, untouched) passes its tests, a 5 s `FuzzCheck` run and `compatcheck` against a `compat.json` that has a `min_safe_unchanged` record; ten deliberate breaks of the
+rule and of the new `compat` code each fail a test or the selftest.
+
 ## [0.105.4] - 2026-10-20
 
 A behaviour change now has to take a minor release: `scripts/release-check.sh` fails a patch release that carries one. Release tooling only; no package behaves differently.
@@ -1739,6 +1768,7 @@ embedded version string (consumers pin via `go.mod`).
   *future* privileged header too, not just the ones known dangerous
   today. New regression test `TestWithMCPDoesNotForwardUnlistedHeaders`
   locks this in.
+  - summary: `server/mcp.go`'s MCP bridge copied any request header a caller sent into the replayed request; it now forwards only an explicit allowlist of headers.
 
 ## v0.79.0 — 2026-08-06
 

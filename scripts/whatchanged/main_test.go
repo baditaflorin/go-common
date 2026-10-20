@@ -17,23 +17,33 @@ func TestRender(t *testing.T) {
 		{Version: "v0.102.60", Date: "2026-10-17", Class: "breaking", Qualifier: "only for 0.102.59", Summary: "gone."},
 		{Version: "v0.102.1", Date: "2026-09-27", Class: "breaking", Summary: "the API changed."},
 		{Version: "v0.102.0", Date: "2026-09-26", Class: "behavioural", Qualifier: "patch-safe", Summary: "fewer requests pass.", Reason: "only failing ones."},
+		{Version: "v0.101.0", Date: "2026-09-20", Class: "security", Summary: "covered fix."},
+		{Version: "v0.106.0", Date: "2026-10-20", Class: "security", Summary: "latent hole closed."},
+		{Version: "v0.106.1", Date: "2026-10-21", Class: "security", Summary: "undecided fix."},
 	}
+	m := compat.Manifest{Schema: 1, MinSafe: "v0.102.2", MinSafeUnchanged: []compat.Unchanged{{Version: "v0.106.0", Reason: "not reachable on a typical host"}}}
 	want := "### go-common changes to check between `v0.102.0` and `v0.103.0`\n\n" +
-		"The CHANGELOG.md bullets marked BREAKING or BEHAVIOURAL in that range, one line each; the entry has the full text and the reason.\n\n" +
+		"The CHANGELOG.md bullets marked BREAKING, BEHAVIOURAL or SECURITY in that range, one line each; the entry has the full text and the reason.\n\n" +
 		"- **v0.103.0** (2026-10-18), BREAKING (behavioural): a thing changes.\n" +
 		"  Off-switch: `X=off`\n" +
 		"- **v0.102.60** (2026-10-17), BREAKING (only for 0.102.59): gone.\n" +
 		"- **v0.102.1** (2026-09-27), BREAKING: the API changed.\n" +
 		"- **v0.102.0** (2026-09-26), BEHAVIOURAL (patch-safe): fewer requests pass.\n" +
-		"  Why a patch release carries it: only failing ones.\n"
-	if got := render("v0.102.0", "v0.103.0", changes); got != want {
+		"  Why a patch release carries it: only failing ones.\n" +
+		"- **v0.101.0** (2026-09-20), SECURITY: covered fix.\n" +
+		"  Floor: min_safe is v0.102.2, at or above this release, so a pin below it is reported by compatcheck\n" +
+		"- **v0.106.0** (2026-10-20), SECURITY: latent hole closed.\n" +
+		"  Floor: min_safe is still v0.102.2, on purpose: not reachable on a typical host\n" +
+		"- **v0.106.1** (2026-10-21), SECURITY: undecided fix.\n" +
+		"  Floor: min_safe is v0.102.2 and no decision is recorded for this release\n"
+	if got := render("v0.102.0", "v0.103.0", changes, m); got != want {
 		t.Errorf("render with a range:\n%s\nwant:\n%s", got, want)
 	}
-	if got := render("v0.102.0", "", changes[:1]); !strings.HasPrefix(got, "### go-common changes to check since `v0.102.0`\n") {
+	if got := render("v0.102.0", "", changes[:1], m); !strings.HasPrefix(got, "### go-common changes to check since `v0.102.0`\n") {
 		t.Errorf("render without an upper end: %q", got)
 	}
-	none := render("v0.105.0", "", nil)
-	if none != "### go-common changes to check since `v0.105.0`\n\nNone: no CHANGELOG.md entry in that range is marked BREAKING or BEHAVIOURAL.\n" {
+	none := render("v0.105.0", "", nil, m)
+	if none != "### go-common changes to check since `v0.105.0`\n\nNone: no CHANGELOG.md entry in that range is marked BREAKING, BEHAVIOURAL or SECURITY.\n" {
 		t.Errorf("render of nothing: %q", none)
 	}
 }
@@ -138,6 +148,41 @@ func TestReleaseWithLatestTag(t *testing.T) {
 		code, _, errOut := runCLI(args...)
 		if code != want || (want == 1 && !strings.Contains(errOut, "CHANGELOG.md:5:")) {
 			t.Errorf("tag %q: exit %d, %q; want %d", tag, code, errOut, want)
+		}
+	}
+}
+
+func TestReleaseSecurityDecision(t *testing.T) {
+	t.Parallel()
+	cl := "# Changelog\n\n## [0.4.1] - 2026-03-01\n\n- **SECURITY:** a\n  - summary: a fix.\n"
+	root := project(t, cl, nil)
+	if code, _, errOut := runCLI("-gen", "-root", root); code != 0 {
+		t.Fatalf("-gen: %d %q", code, errOut)
+	}
+	write := func(doc string) {
+		if err := os.WriteFile(filepath.Join(root, "compat", "compat.json"), []byte(doc), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const base = `{"schema":1,"min_safe":"v0.3.0","min_safe_date":"2026-01-01T00:00:00Z","reasons":[{"version":"v0.3.0","summary":"x"}]%s}`
+	for name, tc := range map[string]struct {
+		doc  string
+		want int
+		msg  string
+	}{
+		"no compat.json":          {"", 1, "cannot read the decision"},
+		"no decision":             {strings.Replace(base, "%s", "", 1), 1, "has to settle what the fix does to the floor"},
+		"an unchanged record":     {strings.Replace(base, "%s", `,"min_safe_unchanged":[{"version":"v0.4.1","reason":"latent"}]`, 1), 0, ""},
+		"a record with no reason": {strings.Replace(base, "%s", `,"min_safe_unchanged":[{"version":"v0.4.1","reason":" "}]`, 1), 1, "has no reason"},
+	} {
+		if tc.doc == "" {
+			_ = os.Remove(filepath.Join(root, "compat", "compat.json"))
+		} else {
+			write(tc.doc)
+		}
+		code, _, errOut := runCLI("-release", "0.4.1", "-latest-tag", "v0.4.0", "-root", root)
+		if code != tc.want || !strings.Contains(errOut, tc.msg) {
+			t.Errorf("%s: exit %d, %q; want %d and %q", name, code, errOut, tc.want, tc.msg)
 		}
 	}
 }
