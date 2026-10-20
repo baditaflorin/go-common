@@ -68,7 +68,7 @@ fi
 # The grammar of the feed bullets, in every entry, and the generated file: the Go program
 # owns both, so the rules live in one place. It prints each problem with its line.
 command -v go >/dev/null 2>&1 || fail "go is needed to check the feed bullets of CHANGELOG.md (scripts/whatchanged); run this where Go is installed"
-if ! go run -buildvcs=false ./scripts/whatchanged -release "$version"; then
+if ! go run -buildvcs=false ./scripts/whatchanged -release "$version" -latest-tag "$latest_tag"; then
   fail "CHANGELOG.md or compat/changes.json breaks the rules above; docs/releasing.md has the grammar of the feed bullets"
 fi
 

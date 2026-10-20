@@ -23,7 +23,8 @@ type Change struct {
 	Version string `json:"version"`
 	// Date is the release date in the CHANGELOG heading, "YYYY-MM-DD".
 	Date string `json:"date"`
-	// Class is the bullet's marker in lower case: "breaking".
+	// Class is the bullet's marker in lower case: "breaking", or "behavioural" for a
+	// bullet marked BEHAVIOURAL (patch-safe).
 	Class string `json:"class"`
 	// Qualifier is the text in parentheses after the marker, for example
 	// "behavioural" or "only for 0.102.59"; empty when there is none, which for
@@ -34,6 +35,9 @@ type Change struct {
 	// OffSwitch is the bullet's off-switch: line, the setting, option or call that
 	// restores the old behaviour without waiting for a release. Empty when there is none.
 	OffSwitch string `json:"off_switch,omitempty"`
+	// Reason is the reason: line of a BEHAVIOURAL (patch-safe) bullet: why a patch release
+	// may carry the change. Empty for every other class.
+	Reason string `json:"reason,omitempty"`
 }
 
 // ChangeFeed is the parsed changes.json, newest release first.

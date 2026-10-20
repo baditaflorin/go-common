@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.105.4] - 2026-10-20
+
+A behaviour change now has to take a minor release: `scripts/release-check.sh` fails a patch release that carries one. Release tooling only; no package behaves differently.
+
+### Added
+
+- The rule: a change that claims a patch release (the same major and minor as the newest tag) and has a `**BREAKING (behavioural):**` bullet fails `release-check`, with the line of
+  the bullet and the way out. Why: of the 10 behavioural entries since 0.100.0, 6 shipped in patch releases (0.102.69, 0.102.70 twice, 0.102.72, 0.102.73, 0.102.74); the other four
+  were minors (0.103.0, 0.105.0). A service that followed "a patch is safe" took exit-code, metrics-label and SSRF-classification changes in five patches, and the version number
+  gave no sign of it. It is rule 6 of `docs/api-policy.md`, which used to say "prefer a minor bump ... not something CI enforces yet". Only behaviour is gated: a `**BREAKING:**`
+  (API) bullet, and one with another qualifier such as `(only for 0.102.59)`, may still be in a patch, as before.
+- The exception, for a change a service can take in a patch (an urgent security fix is the case: waiting for a minor leaves services exposed): the bullet is marked
+  `**BEHAVIOURAL (patch-safe):**` instead, and carries a `summary:` and a `reason:` line saying why a patch may carry it. It is the only form that marker has, and `reason:` belongs
+  to it alone (`scripts/whatchanged` refuses both mistakes). These bullets are in `compat/changes.json` (class `behavioural`, with `reason`) and in the output of
+  `scripts/whatchanged`, which prints the reason under the summary; the feed's schema is still 1, the field is additive.
+- `scripts/whatchanged -release X.Y.Z -latest-tag vA.B.C` is where the rule lives, so that it is tested in Go with the rest of the grammar; `release-check.sh` passes it the newest tag.
+  `scripts/release-check-selftest.sh` gains 12 cases (22 to 34 in all): a behaviour change in a patch, in a minor, in a major and in a patch after an untagged release (the rule is
+  against the newest tag, not the entry below), two in one patch, patch-safe with and without a reason, with another qualifier, a reason on a BREAKING bullet, an API change and a
+  bullet about one version in a patch (not gated), and no tag at all (nothing to compare with).
+- `docs/api-policy.md` rule 6 and `docs/releasing.md` say it.
+
+Verified: every step of `.woodpecker.yml` against the pushed branch, by hand, in the pipeline's own images on the build host: `validate`, `race`, `lint` (0 issues), `vuln`, `forward-compat` on Go 1.27.2, `api`, `bench`, `release` and
+`fuzz`. The first `validate` run failed on `proxysupplier`'s `TestWebshareDirect_FailedInitialFetchIsRetriedWithBackoff`, a timing assertion in a package this change does not touch, while the host was busy; the whole step
+passes on a rerun and that test passes 20 of 20 alone. Seven deliberate breaks of the rule (the patch test always true, any qualifier gated, minors gated too, `-latest-tag` not passed by the script, the reason not required, a
+reason allowed on a BREAKING bullet, any qualifier accepted for patch-safe) each fail a test or the selftest.
+
 ## [0.105.3] - 2026-10-20
 
 A per-package coverage ratchet in CI: a package that loses test coverage, or a new tested package nobody tracked, fails the pipeline of main (pull requests can run it by hand). Stacked on the CI stages change (0.105.1): it adds one step, to the second stage of main's pipeline. No package changes.

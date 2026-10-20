@@ -13,7 +13,7 @@
 //
 //	go run ./scripts/whatchanged -gen             write compat/changes.json
 //	go run ./scripts/whatchanged -check           exit 1 if CHANGELOG.md breaks the grammar or the file is stale
-//	go run ./scripts/whatchanged -release 0.105.1 the checks a change that claims that release must pass
+//	go run ./scripts/whatchanged -release 0.105.1 -latest-tag v0.105.0   the checks a change that claims that release must pass
 //
 // docs/releasing.md has the grammar. scripts/release-check.sh runs -release in CI.
 // Exit status: 0 ok, 1 a problem was found (printed), 2 it could not run.
@@ -46,6 +46,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	gen := fs.Bool("gen", false, "write "+feedPath+" from "+changelogPath)
 	check := fs.Bool("check", false, "fail if "+changelogPath+" breaks the grammar or "+feedPath+" is stale")
 	release := fs.String("release", "", "check the entry of this release (for example 0.105.1) as a change that claims it must pass")
+	latestTag := fs.String("latest-tag", "", "with -release: the newest tag, for the rule that a behaviour change takes a minor release")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, `usage: whatchanged <from> [<to>]
        whatchanged -gen | -check | -release X.Y.Z [-root dir]
@@ -74,7 +75,7 @@ and including <to> (default: the newest), as markdown for a pull request body.
 	case *check:
 		return runCheck(*root, stdout, stderr)
 	case *release != "":
-		return runRelease(*root, normalize(*release), stdout, stderr)
+		return runRelease(*root, normalize(*release), normalize(*latestTag), stdout, stderr)
 	}
 	return runPrint(fs.Args(), stdout, stderr)
 }
@@ -207,7 +208,7 @@ func runCheck(root string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func runRelease(root, version string, stdout, stderr io.Writer) int {
+func runRelease(root, version, latestTag string, stdout, stderr io.Writer) int {
 	s, probs, err := verify(root)
 	if err != nil {
 		fmt.Fprintln(stderr, "whatchanged:", err)
@@ -221,6 +222,8 @@ func runRelease(root, version string, stdout, stderr io.Writer) int {
 	}
 	if claimed == nil {
 		probs = append(probs, problem{0, fmt.Sprintf("%s has no entry for %s", changelogPath, version)})
+	} else if len(probs) == 0 {
+		probs = append(probs, releaseProblems(claimed, latestTag)...)
 	}
 	if len(probs) > 0 {
 		report(stderr, probs)

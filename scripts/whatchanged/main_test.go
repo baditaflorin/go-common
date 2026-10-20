@@ -16,13 +16,16 @@ func TestRender(t *testing.T) {
 		{Version: "v0.103.0", Date: "2026-10-18", Class: "breaking", Qualifier: "behavioural", Summary: "a thing changes.", OffSwitch: "`X=off`"},
 		{Version: "v0.102.60", Date: "2026-10-17", Class: "breaking", Qualifier: "only for 0.102.59", Summary: "gone."},
 		{Version: "v0.102.1", Date: "2026-09-27", Class: "breaking", Summary: "the API changed."},
+		{Version: "v0.102.0", Date: "2026-09-26", Class: "behavioural", Qualifier: "patch-safe", Summary: "fewer requests pass.", Reason: "only failing ones."},
 	}
 	want := "### go-common changes to check between `v0.102.0` and `v0.103.0`\n\n" +
-		"The CHANGELOG.md bullets marked BREAKING in that range, one line each; the entry has the full text and the reason.\n\n" +
+		"The CHANGELOG.md bullets marked BREAKING or BEHAVIOURAL in that range, one line each; the entry has the full text and the reason.\n\n" +
 		"- **v0.103.0** (2026-10-18), BREAKING (behavioural): a thing changes.\n" +
 		"  Off-switch: `X=off`\n" +
 		"- **v0.102.60** (2026-10-17), BREAKING (only for 0.102.59): gone.\n" +
-		"- **v0.102.1** (2026-09-27), BREAKING: the API changed.\n"
+		"- **v0.102.1** (2026-09-27), BREAKING: the API changed.\n" +
+		"- **v0.102.0** (2026-09-26), BEHAVIOURAL (patch-safe): fewer requests pass.\n" +
+		"  Why a patch release carries it: only failing ones.\n"
 	if got := render("v0.102.0", "v0.103.0", changes); got != want {
 		t.Errorf("render with a range:\n%s\nwant:\n%s", got, want)
 	}
@@ -30,7 +33,7 @@ func TestRender(t *testing.T) {
 		t.Errorf("render without an upper end: %q", got)
 	}
 	none := render("v0.105.0", "", nil)
-	if none != "### go-common changes to check since `v0.105.0`\n\nNone: no CHANGELOG.md entry in that range is marked BREAKING.\n" {
+	if none != "### go-common changes to check since `v0.105.0`\n\nNone: no CHANGELOG.md entry in that range is marked BREAKING or BEHAVIOURAL.\n" {
 		t.Errorf("render of nothing: %q", none)
 	}
 }
@@ -116,6 +119,26 @@ func TestGenCheckRelease(t *testing.T) {
 	}
 	if code, _, errOut := runCLI("-check", "-root", root); code != 0 {
 		t.Fatalf("-check after repair: exit %d, %q", code, errOut)
+	}
+}
+
+func TestReleaseWithLatestTag(t *testing.T) {
+	t.Parallel()
+	cl := "# Changelog\n\n## [0.4.1] - 2026-03-01\n\n- **BREAKING (behavioural):** a\n  - summary: a changes.\n\n## [0.4.0] - 2026-02-01\n\n- plain\n"
+	root := project(t, cl, nil)
+	if code, _, errOut := runCLI("-gen", "-root", root); code != 0 {
+		t.Fatalf("-gen: %d %q", code, errOut)
+	}
+	// Without a tag there is nothing to compare with; after 0.4.0 it is a patch; after 0.3.9 it is a minor.
+	for tag, want := range map[string]int{"": 0, "v0.4.0": 1, "0.4.0": 1, "v0.3.9": 0} {
+		args := []string{"-release", "0.4.1", "-root", root}
+		if tag != "" {
+			args = append(args, "-latest-tag", tag)
+		}
+		code, _, errOut := runCLI(args...)
+		if code != want || (want == 1 && !strings.Contains(errOut, "CHANGELOG.md:5:")) {
+			t.Errorf("tag %q: exit %d, %q; want %d", tag, code, errOut, want)
+		}
 	}
 }
 

@@ -26,14 +26,17 @@ func render(from, to string, changes []compat.Change) string {
 		fmt.Fprintf(&b, "### go-common changes to check between `%s` and `%s`\n\n", from, to)
 	}
 	if len(changes) == 0 {
-		b.WriteString("None: no CHANGELOG.md entry in that range is marked BREAKING.\n")
+		b.WriteString("None: no CHANGELOG.md entry in that range is marked BREAKING or BEHAVIOURAL.\n")
 		return b.String()
 	}
-	b.WriteString("The CHANGELOG.md bullets marked BREAKING in that range, one line each; the entry has the full text and the reason.\n\n")
+	b.WriteString("The CHANGELOG.md bullets marked BREAKING or BEHAVIOURAL in that range, one line each; the entry has the full text and the reason.\n\n")
 	for _, c := range changes {
 		fmt.Fprintf(&b, "- **%s** (%s), %s: %s\n", c.Version, c.Date, label(c), c.Summary)
 		if c.OffSwitch != "" {
 			fmt.Fprintf(&b, "  Off-switch: %s\n", c.OffSwitch)
+		}
+		if c.Reason != "" {
+			fmt.Fprintf(&b, "  Why a patch release carries it: %s\n", c.Reason)
 		}
 	}
 	return b.String()

@@ -17,8 +17,11 @@ func TestEmbeddedChangesAreConsistent(t *testing.T) {
 		t.Fatal("the feed holds no change")
 	}
 	for _, c := range f.Changes {
-		if c.Class != "breaking" {
+		if c.Class != "breaking" && c.Class != "behavioural" {
 			t.Errorf("%s: class %q is not one the feed knows", c.Version, c.Class)
+		}
+		if (c.Class == "behavioural") != (c.Reason != "") {
+			t.Errorf("%s: a reason belongs to a behavioural (patch-safe) change, and to it only", c.Version)
 		}
 		if c.Summary == "" || utf8.RuneCountInString(c.Summary) > 200 {
 			t.Errorf("%s: summary must be 1 to 200 characters", c.Version)

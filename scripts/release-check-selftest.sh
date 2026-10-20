@@ -10,6 +10,10 @@
 #     that is not written exactly right, a marker that is not well formed, or a
 #     compat/changes.json that is not what CHANGELOG.md says, whichever entry the problem
 #     is in;
+#   - fails a **BREAKING (behavioural):** bullet in a patch release (the same major.minor as
+#     the newest tag, which is not the previous entry), and passes it in a minor or major
+#     release, in a patch when the bullet is **BEHAVIOURAL (patch-safe):** with a reason:
+#     line, and when there is no tag; and does not apply the rule to a **BREAKING:** bullet;
 #   - names the line and the rule, and exits 0 for the same change written correctly.
 # scripts/whatchanged has its own unit tests; this is the part that is about git, tags,
 # exit codes and the order of the checks.
@@ -181,7 +185,7 @@ expect summary-given-twice "summary: is given twice"
 at "$base"
 entry 0.106.0 "- **BREAKING**: the colon is outside the bold" "  - summary: s"
 run_case marker-not-well-formed 1
-expect marker-not-well-formed "starts a BREAKING bullet but not as"
+expect marker-not-well-formed "bullet but not as"
 
 at "$base"
 entry 0.106.0 "- **BREAKING (behavioural):** x" "  - summary: s"
@@ -201,7 +205,47 @@ grep -v '^  - summary: a change that is already released\.$' CHANGELOG.md >CHANG
 run_case an-old-bullet-without-a-summary 1
 expect an-old-bullet-without-a-summary "of v0.105.0: no summary: line"
 
-# 3. No go, no check: it must not pass silently.
+# 3. A behaviour change takes a minor release, unless its bullet says it is safe in a patch, and why.
+b='- **BREAKING (behavioural):** a thing changes.'
+at "$base"; entry 0.105.1 "$b" "  - summary: a thing changes."; regen
+run_case behavioural-change-in-a-patch 1
+expect behavioural-change-in-a-patch "CHANGELOG.md:7: BREAKING (behavioural) of v0.105.1: a behaviour change takes a minor release"
+expect behavioural-change-in-a-patch "follows v0.105.0 in the same minor"
+at "$base"; entry 0.106.0 "$b" "  - summary: a thing changes."; regen
+run_case behavioural-change-in-a-minor 0
+at "$base"; entry 1.0.0 "$b" "  - summary: a thing changes."; regen
+run_case behavioural-change-in-a-major 0
+at "$ahead"; entry 0.105.4 "$b" "  - summary: a thing changes."; regen
+run_case behavioural-change-in-a-patch-after-an-untagged-release 1 "$ahead"
+expect behavioural-change-in-a-patch-after-an-untagged-release "follows v0.105.0 in the same minor"
+at "$base"; entry 0.105.1 "$b" "  - summary: a thing changes." "$b" "  - summary: and another."; regen
+run_case two-behavioural-changes-in-a-patch 1
+expect two-behavioural-changes-in-a-patch "CHANGELOG.md:9: BREAKING (behavioural)"
+
+at "$base"; entry 0.105.1 "- **BEHAVIOURAL (patch-safe):** only a call that failed before is refused." "  - summary: calls that failed before are refused." "  - reason: no call that worked changes."; regen
+run_case patch-safe-with-a-reason 0
+at "$base"; entry 0.105.1 "- **BEHAVIOURAL (patch-safe):** x" "  - summary: s"
+run_case patch-safe-without-a-reason 1
+expect patch-safe-without-a-reason "no reason: line"
+at "$base"; entry 0.105.1 "- **BEHAVIOURAL (urgent):** x" "  - summary: s" "  - reason: r"
+run_case behavioural-with-another-qualifier 1
+expect behavioural-with-another-qualifier "BEHAVIOURAL has one form"
+at "$base"; entry 0.105.1 "$b" "  - summary: s" "  - reason: r"
+run_case reason-on-a-breaking-bullet 1
+expect reason-on-a-breaking-bullet "reason: belongs to a BEHAVIOURAL (patch-safe) bullet only"
+
+# Not gated: an API change and a bullet about who is affected may be in a patch (docs/api-policy.md).
+at "$base"; entry 0.105.1 "- **BREAKING:** an API changes." "  - summary: an API changes."; regen
+run_case api-change-in-a-patch 0
+at "$base"; entry 0.105.1 "- **BREAKING (only for 0.105.0):** gone." "  - summary: gone."; regen
+run_case breaking-for-one-version-in-a-patch 0
+
+# No tag at all: nothing to compare with.
+at "$base"; g tag -d v0.105.0 >/dev/null; entry 0.105.1 "$b" "  - summary: a thing changes."; regen
+run_case behavioural-change-with-no-tag 0
+g tag v0.105.0 "$base"
+
+# 4. No go, no check: it must not pass silently.
 at "$base"; entry 0.105.1 "- a plain bullet"; regen
 mkdir "$tmp/nogo"
 for tool in bash git grep sed sort head tail wc tr cat dirname mktemp rm awk env; do ln -s "$(command -v "$tool")" "$tmp/nogo/$tool"; done
