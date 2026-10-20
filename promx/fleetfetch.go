@@ -13,6 +13,7 @@ import (
 //	fleet_fetch_total{service, host, result}
 //	fleet_fetch_duration_seconds{service, result}
 //	fleet_fetch_cache_age_seconds{service}
+//	fleet_fetch_truncated_total{service}
 //
 // "host" follows the same bound as the egress collectors: at most 32 hosts
 // get their own value, each only after 64 fetches, and everything else is
@@ -21,6 +22,11 @@ import (
 // cache-age histogram has no "host": by host it was the largest single
 // metric in the fleet's Prometheus (145k series on 2026-10-19), and its
 // dashboards only read the fleet-wide mean.
+//
+// fleet_fetch_truncated_total counts responses whose body was cut at the client's
+// body limit (fleetfetch.DefaultMaxBodyBytes, 8 MiB, unless the service sets
+// another). It has no "host" on purpose: a service that sees it rise looks at its
+// logs, and a label per site would be an unbounded series again.
 //
 // "result" is one of: hit, miss, fallback, timeout, error. Cache hit
 // rate per service is one PromQL line:
@@ -42,6 +48,8 @@ type FleetFetchCollectors struct {
 	total    *prometheus.CounterVec
 	duration *prometheus.HistogramVec
 	cacheAge *prometheus.HistogramVec
+
+	truncated *prometheus.CounterVec
 }
 
 // NewFleetFetchCollectors registers the fleetfetch collectors on reg.
@@ -67,8 +75,12 @@ func NewFleetFetchCollectors(reg prometheus.Registerer) *FleetFetchCollectors {
 			Help:    "Age in seconds of the cache entry served on a hit. Long ages = warm cache; growing = cache TTLs are loose.",
 			Buckets: []float64{1, 10, 60, 300, 900, 3600, 21600, 86400},
 		}, []string{"service"}),
+		truncated: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "fleet_fetch_truncated_total",
+			Help: "Fleetfetch responses whose body was cut at the client's body limit (Response.Truncated).",
+		}, []string{"service"}),
 	}
-	reg.MustRegister(c.total, c.duration, c.cacheAge)
+	reg.MustRegister(c.total, c.duration, c.cacheAge, c.truncated)
 	return c
 }
 
@@ -79,5 +91,8 @@ func (c *FleetFetchCollectors) ObserveFleetFetch(ev fleetfetch.Event) {
 	c.duration.WithLabelValues(c.service, ev.Result).Observe(ev.Duration.Seconds())
 	if ev.Result == "hit" && ev.AgeSeconds > 0 {
 		c.cacheAge.WithLabelValues(c.service).Observe(float64(ev.AgeSeconds))
+	}
+	if ev.Truncated {
+		c.truncated.WithLabelValues(c.service).Inc()
 	}
 }
