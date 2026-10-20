@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
+  "changes": [
+    {
+      "version": "v0.105.0",
+      "date": "2026-10-19",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`safehttp_egress_duration_seconds` and `fleet_fetch_cache_age_seconds` lose their `host` label: a query that filters or groups them by `host` now gets one series per service."
+    },
+    {
+      "version": "v0.105.0",
+      "date": "2026-10-19",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`host` on `safehttp_egress_requests_total`, `safehttp_egress_response_bytes_total` and `fleet_fetch_total` takes at most 32 named values per process (was 256); every other host counts under `_other`.",
+      "off_switch": "for an `EgressCollectors` a service builds itself, `promx.WithHostLimit(256)` and `promx.WithHostMinHits(1)` restore the old naming; `fleet_fetch_total` takes no setting"
+    },
+    {
+      "version": "v0.104.0",
+      "date": "2026-10-18",
+      "class": "breaking",
+      "summary": "`go.mod` says `go 1.26.0`: a service that adopts this release needs a Go 1.26 builder (`golang:1.26` or newer), and `go get` raises its own `go` line to 1.26.0.",
+      "off_switch": "stay on 0.103.x; `scripts/backport.sh` cuts a `release/0.103` line only when a real service needs a security fix (docs/releasing.md)"
+    },
+    {
+      "version": "v0.103.0",
+      "date": "2026-10-18",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`server.New` sends fleet-internal destinations (container names, private and tailnet addresses, our domains) direct on `http.DefaultTransport`; the rest still follows `HTTP_PROXY`/`NO_PROXY`.",
+      "off_switch": "`FLEET_EGRESS_DEFAULT_TRANSPORT=off` (also `false`, `0`, `no`, `disabled`) in the service's environment, no release needed"
+    },
+    {
+      "version": "v0.102.74",
+      "date": "2026-10-18",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "the `promx` HTTP metrics label a request `method=\"OTHER\"` when its method is not one of the nine standard ones: a dashboard or alert that selects a non-standard method by name must select `\"OTHER\"`."
+    },
+    {
+      "version": "v0.102.73",
+      "date": "2026-10-18",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`server.Run`/`RunTier` now log the error from `Server.Start` and exit with status 1 (before: status 0, no message), so a restart-on-failure policy restarts a service whose port is taken."
+    },
+    {
+      "version": "v0.102.72",
+      "date": "2026-10-17",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`client.Fetch` and `jsbundle.Recover`/`RecoverAll` return an error instead of panicking when proxy egress is required and no proxy variable is set; a caller that relied on the panic must check it."
+    },
+    {
+      "version": "v0.102.70",
+      "date": "2026-10-17",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`safehttp.IsBlocked` (so `GuardHost`, `CheckURL`, the guarded dialer, `egressproxy.DefaultGuard`) also refuses IPv6 addresses that carry a blocked IPv4 address through NAT64 or 6to4."
+    },
+    {
+      "version": "v0.102.70",
+      "date": "2026-10-17",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`jsbundle.RecoverOptions.Client`, when nil, is a guarded `safehttp` client (20 s timeout, refuses internal addresses) instead of `http.DefaultClient`.",
+      "off_switch": "set `RecoverOptions.Client` (for example an `httptest` server's client in a test)"
+    },
+    {
+      "version": "v0.102.69",
+      "date": "2026-10-17",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`validate`'s `pattern=` tag now requires the whole value to match (it was applied unanchored): a tag that relied on substring matching starts rejecting."
+    },
+    {
+      "version": "v0.102.60",
+      "date": "2026-10-17",
+      "class": "breaking",
+      "qualifier": "only for 0.102.59",
+      "summary": "`GRAPH_USE_EGRESS_PROXY` is removed and `graph` is always direct: only a service on 0.102.59 that set it is affected (nothing used it)."
+    },
+    {
+      "version": "v0.63.0",
+      "date": "2026-06-08",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`obs` is opt-in: `server.New` no longer starts the localhost pprof and `/metrics` debug server (127.0.0.1:6060); a service that wants it calls `obs.Init()` in `main()`.",
+      "off_switch": "`stop, _ := obs.Init()` and `defer stop()` in `main()` bring the old debug server back"
+    }
+  ]
+}

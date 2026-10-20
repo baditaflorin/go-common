@@ -25,6 +25,9 @@ rely on when it bumps, and what a change must do to be allowed to break that.
    or repurposed env var, a different error) is breaking too. Mark it
    **BREAKING (behavioural):**. CI cannot detect these; the author and the
    reviewer have to.
+   Every **BREAKING...** bullet ends with a `summary:` line (at most 200 characters)
+   and, when the old behaviour can be had back without a release, an `off-switch:` line;
+   [releasing.md](releasing.md) has the grammar, and CI refuses a bullet without them.
 4. **Deprecate before you remove.** Keep the old API, add its replacement, and
    put a `// Deprecated: use X instead. Removal no earlier than v0.N.0.` paragraph
    in the doc comment. Keep it for at least two minor releases. Consumers that
@@ -46,6 +49,10 @@ that starts with `**BREAKING`, the build fails.
 
 It does not catch behaviour changes (rule 3), and it does not check that a removed
 identifier was deprecated first (rule 4). Those stay a review responsibility.
+
+`scripts/release-check.sh` checks the form of what the author wrote: the fields above
+on every **BREAKING...** bullet, and that `compat/changes.json`, which the feed of
+changes between two versions is read from, is what `CHANGELOG.md` says.
 
 Run it by hand on a fleet host (it type-checks the whole module):
 

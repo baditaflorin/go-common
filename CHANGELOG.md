@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.105.1] - 2026-10-20
+
+The `**BREAKING...**` bullets of this file now end with a one-line summary and, when there is one, the way back to the old behaviour. A generator reads them into `compat/changes.json`,
+and `go run .../scripts/whatchanged <from> <to>` prints what changed between two versions as a section for a pull request body. Release tooling and one additive `compat` API: no
+package behaves differently.
+
+### Added
+
+- Two field lines for a `**BREAKING...**` bullet, written as nested bullets at its end: `  - summary: ` (required, 1 to 200 characters: what changes for a service that bumps, and
+  what to check) and `  - off-switch: ` (optional: the setting, option or call that restores the old behaviour without a release). They are appended, so no existing line of a bullet
+  changed; the grammar, and what is refused, is in `docs/releasing.md`. Why: to put "behaviour changes since your pin" into the fleet's adoption pull requests the bullets were parsed
+  and summarised by hand, and a first automatic truncation cut 0.103.0's bullet before its actionable half, `FLEET_EGRESS_DEFAULT_TRANSPORT=off`. The summary is the one line, and the
+  off-switch is kept as a field of its own so that no shortening can drop it.
+- `compat/changes.json`, generated from `CHANGELOG.md` by `go run ./scripts/whatchanged -gen` and embedded in the `compat` package: `compat.LoadChanges`, `ParseChanges` and
+  `ChangeFeed.Between(from, to)` (releases newer than `from`, up to and including `to`; a pre-release or pseudo-version pin sorts below its own release, so that release's notes are
+  included). Schema 1. A reader ignores fields and classes it does not know, so a later class cannot break a consumer that is older than it. It holds 12 changes, every bullet that
+  starts with `**BREAKING`; `TestEveryBreakingBulletIsInTheFeed` counts them with a scan that shares nothing with the parser.
+- `scripts/whatchanged` (Go, the standard library and `compat` only): `go run github.com/baditaflorin/go-common/scripts/whatchanged@latest <from> [<to>]` prints the section;
+  `-gen` writes the file; `-check` exits 1 on a grammar problem or a stale file, as `scripts/pkgindex -check` does for `docs/PACKAGES.md`; `-release X.Y.Z` is what release-check runs.
+  It refuses what it cannot place instead of skipping it: a marker it cannot read (`- **BREAKING**: x`, `**BREAKING CHANGE:**`, one on a wrapped line, in a paragraph or in a nested
+  bullet), a field line written almost right (three spaces, a capital `S`, two spaces after the colon), a field given twice, a `## ` line that is not an entry heading, an unclosed
+  code fence. A bullet that falls out of the feed unseen is the failure this exists to prevent.
+- `scripts/release-check.sh` runs `scripts/whatchanged -release` for the version the change claims, so a `**BREAKING...**` bullet without its `summary:`, a field of more than 200
+  characters (counted as characters, under any locale) or a `compat/changes.json` that is not what `CHANGELOG.md` says, in any entry, fails the `release` step.
+  `TestFeedIsCurrent` in `scripts/whatchanged` is the same drift check inside `go test ./...`: it runs on a push to main as well, and needs no line in `.woodpecker.yml`.
+- `scripts/release-check-selftest.sh`: runs release-check in throwaway git repositories with real tags, 22 cases (the version rules it already had, which had no test, and the new
+  field rules). `TestReleaseCheckSelftest` runs it from `go test ./...` (not under `-race`), so every pipeline does.
+- `docs/releasing.md` has the grammar, the commands and what CI does; rule 3 of `docs/api-policy.md` points to it.
+
+### Changed
+
+- The 12 existing `**BREAKING...**` bullets are backfilled with their fields (0.105.0 twice, 0.104.0, 0.103.0, 0.102.74, 0.102.73, 0.102.72, 0.102.70 twice, 0.102.69, 0.102.60 and
+  0.63.0), from the one-line readings written for the adoption pull requests, cut to 200 characters. Five have an off-switch: 0.105.0's second bullet (a service that builds its own
+  `EgressCollectors`), 0.104.0 (stay on 0.103.x), 0.103.0, 0.102.70's second bullet and 0.63.0. No other word of any entry changed.
+
+Verified: VERIFIED_PLACEHOLDER
+
 ## [0.105.0] - 2026-10-19
 
 The egress and fleetfetch collectors no longer give every site a process fetches its own series: `host` is bounded at 32 heavy hitters per process, and the two histograms
