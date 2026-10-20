@@ -20,6 +20,69 @@ number and keeping old lines patched.
 - A change that leaves `CHANGELOG.md` alone claims no release, and the check
   passes.
 
+## Breaking bullets: the summary, the off-switch and the feed
+
+A bullet the owner of a service has to read before a bump is marked `**BREAKING...**`
+([api-policy.md](api-policy.md) says when). Those bullets are long on purpose: what
+changed, why, how it was verified. The people who need them (an owner about to bump, a
+pull request body, a dashboard) need one line: a first attempt to automate this cut a
+3,000-character bullet at 280 characters, and the half it dropped held the off-switch. So
+each bullet ends with its own short form, and a generator reads it into `compat/changes.json`:
+
+```markdown
+- **BREAKING (behavioural):** `server.New` calls `egress.InstallDefaultTransport()` first, ... (the full text)
+  - summary: `server.New` sends fleet-internal destinations direct on `http.DefaultTransport`; the rest still follows `HTTP_PROXY`/`NO_PROXY`.
+  - off-switch: `FLEET_EGRESS_DEFAULT_TRANSPORT=off` (also `false`, `0`, `no`, `disabled`) in the service's environment, no release needed
+```
+
+The grammar (`scripts/whatchanged` parses exactly this, and refuses what it cannot place):
+
+- **The bullet** is a top-level `- ` bullet of an entry whose text starts `**BREAKING:**`
+  or `**BREAKING (qualifier):**`. No qualifier means the API or a build requirement
+  changed; `(behavioural)` is a change no compiler sees; any other qualifier says who is
+  affected (`(only for 0.102.59)`). Older entries put the first sentence in bold after the
+  colon; that reads the same. The bullet runs to the next line in column 0, so its
+  continuation lines are indented two spaces and may hold blank lines and code blocks.
+- **A field** is one line inside the bullet: two spaces, `- `, the name, `: ` and the value,
+  with no space at either end. It is written last, so that no existing line of a bullet has
+  to change; it renders as a nested bullet.
+- **`summary:`** is required: 1 to 200 characters (characters, not bytes) saying what
+  changes for a service that bumps and what it has to check. The reason is for the bullet,
+  not for the summary.
+- **`off-switch:`** is optional: 1 to 200 characters naming the setting, option or call
+  that restores the old behaviour without waiting for a release. Leave it out when there is
+  none; do not write "none".
+- A field may appear once per bullet. A line that is meant as a field but is not written
+  like one (three spaces, a capital `S`, two spaces after the colon, a missing value) is an
+  error and is not skipped; so is a marker the grammar cannot read (`- **BREAKING**: x`,
+  `**BREAKING CHANGE:**`, a marker in a paragraph, on a wrapped line or in a nested
+  bullet). A bullet that quietly fell out of the feed is the failure this exists to prevent.
+- Entry headings are `## [X.Y.Z] - YYYY-MM-DD` (the form for new entries) or the two older
+  forms, `## vX.Y.Z - YYYY-MM-DD` and `## vX.Y.Z — YYYY-MM-DD`; any other `## ` line is an
+  error, because a bullet under it would belong to no release.
+
+```bash
+go run ./scripts/whatchanged -gen          # after adding or editing a bullet: rewrite compat/changes.json
+go run ./scripts/whatchanged -check        # exit 1 on a grammar problem or a stale compat/changes.json
+go run github.com/baditaflorin/go-common/scripts/whatchanged@latest v0.102.60 v0.105.0
+```
+
+The last command is for whoever opens a pull request that moves a pin: it prints a
+markdown section, one line for each marked bullet in the releases after the first version
+up to and including the second (the newest when it is left out), with the off-switch under
+it, ready to paste into the body. `@latest` reads the newest feed, which is embedded in
+the `compat` package (`compat.LoadChanges`, `ChangeFeed.Between`) for preflight tools and
+dashboards that want the same facts. A pin that is a pseudo-version or a pre-release counts
+as older than its own release, so the notes of that release are included: a note that might
+not apply is better than a missing one.
+
+CI enforces it twice. `scripts/release-check.sh` (the `release` step) runs
+`scripts/whatchanged -release` for the entry the change adds, and `go test ./...` runs
+`TestFeedIsCurrent` and `TestEveryBreakingBulletIsInTheFeed` in `scripts/whatchanged`, so
+a change that adds or edits a bullet without its fields and the regenerated file cannot
+merge. `scripts/release-check-selftest.sh` tests the script itself (it runs from a Go test
+in the same package, so it needs no line of its own in the pipeline).
+
 ## Security fixes and old release lines
 
 `compat/compat.json` holds the floor: the oldest version that has every security
@@ -101,7 +164,8 @@ still on main; it blocks now that the fix (0.103.1) has merged. Do not add
 
 | Script | Checks |
 | --- | --- |
-| `scripts/release-check.sh` | The claimed version is well formed, unique and the next free one |
+| `scripts/release-check.sh` | The claimed version is well formed, unique and the next free one, and the entry's `**BREAKING...**` bullets carry their fields (see above) |
+| `scripts/whatchanged` | Generates `compat/changes.json` from the bullets, fails when it is stale, and prints the changes between two versions |
 | `scripts/forward-compat.sh` | `go vet` and the tests still pass with a newer `go` line in go.mod (run on a copy) |
 | `scripts/apidiff-check.sh` | An incompatible API change is declared BREAKING |
 | `scripts/bench-gate.sh` | A hot-path benchmark did not start allocating more |

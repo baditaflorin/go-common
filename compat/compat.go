@@ -13,6 +13,12 @@
 // The floor is about go-common's own fixes. It does not claim that a version at
 // or above it is free of known vulnerabilities: advisories in go-common's
 // dependencies and in the Go toolchain are tracked in scripts/govulncheck-allow.txt.
+//
+// The package also carries the change feed (changes.json): the CHANGELOG.md bullets
+// marked BREAKING, each with a one-line summary and, when there is one, the way back
+// to the old behaviour. LoadChanges reads it and ChangeFeed.Between answers "what
+// changes if I move my pin from one version to another"; scripts/whatchanged prints
+// the answer for a pull request body, and docs/releasing.md has the grammar.
 package compat
 
 import (

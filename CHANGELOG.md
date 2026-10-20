@@ -1,6 +1,44 @@
 # Changelog
 
-## [0.105.1] - 2026-10-20
+## [0.105.2] - 2026-10-20
+
+The `**BREAKING...**` bullets of this file now end with a one-line summary and, when there is one, the way back to the old behaviour. A generator reads them into `compat/changes.json`,
+and `go run .../scripts/whatchanged <from> <to>` prints what changed between two versions as a section for a pull request body. Release tooling and one additive `compat` API: no
+package behaves differently.
+
+### Added
+
+- Two field lines for a `**BREAKING...**` bullet, written as nested bullets at its end: `  - summary: ` (required, 1 to 200 characters: what changes for a service that bumps, and
+  what to check) and `  - off-switch: ` (optional: the setting, option or call that restores the old behaviour without a release). They are appended, so no existing line of a bullet
+  changed; the grammar, and what is refused, is in `docs/releasing.md`. Why: to put "behaviour changes since your pin" into the fleet's adoption pull requests the bullets were parsed
+  and summarised by hand, and a first automatic truncation cut 0.103.0's bullet before its actionable half, `FLEET_EGRESS_DEFAULT_TRANSPORT=off`. The summary is the one line, and the
+  off-switch is kept as a field of its own so that no shortening can drop it.
+- `compat/changes.json`, generated from `CHANGELOG.md` by `go run ./scripts/whatchanged -gen` and embedded in the `compat` package: `compat.LoadChanges`, `ParseChanges` and
+  `ChangeFeed.Between(from, to)` (releases newer than `from`, up to and including `to`; a pre-release or pseudo-version pin sorts below its own release, so that release's notes are
+  included). Schema 1. A reader ignores fields and classes it does not know, so a later class cannot break a consumer that is older than it. It holds 12 changes, every bullet that
+  starts with `**BREAKING`; `TestEveryBreakingBulletIsInTheFeed` counts them with a scan that shares nothing with the parser.
+- `scripts/whatchanged` (Go, the standard library and `compat` only): `go run github.com/baditaflorin/go-common/scripts/whatchanged@latest <from> [<to>]` prints the section;
+  `-gen` writes the file; `-check` exits 1 on a grammar problem or a stale file, as `scripts/pkgindex -check` does for `docs/PACKAGES.md`; `-release X.Y.Z` is what release-check runs.
+  It refuses what it cannot place instead of skipping it: a marker it cannot read (`- **BREAKING**: x`, `**BREAKING CHANGE:**`, one on a wrapped line, in a paragraph or in a nested
+  bullet), a field line written almost right (three spaces, a capital `S`, two spaces after the colon), a field given twice, a `## ` line that is not an entry heading, an unclosed
+  code fence. A bullet that falls out of the feed unseen is the failure this exists to prevent.
+- `scripts/release-check.sh` runs `scripts/whatchanged -release` for the version the change claims, so a `**BREAKING...**` bullet without its `summary:`, a field of more than 200
+  characters (counted as characters, under any locale) or a `compat/changes.json` that is not what `CHANGELOG.md` says, in any entry, fails the `release` step.
+  `TestFeedIsCurrent` in `scripts/whatchanged` is the same drift check inside `go test ./...`: it runs on a push to main as well, and needs no line in `.woodpecker.yml`.
+- `scripts/release-check-selftest.sh`: runs release-check in throwaway git repositories with real tags, 22 cases (the version rules it already had, which had no test, and the new
+  field rules). `TestReleaseCheckSelftest` runs it from `go test ./...` (not under `-race`), so every pipeline does.
+- `docs/releasing.md` has the grammar, the commands and what CI does; rule 3 of `docs/api-policy.md` points to it.
+
+### Changed
+
+- The 12 existing `**BREAKING...**` bullets are backfilled with their fields (0.105.0 twice, 0.104.0, 0.103.0, 0.102.74, 0.102.73, 0.102.72, 0.102.70 twice, 0.102.69, 0.102.60 and
+  0.63.0), from the one-line readings written for the adoption pull requests, cut to 200 characters. Five have an off-switch: 0.105.0's second bullet (a service that builds its own
+  `EgressCollectors`), 0.104.0 (stay on 0.103.x), 0.103.0, 0.102.70's second bullet and 0.63.0. No other word of any entry changed.
+
+Verified: every step of `.woodpecker.yml` against the pushed branch, one after the other, in the pipeline's own images on the build host: `validate`, `race`, `lint` (0 issues, and its selftest), `vuln`, `forward-compat` on
+Go 1.27.2, `api` (no incompatible change: `compat` only gains identifiers), `bench`, `release` and `fuzz` (23 targets, 5 s each); `go run ./scripts/whatchanged v0.102.60 v0.105.0` lists the ten bullets of those
+releases, 0.103.0's off-switch among them; 16 deliberate breaks of the parser, `Between`, the renderer and `release-check.sh` each fail a test or the selftest (the first run missed a code fence in column 0, which
+has a test now). The steps were run by hand in those images, not by Woodpecker.
 
 The CI pipeline runs its steps in two stages instead of one after another, and a pull request fuzzes only the packages it touches. No package changes.
 
@@ -49,6 +87,7 @@ lose `host`. This is the durable fix for the Metrics Hub Prometheus OOM loop of 
   `sum(rate(..._sum)) / sum(rate(..._count))`, which is unchanged. Why: a histogram costs a series per bucket, so per host it was the largest cost in the fleet's Prometheus:
   `safehttp_egress_duration_seconds_bucket` was 611,628 of 1.42 M head series on 2026-10-19 (go-fleet-metrics-hub #112 now drops it at scrape), and
   `fleet_fetch_cache_age_seconds_bucket` then became the largest metric, 145,170 series, after growing from 90k to 140k in three hours.
+  - summary: `safehttp_egress_duration_seconds` and `fleet_fetch_cache_age_seconds` lose their `host` label: a query that filters or groups them by `host` now gets one series per service.
 - **BREAKING (behavioural):** `host` on `safehttp_egress_requests_total`, `safehttp_egress_response_bytes_total` and `fleet_fetch_total` takes at most 32 named values per process
   (was 256), and a host gets one only on its 64th request, provided those 64 come before 1024 other unnamed hosts have been seen (the count restarts then). Every other request
   counts under `host="_other"`, so sums over `host` stay exact. Named hosts are never evicted: the label takes at most 34 values (`_other` and `_unknown` included) whatever a
@@ -57,6 +96,8 @@ lose `host`. This is the durable fix for the Metrics Hub Prometheus OOM loop of 
   `safehttp_egress_requests_total` series for 34,406 live ones. The hosts that recur (upstream APIs, the selftest target, deep-crawled sites) keep their names, so
   `topk(15, sum by (host) (...))` on the fleet-egress dashboard shows them instead of the first domains crawled after boot. The cost: a process's first 63 requests to a host
   count under `_other`, so a host a low-volume service calls rarely gets its name late or never.
+  - summary: `host` on `safehttp_egress_requests_total`, `safehttp_egress_response_bytes_total` and `fleet_fetch_total` takes at most 32 named values per process (was 256); every other host counts under `_other`.
+  - off-switch: for an `EgressCollectors` a service builds itself, `promx.WithHostLimit(256)` and `promx.WithHostMinHits(1)` restore the old naming; `fleet_fetch_total` takes no setting
 - `WithHostLimit(n)` with `n <= 0` keeps the default (now 32); it meant 256 before.
 - A host without a slot, once every slot is taken, costs one read-locked map lookup. It took the write lock on every call before, which for a crawler was 94% of its requests.
 
@@ -105,6 +146,8 @@ The minimum Go version is now 1.26 (it was 1.25).
   images set `GOTOOLCHAIN=local`, so an older image fails with `go: go.mod requires go >= 1.26.0 (running go 1.25.14; GOTOOLCHAIN=local)` instead of downloading a toolchain. A service that cannot move
   yet stays on 0.103.x, and `scripts/backport.sh` cuts a `release/0.103` line only when a real service needs a security fix (`docs/releasing.md`).
   Moving the builder image to 1.26 first, without touching the `go` line, is safe in that order: an image newer than the `go` line always builds.
+  - summary: `go.mod` says `go 1.26.0`: a service that adopts this release needs a Go 1.26 builder (`golang:1.26` or newer), and `go get` raises its own `go` line to 1.26.0.
+  - off-switch: stay on 0.103.x; `scripts/backport.sh` cuts a `release/0.103` line only when a real service needs a security fix (docs/releasing.md)
 - A service's own `go` line decides the default of each `GODEBUG` setting, so raising it to 1.26.0 flips four defaults for that service (each can be put back with a `godebug name=value` line in its go.mod):
   `urlstrictcolons` (`net/url.Parse` now rejects a host with colons outside brackets, such as `http://localhost:1:2`), `cryptocustomrand` (most `crypto/*` APIs ignore a custom random `io.Reader`),
   `tlssecpmlkem` (the default TLS key exchange offers two more hybrid post-quantum groups, SecP256r1MLKEM768 and SecP384r1MLKEM1024: the ClientHello is 4 bytes larger and its JA3/JA4 fingerprint changes, and no extra key share is sent; measured with a Go 1.26 client against a local listener), and
@@ -210,6 +253,8 @@ This is the first release tagged since v0.102.68; the entries 0.102.69 to 0.102.
   start-up check names a value it does not recognise). `server.New` logs one line saying what it did, never a proxy value.
   The write happens once, early, because `net/http` reads the proxy function without a lock: a service that starts requests on the default transport before `server.New` runs can race
   with it (the race detector reports it; in practice it is one word written once), and should call `egress.InstallDefaultTransport()` at the top of `main` instead.
+  - summary: `server.New` sends fleet-internal destinations (container names, private and tailnet addresses, our domains) direct on `http.DefaultTransport`; the rest still follows `HTTP_PROXY`/`NO_PROXY`.
+  - off-switch: `FLEET_EGRESS_DEFAULT_TRANSPORT=off` (also `false`, `0`, `no`, `disabled`) in the service's environment, no release needed
 
 ### Added
 
@@ -238,6 +283,7 @@ Metrics-wiring fixes for the problems the wave-4 observability review found ([do
   method: a probe with 300 methods made 300 series sets, and about 900 requests made a 2 MB scrape. Methods are case-sensitive, so `get` is `OTHER` too. The request is still
   counted and only the label changed: a dashboard or alert that selects a non-standard method by name (`method="PROPFIND"` on a WebDAV service) must select `"OTHER"` instead.
   The nine standard methods are unchanged.
+  - summary: the `promx` HTTP metrics label a request `method="OTHER"` when its method is not one of the nine standard ones: a dashboard or alert that selects a non-standard method by name must select `"OTHER"`.
 
 ### Added
 
@@ -268,6 +314,7 @@ Metrics-wiring fixes for the problems the wave-4 observability review found ([do
   (Docker `restart: on-failure`) will now restart such a service, so a port that stays taken becomes a restart loop with the reason in the log, where it used to be a silent exit.
   A service that calls `srv.Start()` itself is unchanged: with `WithGracefulDrain` a listen failure already ended the process with status 1 (`log.Fatalf`), and without it `Start`
   returns the error to its caller, as its documentation says.
+  - summary: `server.Run`/`RunTier` now log the error from `Server.Start` and exit with status 1 (before: status 0, no message), so a restart-on-failure policy restarts a service whose port is taken.
 
 ### Fixed
 
@@ -284,6 +331,7 @@ deprecations. One behaviour change: three call sites now return an error, not a 
   or `FLEET_REQUIRE_PROXY=1`) and no proxy variable is set. They run per request and in worker goroutines, where a deployment mistake should not take the process down. `Fetch`
   and `Recover` now return an error and fetch nothing (still fail-closed); `RecoverAll` logs the reason and returns nil. A caller that relied on the panic to stop the process
   must check the error. The start-up constructors, `safehttp.NewClient` among them, still panic as before.
+  - summary: `client.Fetch` and `jsbundle.Recover`/`RecoverAll` return an error instead of panicking when proxy egress is required and no proxy variable is set; a caller that relied on the panic must check it.
 
 ### Fixed
 
@@ -351,9 +399,12 @@ benchmarks with an allocation gate, a security floor for pins, and release tooli
   `64:ff9b::a9fe:a9fe` (the cloud metadata address) and `2002:7f00:1::` were allowed. Reaching them needs a NAT64 or 6to4 gateway on the path, which a typical
   container host lacks, so this closes a latent hole rather than a live one. A NAT64 or 6to4 address that carries a public IPv4 address is still allowed. Found by
   the new SSRF corpus; `FuzzIsBlocked` now checks the embedded forms too.
+  - summary: `safehttp.IsBlocked` (so `GuardHost`, `CheckURL`, the guarded dialer, `egressproxy.DefaultGuard`) also refuses IPv6 addresses that carry a blocked IPv4 address through NAT64 or 6to4.
 - **BREAKING (behavioural):** `jsbundle.RecoverOptions.Client`, when nil, is now a guarded `safehttp` client (20 s timeout, refuses internal addresses, also
   after redirects) instead of `http.DefaultClient`, which had no timeout and no SSRF guard, while the URLs it fetches come from pages and error reports. Pass a
   `Client` to opt out, for example an `httptest` server's client in a test.
+  - summary: `jsbundle.RecoverOptions.Client`, when nil, is a guarded `safehttp` client (20 s timeout, refuses internal addresses) instead of `http.DefaultClient`.
+  - off-switch: set `RecoverOptions.Client` (for example an `httptest` server's client in a test)
 - `config.Load` read `service.yaml` naively: any indented `name:` or `version:` replaced the service's own (the template's `owner.name` did), a trailing
   `# comment` stayed in the value, and a missing file printed `DEBUG: Failed to open service.yaml` to stdout. Only top-level keys count now, comments and quotes are
   stripped, and a missing file is silent. It only changed the result for callers that pass an empty app name.
@@ -395,6 +446,7 @@ targets found are fixed (one changes behaviour: see `validate` below). No export
   such as `pattern=a|b` accepted `abc`. The tag is now wrapped in `^(?:...)$`: one that already has `^...$` is unaffected, one that relied on substring matching starts
   rejecting. No `pattern=` tag exists in any local repository outside go-common's own tests. Found by `FuzzBindBytes` in the first real CI run of the fuzz step on a later
   PR in this series; the crashing input is committed under `validate/testdata/fuzz/` and replayed by `go test`.
+  - summary: `validate`'s `pattern=` tag now requires the whole value to match (it was applied unanchored): a tag that relied on substring matching starts rejecting.
 
 ### Added
 
@@ -586,6 +638,7 @@ targets found are fixed (one changes behaviour: see `validate` below). No export
   host's `NO_PROXY` listing it. `safehttp` is deliberately unchanged: it is the generic public-web client, and the runner's strict egress policy
   keeps even our own public hostnames on the proxy for proxy_egress services that scan targets with it. Third-party destinations are unchanged.
 - **BREAKING (only for 0.102.59):** `GRAPH_USE_EGRESS_PROXY` is removed; `graph` is always direct. Nothing used it.
+  - summary: `GRAPH_USE_EGRESS_PROXY` is removed and `graph` is always direct: only a service on 0.102.59 that set it is affected (nothing used it).
 - `golang.org/x/net` is an indirect dependency again (the Graph client no longer builds a proxy function from the environment).
 
 ## [0.102.59] - 2026-10-17
@@ -2037,6 +2090,8 @@ embedded version string (consumers pin via `go.mod`).
   for services with their own registry. The default `/metrics` runtime
   metrics for `server`-based services are unaffected — those come from
   `promx` and stay as-is. Supersedes the auto-wire added in #34 / v0.61.0.
+  - summary: `obs` is opt-in: `server.New` no longer starts the localhost pprof and `/metrics` debug server (127.0.0.1:6060); a service that wants it calls `obs.Init()` in `main()`.
+  - off-switch: `stop, _ := obs.Init()` and `defer stop()` in `main()` bring the old debug server back
 
 - **`promx` inbound HTTP metrics now cap "route" label cardinality** (default
   512, configurable via `WithRouteLimit`). The default `RouteFunc` returns the
