@@ -159,13 +159,15 @@ func TestCheckExplainsWhatABelowFloorPinIsMissing(t *testing.T) {
 func TestCheckGoMod(t *testing.T) {
 	t.Parallel()
 	m := mustLoad(t)
+	// A requirement at the embedded floor, whatever the floor is: a literal version here fails the day the floor moves past it.
+	atFloor := "module x\n\nrequire (\n\tgithub.com/other/thing v1.0.0\n\tgithub.com/baditaflorin/go-common " + m.MinSafe + "\n)\n"
 	for _, tc := range []struct {
 		name string
 		mod  string
 		want Status
 	}{
 		{"single-line require, old", "module x\n\ngo 1.25\n\nrequire github.com/baditaflorin/go-common v0.97.0\n", StatusBelowFloor},
-		{"block require, new", "module x\n\nrequire (\n\tgithub.com/other/thing v1.0.0\n\tgithub.com/baditaflorin/go-common v0.102.34\n)\n", StatusOK},
+		{"block require, at the floor", atFloor, StatusOK},
 		{"indirect marker and comment", "module x\n\nrequire (\n\tgithub.com/baditaflorin/go-common v0.88.0 // indirect\n)\n", StatusBelowFloor},
 		{"pseudo-version", "module x\n\nrequire github.com/baditaflorin/go-common v0.0.0-20260110171042-8921433476a9\n", StatusBelowFloor},
 		{"local replace", "module x\n\nrequire github.com/baditaflorin/go-common v0.97.0\n\nreplace github.com/baditaflorin/go-common => ../go-common\n", StatusUnchecked},

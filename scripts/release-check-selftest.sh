@@ -267,6 +267,7 @@ sec='- **SECURITY:** a header is no longer forwarded.'
 secf='  - summary: a header is no longer forwarded.'
 
 at "$base"; entry 0.105.1 "$sec" "$secf"; regen
+write_compat v0.102.2 2026-09-27T15:03:06Z "$old_reason" ''   # a fixture: the floor of the real compat.json moves, this case names it
 run_case security-without-a-decision 1
 expect security-without-a-decision "SECURITY of v0.105.1 (CHANGELOG.md line 7): compat/compat.json has to settle what the fix does to the floor"
 expect security-without-a-decision "The floor is v0.102.2"

@@ -1,11 +1,15 @@
 {
   "schema": 1,
-  "min_safe": "v0.102.2",
-  "min_safe_date": "2026-09-27T15:03:06Z",
+  "min_safe": "v0.102.70",
+  "min_safe_date": "2026-10-17T21:12:17Z",
   "reasons": [
     {"version": "v0.89.1", "summary": "bump gRPC and x/net to close Dependabot CVEs"},
     {"version": "v0.90.0", "summary": "scope the safehttp private-IP SSRF bypass to specific hostnames (#71)"},
-    {"version": "v0.102.2", "summary": "patch a gRPC vulnerability (#101)"}
+    {"version": "v0.102.2", "summary": "patch a gRPC vulnerability (#101)"},
+    {"version": "v0.102.70", "summary": "safehttp.IsBlocked refuses NAT64 and 6to4 addresses that carry a blocked IPv4 address, and jsbundle's default client is SSRF-guarded; the first tagged release with it is v0.103.0 (#174)"}
+  ],
+  "min_safe_unchanged": [
+    {"version": "v0.107.0", "reason": "Latent: PublicPathPrefixes is opt-in and exists only from v0.104.1, and behind http.ServeMux, which server.New uses, the paths that skipped the gate are redirected, so the hole was reachable only behind a router that cleans paths before routing. The only service known to declare a prefix routes on Server.Mux. A service without a prefix has nothing to exempt, and one older than v0.104.1 has no such option. Raising the floor to v0.107.0 would report every service below it for a hole none of them can be hit by."}
   ],
   "note": "A version below min_safe lacks a security fix that go-common itself shipped. At or above it no such fix is outstanding, but advisories in go-common's dependencies and in the Go toolchain are tracked separately (scripts/govulncheck-allow.txt)."
 }
