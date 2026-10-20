@@ -20,7 +20,7 @@ import (
 // go-fleet-backoff-coordinator being down.
 type BackoffCollectors struct {
 	service string
-	cap     *hostCardCap
+	cap     *BoundedLabel
 
 	consults *prometheus.CounterVec
 	consult  *prometheus.HistogramVec
@@ -35,7 +35,7 @@ func NewBackoffCollectors(reg prometheus.Registerer) *BackoffCollectors {
 	}
 	c := &BackoffCollectors{
 		service: ServiceID(),
-		cap:     newHostCardCap(256),
+		cap:     NewBoundedLabel(256),
 		consults: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "safehttp_backoff_consults_total",
 			Help: "Total backoff-coordinator consultations, labelled by host and outcome.",
@@ -57,7 +57,7 @@ func NewBackoffCollectors(reg prometheus.Registerer) *BackoffCollectors {
 
 // ObserveBackoff satisfies safehttp.BackoffObserver.
 func (c *BackoffCollectors) ObserveBackoff(ev safehttp.BackoffEvent) {
-	host := c.cap.label(ev.Host)
+	host := c.cap.Value(ev.Host)
 	c.consults.WithLabelValues(c.service, host, ev.Outcome).Inc()
 	c.consult.WithLabelValues(c.service).Observe(ev.ConsultLatency.Seconds())
 	if ev.Waited > 0 {

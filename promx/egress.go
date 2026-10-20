@@ -27,8 +27,11 @@ import (
 // over "host" stay exact. The duration histogram carries no "host" at all:
 // a histogram costs a series per bucket, and per-host latency was the
 // largest single cost in the fleet's Prometheus (611k of 1.42M head series
-// on 2026-10-19). "outcome" is a fixed-size enum drawn from
-// safehttp.EgressOutcome (~9 values), so the product label space is
+// on 2026-10-19). "host" is a BoundedLabel, so a host that is not valid UTF-8 or
+// is longer than MaxLabelValueLen counts under "_other" too. "scheme" is "http" or
+// "https", and "_other" for any other scheme in the URL a caller handed to the
+// client (the label was the raw scheme before 0.106.0). "outcome" is a fixed-size
+// enum drawn from safehttp.EgressOutcome (~9 values), so the product label space is
 // bounded.
 //
 // "via_proxy" is "true" / "false". Pair the requests_total counter with
@@ -56,7 +59,7 @@ type EgressCollectors struct {
 	bytesTotal    *prometheus.CounterVec
 	blockedTotal  *prometheus.CounterVec
 
-	hosts *hostCardCap
+	hosts *BoundedLabel
 }
 
 // EgressOption configures NewEgressCollectors.
@@ -118,7 +121,7 @@ func NewEgressCollectors(reg prometheus.Registerer, opts ...EgressOption) *Egres
 
 	c := &EgressCollectors{
 		service: service,
-		hosts:   newHeavyHitterCap(o.hostLimit, o.hostMinHits, 0),
+		hosts:   NewBoundedLabel(o.hostLimit, WithMinHits(o.hostMinHits)),
 		requestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "safehttp_egress_requests_total",
 			Help: "Total outbound HTTP requests made via safehttp clients, labelled by destination host, scheme, proxy usage, and outcome bucket.",
@@ -143,10 +146,10 @@ func NewEgressCollectors(reg prometheus.Registerer, opts ...EgressOption) *Egres
 
 // ObserveEgress satisfies safehttp.EgressObserver.
 func (c *EgressCollectors) ObserveEgress(ev safehttp.EgressEvent) {
-	host := c.hosts.label(ev.Host)
+	host := c.hosts.Value(ev.Host)
 	viaProxy := boolLabel(ev.ViaProxy)
 
-	c.requestsTotal.WithLabelValues(c.service, host, ev.Scheme, viaProxy, string(ev.Outcome)).Inc()
+	c.requestsTotal.WithLabelValues(c.service, host, schemeLabel(ev.Scheme), viaProxy, string(ev.Outcome)).Inc()
 	c.duration.WithLabelValues(c.service, viaProxy).Observe(ev.Duration.Seconds())
 	if ev.Bytes > 0 {
 		channel := ev.Channel
@@ -172,6 +175,23 @@ func boolLabel(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// schemeLabel returns s when it is http or https and OtherLabel for anything else
+// (UnknownLabel for none), so the "scheme" label has at most four values. safehttp
+// only dials http and https, but the scheme in the event is the one in the URL the
+// caller handed to the client, and a service that fetches the URLs its users send
+// can be given any string a URL parser accepts ("a1://x", "a2://x"...), each of
+// which would otherwise be a series set of its own. It returns s itself, not a
+// copy, so it does not allocate.
+func schemeLabel(s string) string {
+	switch s {
+	case "http", "https":
+		return s
+	case "":
+		return UnknownLabel
+	}
+	return OtherLabel
 }
 
 // blockReason maps a blocked event's error to a small label-safe enum.

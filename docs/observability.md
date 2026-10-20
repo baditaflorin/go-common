@@ -263,7 +263,117 @@ signals here are the aggregate view of the same facts, and they connect like thi
 | `resilience` (breaker, load shed, retries) | The `circuitbreaker` and `loadshed` families, through `AutoWire`. |
 
 Keep any label or span attribute you add low-cardinality: a status, a primitive
-name, an outcome; never an id, a URL or a user.
+name, an outcome; never an id, a URL or a user. For a metric label, [Series
+budgets](#series-budgets) says how to prove it.
+
+## Series budgets
+
+Every label multiplies the series a metric holds, and a histogram holds a series
+per bucket (plus `+Inf`, `_sum` and `_count`) for each combination. One label that
+takes its value from a request, a URL or a header makes a metric as large as an
+attacker cares to make it: that took the fleet's Prometheus down twice in October
+2026 (the `method` label of the HTTP metrics, then `host` on the egress and
+fleetfetch histograms; 19 out-of-memory kills in the second). This table is the
+most series each `promx` metric can hold in one process, **under hostile input**.
+It is a ceiling, not what a service shows on an ordinary day (a crawler measured 219
+egress series in total, against the 2,448 of the first row below).
+
+The number is the product of the distinct values each label can take, times the
+series one combination costs, as measured by driving hostile values through the
+collector: `promxtest.AssertBounded` (see [`testhelpers/promxtest`](../testhelpers/promxtest/))
+sends many distinct hosts, methods, paths, schemes, statuses and user agents, values
+over 256 bytes and over 1 MiB, unicode and values that are not valid UTF-8, and fails
+when a probe panics, when the series grow with the input, or when a label value is
+longer than 256 bytes. `TestSeriesBudgets` and `TestCollectorsAreBounded` in
+[`promx`](../promx/) then compare each metric with its row here, exactly: a metric
+without a row, a row without a metric, a number that is not the ceiling, and a labels
+column that is not the metric's labels all fail the build. A change that raises a
+ceiling has to say so in this table, where the review sees it.
+
+Three kinds of label, and what each needs:
+
+- **Request-derived** (the process does not choose the value): `route`, `method` and
+  `status` of the HTTP metrics; `host` and `scheme` of the egress, fleetfetch,
+  backoff, backoffcoord and ratecoord metrics; `primitive` and `suffix` of
+  `fleet_degraded_total`, whose tokens may carry a host. Bound it with
+  [`promx.BoundedLabel`](../promx/boundedlabel.go) (the top N values that recur, or
+  the first N, and `_other` for the rest; it also turns away values that are not
+  valid UTF-8, which client_golang panics on, and values over 256 bytes), or map it
+  onto a short fixed list with a `switch`, as `method`, `scheme` and `status` do. Add
+  hostile probes to the collector's case in `promx/harness_test.go`.
+- **One of a closed list** (`outcome`, `result`, `phase`, `source`, `reason`): use
+  every value on the list in the case's probe, so that the row counts them all.
+- **A name the service declares once at start-up** (`pool`, `gate`, `dep`, `check`,
+  `upstream`, `ruleset`, `rule`): configuration, not input. Its rows assume 16 names;
+  each name beyond that costs one more combination. Keep the names constants:
+  building one from input (`"fetch-" + host`) is the bug this table exists to catch.
+
+A new collector comes with a harness case (`TestEveryCollectorHasAHarnessCase` reads
+the package source and fails without one) and rows here. The standard `go_*` and
+`process_*` runtime collectors are client_golang's, constant per process, and have no
+rows.
+
+All rows together come to 497,212; the three HTTP histogram and counter rows alone
+are 483,160 of that, because `route` is capped per label, not per
+`(method, route)` pair: 514 routes by 10 methods is 5,140 pairs, each costing 14 and
+12 series in the histograms.
+
+| Metric | Labels besides `service` | Budget | How the labels are bounded |
+| --- | --- | --- | --- |
+| `http_requests_total` | method, route, status | 349,520 | 10 methods (nine standard and `OTHER`) x 514 routes (512 first-come, `_other`, `_unknown`) x 68 statuses (the registered codes, a class such as `4xx`, `_other`) |
+| `http_request_duration_seconds` | method, route | 71,960 | 10 x 514 x 14 series per histogram |
+| `http_response_size_bytes` | method, route | 61,680 | 10 x 514 x 12 |
+| `http_requests_in_flight` | - | 1 | no label |
+| `safehttp_egress_requests_total` | host, outcome, scheme, via_proxy | 2,448 | 34 hosts (32 heavy hitters, `_other`, `_unknown`) x 9 outcomes x 4 schemes (`http`, `https`, `_other`, `_unknown`) x 2 |
+| `safehttp_egress_duration_seconds` | via_proxy | 28 | 2 x 14; no `host` since 0.105.0 |
+| `safehttp_egress_response_bytes_total` | channel, host | 102 | 34 hosts x 3 channels |
+| `safehttp_egress_blocked_total` | reason | 6 | the six reasons of `blockReason` |
+| `fleet_fetch_total` | host, result | 272 | 34 hosts x 8 results |
+| `fleet_fetch_duration_seconds` | result | 104 | 8 x 13 |
+| `fleet_fetch_cache_age_seconds` | - | 11 | one histogram; no `host` since 0.105.0 |
+| `safehttp_backoff_consults_total` | host, outcome | 774 | 258 hosts (256 first-come, `_other`, `_unknown`) x 3 outcomes |
+| `safehttp_backoff_consult_latency_seconds` | - | 10 | one histogram |
+| `safehttp_backoff_waited_seconds` | host | 2,838 | 258 hosts x 11: the largest host-labelled histogram left |
+| `backoffcoord_consults_total` | host, outcome | 774 | 258 hosts x 3 |
+| `backoffcoord_consult_latency_seconds` | - | 10 | one histogram |
+| `backoffcoord_wait_seconds` | host | 2,838 | 258 hosts x 11 |
+| `ratecoord_decisions_total` | host, outcome | 774 | 258 hosts x 3 outcomes |
+| `ratecoord_fallback_total` | - | 1 | no label |
+| `ratecoord_wait_seconds` | fellback | 24 | 2 x 12 |
+| `fleet_degraded_total` | primitive, suffix | 1,122 | 66 primitives (64, `_other`, `_unknown`) x 17 suffixes (16 and `_other`; an empty one is `_none`) |
+| `apikey_auth_total` | result, source | 30 | 5 results x 6 sources |
+| `apikey_keystore_call_duration_seconds` | result | 70 | 5 x 14 |
+| `apikey_keystore_inner_duration_seconds` | result | 70 | 5 x 14 |
+| `apikey_cache_total` | result | 5 | 5 results |
+| `apikey_cache_stale_age_seconds` | - | 13 | one histogram |
+| `apikey_admin_total` | op, result | 25 | 5 ops x 5 results |
+| `apikey_admin_duration_seconds` | op | 70 | 5 x 14 |
+| `fleet_selftest_check_pass` | check | 16 | 16 declared checks |
+| `fleet_selftest_check_runs_total` | check, result | 32 | 16 checks x 2 |
+| `fleet_selftest_runs_total` | result | 2 | pass, fail |
+| `fleet_selftest_run_duration_seconds` | - | 12 | one histogram |
+| `fleet_dep_probe_ok` | dep | 16 | 16 declared dependencies |
+| `fleet_dep_probe_runs_total` | dep, result | 32 | 16 x 2 |
+| `fleet_dep_probe_latency_seconds` | dep | 224 | 16 x 14 |
+| `policyeval_evaluations_total` | outcome, ruleset | 51 | 17 rulesets (16 and `_unlabeled`) x 3 outcomes |
+| `policyeval_rule_fires_total` | rule, ruleset | 272 | 17 rulesets x 16 rules |
+| `policyeval_errors_total` | ruleset | 17 | 17 rulesets |
+| `fleet_envelope_emitted_total` | schema_version | 8 | 8 schema versions |
+| `fleet_envelope_warnings_total` | reason | 4 | 4 warnings |
+| `fleet_circuit_state` | upstream | 16 | 16 declared upstreams |
+| `fleet_circuit_transitions_total` | from, reason, to, upstream | 720 | 16 x 3 x 3 x 5 reasons (fewer transitions exist) |
+| `fleet_circuit_trips_total` | upstream | 16 | 16 |
+| `pool_inflight` | pool | 16 | 16 declared pools |
+| `pool_queue_depth` | pool | 16 | 16 |
+| `pool_phase_total` | phase, pool | 80 | 16 x 5 phases |
+| `loadshed_in_flight` | gate | 16 | 16 declared gates |
+| `loadshed_admitted_total` | gate | 16 | 16 |
+| `loadshed_shed_total` | gate | 16 | 16 |
+| `proxysupplier_webshare_direct_refresh_total` | result | 2 | ok, error |
+| `proxysupplier_webshare_direct_*` | - | 1 | the other five, read at scrape time |
+| `go_container_*` | - | 1 | twenty cgroup gauges and counters, read at scrape time |
+| `fleet_graph_*` | - | 1 | six sender counters, read at scrape time |
+| `build_info` | built_at, git_sha, go_version, version | 1 | constant for the life of the process |
 
 ## Known limits
 
@@ -293,7 +403,10 @@ Wiring order:
 
 Label cardinality (`promx` `http_*`):
 
-- The `route` label is the raw `r.URL.Path`, capped at 512 distinct values; the
+- The `route` label is the raw `r.URL.Path`, capped at 512 distinct values (and,
+  since v0.106.0, a path that is not valid UTF-8 or is over 256 bytes is `_other`
+  and never named: `GET /%ff` made the middleware panic after the handler had run,
+  and a 1 MiB path would have been kept for the life of the process); the
   first 512 seen keep their own series, everything later is `_other` for the
   life of the process. `server.New` offered no way to change this:
   `AutoWire` takes no options, `HTTPCollectors` has no setter, and
@@ -315,9 +428,25 @@ Label cardinality (`promx` `http_*`):
   (`/{id}`, `/{uuid}`, `/{token}`) and `promx` does not. `WithPromRoute` is the
   way to return a template instead.
 - `fleet_degraded_total{primitive,suffix}` comes from whatever string is passed
-  to `degraded.Sink.Append`, uncapped. The host labels are capped (256), and
-  `pool`, `gate`, `dep`, `check`, `ruleset`, `upstream` come from names in code:
-  keep them constants.
+  to `degraded.Sink.Append`. **Since v0.106.0** a process names at most 64
+  primitives and 16 suffixes and counts the rest under `_other`; it was uncapped.
+  The `host` labels of the backoff, backoffcoord and ratecoord metrics are capped at
+  256 first-come values (the old egress rule, see v0.105.0 for why it fits a host
+  label badly; the two `..._wait_seconds` histograms are the largest host-labelled
+  families left, see [Series budgets](#series-budgets)), and `pool`, `gate`, `dep`,
+  `check`, `ruleset`, `upstream` come from names in code: keep them constants.
+- The `status` label was the response code as written, anything from 100 to 999,
+  and a handler that relays an upstream's status writes whatever the upstream sent.
+  **Since v0.106.0** a code nobody registered is its class (`499` is `4xx`, which a
+  `status=~"4.."` matcher still selects) and one outside 100-599 is `_other`.
+- The `scheme` label of `safehttp_egress_requests_total` was the scheme of the URL
+  the caller handed to the client, so a service that fetches the URLs its users send
+  could be made to mint one series set per invented scheme. **Since v0.106.0** it is
+  `http`, `https` or `_other`.
+- The metrics' cardinality is checked by tests, not by a linter: a lint rule on
+  `WithLabelValues(` (forbidigo, tried with the pinned golangci-lint) matches the
+  call and cannot see its arguments, so it flags `WithLabelValues("const")` as much as
+  `WithLabelValues(r.URL.Path)`, which is not a rule anyone keeps.
 
 Overlap and blind spots:
 

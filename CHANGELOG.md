@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.106.0] - 2026-10-20
+
+Nothing in go-common bounded or tested how many series a metric can create, and two labels taken from requests took the fleet's Prometheus down in three days (`method` in 0.102.74,
+`host` on the egress and fleetfetch histograms in 0.105.0). This release adds the tools that bound and test a label (`promx.BoundedLabel`, `testhelpers/promxtest`, a per-metric
+series budget in docs/observability.md that a test holds exact) and fixes what they found when run over every collector `promx` has: two panics a request could trigger, and three
+labels that grew with the input. Services pick it up with the next go-common bump.
+
+### Added
+
+- `promx.BoundedLabel` (`NewBoundedLabel(limit, WithMinHits(n), WithCandidateWindow(n))`, `Value`, `MaxValues`, `OtherLabel`, `UnknownLabel`, `MaxLabelValueLen`): the one supported way to
+  put a value the process does not choose in a label. It is the 0.105.0 host rule factored out of the egress and fleetfetch collectors (which now use it, unchanged: the same 32 heavy
+  hitters, admitted on their 64th hit) with a first-come mode (`WithMinHits` 1, the old 256-host and route caps) and the two guards below. The HTTP route and the backoff, backoffcoord and
+  ratecoord hosts use it too.
+- `testhelpers/promxtest`: `AssertBounded(t, register, probes, maxSeries)` registers a collector set in a fresh registry and drives a hostile corpus through it (`Inputs`: 2,000 distinct
+  hosts, methods, paths, schemes, user agents and names, every status from 100 to 999, values over 256 bytes and one of 1 MiB, unicode, control characters, and values that are not valid
+  UTF-8), twice, with the input at two sizes. It fails when a probe panics, when the larger run creates more series than the smaller (a label that grows with its input), when the series
+  exceed the budget, when a label value is longer than 256 bytes, and when the probes reach nothing. `Measure` and `Report` give the series per metric and the ceiling a metric's labels allow;
+  `Run` drives probes into a registry of your own.
+- docs/observability.md has a Series budgets table: the most series each `promx` metric can hold in one process under hostile input (82 metrics; 497,212 together, 483,160 of them the three
+  HTTP metrics that carry `route`). `TestSeriesBudgets` holds it exact: a metric without a row, a row without a metric, a number that is not the ceiling the probes measure and a labels column
+  that is not the metric's labels all fail. `TestCollectorsAreBounded` runs `AssertBounded` for each of the 20 collector sets, and `TestEveryCollectorHasAHarnessCase` fails for a new
+  `New...Collectors` constructor that has no hostile probes.
+- Tests: `TestHTTPServesARequestWhoseTargetIsNotUTF8` (a real server, `GET /%ff`), `TestEgressObservesAHostThatIsNotUTF8`, `FuzzBoundedLabel`. The harness run against 0.105.0's behaviour (the
+  scheme and status mappings and the two guards taken out) fails with the panics in the HTTP, egress and fleetfetch cases and with the HTTP `status` at 900 values.
+
+### Fixed
+
+- **BREAKING (behavioural):** a `route` or `host` label value that is not valid UTF-8, or longer than 256 bytes, is `_other`. client_golang panics in `WithLabelValues` on invalid UTF-8, and
+  both are reachable: `GET /%ff` gives the HTTP middleware the path `"/\xff"`, and `http://%ff.example/` gives an egress event the host `"\xff.example"`. The middleware panicked after the
+  handler had run (net/http recovered, logged a stack and closed the connection without the reply: one request, before authentication, from anyone who could reach the port); the egress
+  observer panicked inside the caller's `RoundTrip` or response-body `Close` once the host had been seen 64 times, which in a worker goroutine ends the process. A path or host of up to 1 MiB
+  was also held for the life of the process once admitted (route: first-come, 512 of them) or while a candidate (host: up to 1,024) and written into every scrape. Counts are unchanged: the
+  request is counted under `_other`.
+  - summary: a `route` or `host` label value that is not valid UTF-8 or is over 256 bytes counts under `_other` (it panicked, or was kept for the life of the process).
+- **BREAKING (behavioural):** `scheme` on `safehttp_egress_requests_total` is `http`, `https` or `_other` (`_unknown` when empty); it was the scheme of the URL the caller handed to the client.
+  A service that fetches the URLs its users send could be made to mint a series set per invented scheme (5,000 schemes made 5,001 series in the probe). safehttp itself only dials http and https.
+  - summary: `scheme` on `safehttp_egress_requests_total` is `http`, `https` or `_other` instead of whatever scheme the URL had.
+- **BREAKING (behavioural):** `status` on `http_requests_total` is the code itself when it is a registered one (the 62 codes `http.StatusText` knows) and its class otherwise (`499` is `4xx`,
+  `520` is `5xx`; a `status=~"5.."` matcher still selects it), `_other` outside 100-599. A handler that relays an upstream's status writes anything from 100 to 999 (900 values, each a series
+  set per method and route). The label is now a table lookup: it no longer allocates per request.
+  - summary: `status` on `http_requests_total` folds codes that are not registered into their class (`499` becomes `4xx`) and codes outside 100-599 into `_other`.
+- **BREAKING (behavioural):** `fleet_degraded_total` names at most 64 `primitive` and 16 `suffix` values per process, first-come, and counts the rest under `_other`. Both came from whatever string
+  a caller passed to `degraded.Sink.Append`, and the degraded package invites a third-party host in it. A service that uses a few names, as the convention says, sees no change.
+  - summary: `primitive` and `suffix` on `fleet_degraded_total` take at most 64 and 16 values per process; the rest count under `_other`.
+
+### Findings left alone
+
+- The HTTP collectors cap `route` per label, not per `(method, route)` pair: 514 routes by 10 methods is 5,140 pairs, which the two histograms cost 14 and 12 series each (71,960 and 61,680
+  per process, 349,520 for the counter with its 68 statuses). Normal traffic is a few dozen pairs. Capping the pair, or dropping `method` from the histograms as 0.105.0 dropped `host`, is a
+  behaviour change for the owner to decide.
+- `safehttp_backoff_waited_seconds` and `backoffcoord_wait_seconds` are histograms with `host` at 256 first-come values: 2,838 series each, the largest host-labelled families left. They are
+  the 0.105.0 problem at a smaller size (the first 256 hosts after boot); the same heavy-hitter rule would take them to 374. Not changed here: nothing says who reads them by host.
+- No lint rule: forbidigo (the pinned golangci-lint) matches `WithLabelValues` calls and cannot see their arguments, so it flags `WithLabelValues("const")` like `WithLabelValues(r.URL.Path)`.
+  The budget table and the harness are the check.
+
 ## [0.105.0] - 2026-10-19
 
 The egress and fleetfetch collectors no longer give every site a process fetches its own series: `host` is bounded at 32 heavy hitters per process, and the two histograms

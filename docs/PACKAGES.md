@@ -2,7 +2,7 @@
 
 # Package index
 
-72 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
+73 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
 
 | Package | Summary |
 | --- | --- |
@@ -71,6 +71,7 @@
 | [`testhelpers/fakekey`](../testhelpers/fakekey/) | Provides an in-memory implementation of the apikey.Verifier interface for use in tests. |
 | [`testhelpers/httpmock`](../testhelpers/httpmock/) | Provides canonical httptest.Server factories for common fleet upstream patterns. |
 | [`testhelpers/leakcheck`](../testhelpers/leakcheck/) | Fails a test that leaves goroutines running. |
+| [`testhelpers/promxtest`](../testhelpers/promxtest/) | Tests that a Prometheus collector cannot be made to create an unbounded number of series: it drives hostile label values through the collector and counts what the registry would hand Prometheus. |
 | [`testhelpers/ssrfcorpus`](../testhelpers/ssrfcorpus/) | One shared table of server-side-request-forgery probe targets, for testing any code that decides whether a host may be contacted: safehttp's guard, egressproxy's guard, a fetcher's default client. |
 | [`testhelpers/testclock`](../testhelpers/testclock/) | Re-exports clock.NewMock and clock.Mock for use in tests without importing the full clock package. |
 | [`ua`](../ua/) | Builds the fleet User-Agent header value. |
