@@ -216,11 +216,11 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// the time Start runs, the wrapper serves promx.Handler(). User
 	// registrations always win.
 	srv.promMetricsHandler = promx.Handler()
-	mux.HandleFunc("/metrics/json", func(w http.ResponseWriter, r *http.Request) {
+	srv.mount("/metrics/json", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(stats.Snapshot())
-	})
+	}))
 
 	// Publish the schema version (defaulting if unset) before mounting
 	// /capabilities + /schema so both endpoints serialize the same value
