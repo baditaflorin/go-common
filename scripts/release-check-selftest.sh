@@ -14,6 +14,9 @@
 #     the newest tag, which is not the previous entry), and passes it in a minor or major
 #     release, in a patch when the bullet is **BEHAVIOURAL (patch-safe):** with a reason:
 #     line, and when there is no tag; and does not apply the rule to a **BREAKING:** bullet;
+#   - fails a **SECURITY:** bullet unless compat/compat.json, in the same change, either raises
+#     min_safe to this release (with the fix in reasons and the date moved) or records
+#     min_safe_unchanged for it with a reason; one decision covers all the bullets of an entry;
 #   - names the line and the rule, and exits 0 for the same change written correctly.
 # scripts/whatchanged has its own unit tests; this is the part that is about git, tags,
 # exit codes and the order of the checks.
@@ -245,7 +248,83 @@ at "$base"; g tag -d v0.105.0 >/dev/null; entry 0.105.1 "$b" "  - summary: a thi
 run_case behavioural-change-with-no-tag 0
 g tag v0.105.0 "$base"
 
-# 4. No go, no check: it must not pass silently.
+# 4. A SECURITY bullet has to settle the floor, in the same change: raise min_safe to this release,
+# or record that it stays (min_safe_unchanged) with the reason.
+write_compat() { # <min_safe> <min_safe_date> <reasons items> <min_safe_unchanged items>
+  cat >compat/compat.json <<JSON
+{
+  "schema": 1,
+  "min_safe": "$1",
+  "min_safe_date": "$2",
+  "reasons": [$3],
+  "min_safe_unchanged": [$4],
+  "note": "selftest"
+}
+JSON
+}
+old_reason='{"version": "v0.102.2", "summary": "an old fix"}'
+sec='- **SECURITY:** a header is no longer forwarded.'
+secf='  - summary: a header is no longer forwarded.'
+
+at "$base"; entry 0.105.1 "$sec" "$secf"; regen
+run_case security-without-a-decision 1
+expect security-without-a-decision "SECURITY of v0.105.1 (CHANGELOG.md line 7): compat/compat.json has to settle what the fix does to the floor"
+expect security-without-a-decision "The floor is v0.102.2"
+
+at "$base"; entry 0.105.1 "$sec" "$secf"; regen
+write_compat v0.102.2 2026-09-27T15:03:06Z "$old_reason" '{"version": "v0.105.1", "reason": "a latent hole; a typical host cannot reach it"}'
+run_case security-with-an-unchanged-record 0
+
+at "$base"; entry 0.105.1 "$sec" "$secf" "$sec" "  - summary: and another."; regen
+write_compat v0.102.2 2026-09-27T15:03:06Z "$old_reason" '{"version": "v0.105.1", "reason": "both are latent"}'
+run_case two-security-bullets-one-record 0
+
+at "$base"; entry 0.105.1 "$sec" "$secf"; regen
+write_compat v0.102.2 2026-09-27T15:03:06Z "$old_reason" '{"version": "v0.105.9", "reason": "decided for the number this had before it was renumbered"}'
+run_case unchanged-record-for-another-release 1
+expect unchanged-record-for-another-release "has to settle what the fix does to the floor"
+
+at "$base"; entry 0.105.1 "$sec" "$secf"; regen
+write_compat v0.102.2 2026-09-27T15:03:06Z "$old_reason" '{"version": "v0.105.1", "reason": "  "}'
+run_case unchanged-record-without-a-reason 1
+expect unchanged-record-without-a-reason "has no reason"
+
+at "$base"; entry 0.105.1 "$sec" "$secf"; regen
+write_compat v0.105.1 2026-10-20T10:00:00Z "$old_reason, {\"version\": \"v0.105.1\", \"summary\": \"a header is no longer forwarded\"}" ''
+run_case floor-raised-to-this-release 0
+
+at "$base"; entry 0.105.1 "$sec" "$secf"; regen
+write_compat v0.105.1 2026-10-20T10:00:00Z "$old_reason" ''
+run_case floor-raised-without-the-reason-listed 1
+expect floor-raised-without-the-reason-listed '"reasons" has no entry for it'
+
+at "$base"; entry 0.105.1 "$sec" "$secf"; regen
+write_compat v0.105.1 2026-09-27T15:03:06Z "$old_reason, {\"version\": \"v0.105.1\", \"summary\": \"s\"}" ''
+run_case floor-raised-with-the-old-date 1
+expect floor-raised-with-the-old-date "is before the entry's date 2026-10-20"
+
+at "$base"; entry 0.105.1 "$sec" "$secf"; regen
+write_compat v0.105.1 2026-10-20T10:00:00Z "$old_reason, {\"version\": \"v0.105.1\", \"summary\": \"s\"}" '{"version": "v0.105.1", "reason": "r"}'
+run_case floor-raised-and-recorded-unchanged 1
+expect floor-raised-and-recorded-unchanged "it is one or the other"
+
+at "$base"; entry 0.105.1 "$sec" "$secf"; regen; echo '{' >compat/compat.json
+run_case security-with-an-unreadable-compat-json 1
+expect security-with-an-unreadable-compat-json "cannot read the decision"
+
+at "$base"; entry 0.105.1 "$sec"
+run_case security-without-a-summary 1
+expect security-without-a-summary "no summary: line"
+
+at "$base"; entry 0.105.1 "- **SECURITY (high):** x" "  - summary: s"
+run_case security-with-a-qualifier 1
+expect security-with-a-qualifier "SECURITY takes no qualifier"
+
+# No SECURITY bullet: compat.json is not looked at, so a change that leaves it alone passes (cases above), and so does one that breaks it.
+at "$base"; entry 0.105.1 "- a plain bullet"; regen; echo '{' >compat/compat.json
+run_case no-security-bullet-does-not-read-compat-json 0
+
+# 5. No go, no check: it must not pass silently.
 at "$base"; entry 0.105.1 "- a plain bullet"; regen
 mkdir "$tmp/nogo"
 for tool in bash git grep sed sort head tail wc tr cat dirname mktemp rm awk env; do ln -s "$(command -v "$tool")" "$tmp/nogo/$tool"; done
