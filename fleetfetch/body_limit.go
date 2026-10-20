@@ -14,22 +14,23 @@ import (
 )
 
 // DefaultMaxBodyBytes is the most of a response body a Client keeps unless it is
-// told otherwise (WithMaxBodyBytes, WithUnboundedBody, or EnvMaxBodyBytes): 8 MiB.
+// told otherwise (WithMaxBodyBytes, WithUnboundedBody, or EnvMaxBodyBytes): 32 MiB.
 // Bytes past it are dropped and Response.Truncated is set; the fetch is not an
 // error.
 //
-// Why 8 MiB: it is the figure this module already uses for the largest asset a
-// scraper reads (jsbundle.DefaultMaxScriptBytes, "production bundles over a few MB
-// are exceptional"), twice the 4 MiB request-body default of server.New and
-// validate, and above every limit that a fleet service chose for a page or a JSON
-// reply when it set one with WithMaxBodyBytes (1 to 5 MiB for almost all of the 50
-// or so call sites, 8 MiB for three; one image fetcher takes 12). A client that
-// never set a limit therefore keeps, in practice, what a client that did would have
-// kept, and a response of any size costs at most this much memory (the read buffer
-// can grow to about twice that while it fills). It is a ceiling for memory, not a
-// promise about content: a service that parses large documents says so with
-// WithMaxBodyBytes or WithUnboundedBody.
-const DefaultMaxBodyBytes int64 = 8 << 20
+// Why 32 MiB: it is what this module already applies to fetch-proxy responses
+// (client.DefaultBodyCap), and it is above every limit that a fleet service chose
+// for a page or a JSON reply when it set one with WithMaxBodyBytes (1 to 5 MiB for
+// almost all of the 50 or so call sites, 8 MiB for three; one image fetcher takes
+// 12) and above jsbundle.DefaultMaxScriptBytes (8 MiB). A lower figure would cut
+// documents that are legitimately large and are read by callers that do not look at
+// Truncated: the sitemap protocol allows 50 MiB uncompressed, and a silent cut at
+// 8 MiB breaks sitemap and large-feed fetchers. A response of any size now costs at
+// most this much memory (the read buffer can grow to about twice that while it
+// fills). It is a ceiling for memory, not a promise about content: a service that
+// parses larger documents says so with WithMaxBodyBytes (a sitemap fetcher that
+// wants the full 50 MiB: 50<<20) or WithUnboundedBody.
+const DefaultMaxBodyBytes int64 = 32 << 20
 
 // EnvMaxBodyBytes overrides DefaultMaxBodyBytes for every Client that does not set
 // its own limit with an option: a positive number of bytes is the limit, and 0
@@ -39,7 +40,7 @@ const DefaultMaxBodyBytes int64 = 8 << 20
 const EnvMaxBodyBytes = "FLEET_FETCH_MAX_BODY_BYTES"
 
 var _ = env.Declare(env.Var{
-	Name: EnvMaxBodyBytes, Kind: env.KindInt, Default: "8388608",
+	Name: EnvMaxBodyBytes, Kind: env.KindInt, Default: "33554432",
 	Doc: "Response-body limit in bytes for every fleetfetch client that does not set its own with WithMaxBodyBytes or WithUnboundedBody: a longer body is cut " +
 		"there and Response.Truncated is set. 0 removes the limit, which is discouraged: one oversized response can take all of a worker's memory. " +
 		"An unparsable or negative value is ignored.",

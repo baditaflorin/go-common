@@ -51,7 +51,7 @@ func WithTimeout(d time.Duration) Option {
 
 // WithMaxBodyBytes sets the most of a response body the client keeps, for both
 // cache responses and direct fallback responses. Without it the limit is
-// EnvMaxBodyBytes, else DefaultMaxBodyBytes (8 MiB). A longer body is cut at n
+// EnvMaxBodyBytes, else DefaultMaxBodyBytes (32 MiB). A longer body is cut at n
 // bytes and Response.Truncated is set; the fetch is not turned into an error. A
 // non-positive n is ignored (the limit stays the default): it used to mean
 // "unlimited", which is now spelled WithUnboundedBody so that nobody gets it by

@@ -15,7 +15,7 @@ The variables that go-common packages declare in the `env` registry, with what t
 
 | Variable | Kind | Default | Description |
 | --- | --- | --- | --- |
-| `FLEET_FETCH_MAX_BODY_BYTES` | int | `8388608` | Response-body limit in bytes for every fleetfetch client that does not set its own with WithMaxBodyBytes or WithUnboundedBody: a longer body is cut there and Response.Truncated is set. 0 removes the limit, which is discouraged: one oversized response can take all of a worker's memory. An unparsable or negative value is ignored. |
+| `FLEET_FETCH_MAX_BODY_BYTES` | int | `33554432` | Response-body limit in bytes for every fleetfetch client that does not set its own with WithMaxBodyBytes or WithUnboundedBody: a longer body is cut there and Response.Truncated is set. 0 removes the limit, which is discouraged: one oversized response can take all of a worker's memory. An unparsable or negative value is ignored. |
 
 ## `graph`
 

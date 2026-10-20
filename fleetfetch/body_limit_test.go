@@ -58,9 +58,9 @@ func getVia(t *testing.T, path string, body []byte, opts ...Option) *Response {
 	return r
 }
 
-func TestDefaultBodyLimitIs8MiB(t *testing.T) {
-	if DefaultMaxBodyBytes != 8<<20 {
-		t.Fatalf("DefaultMaxBodyBytes = %d, want 8 MiB", DefaultMaxBodyBytes)
+func TestDefaultBodyLimitIs32MiB(t *testing.T) {
+	if DefaultMaxBodyBytes != 32<<20 {
+		t.Fatalf("DefaultMaxBodyBytes = %d, want 32 MiB", DefaultMaxBodyBytes)
 	}
 	t.Setenv(EnvMaxBodyBytes, "")
 	if got := NewClient().bodyLimit(); got != DefaultMaxBodyBytes {

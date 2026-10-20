@@ -75,7 +75,7 @@
 //
 // # Response size
 //
-// A Client keeps at most DefaultMaxBodyBytes (8 MiB) of a response body, whichever
+// A Client keeps at most DefaultMaxBodyBytes (32 MiB) of a response body, whichever
 // path served it. A longer body is cut there and Response.Truncated is set; the
 // fetch is not an error. WithMaxBodyBytes sets another limit, the environment
 // variable FLEET_FETCH_MAX_BODY_BYTES changes it for clients that set none, and

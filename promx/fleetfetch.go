@@ -24,7 +24,7 @@ import (
 // dashboards only read the fleet-wide mean.
 //
 // fleet_fetch_truncated_total counts responses whose body was cut at the client's
-// body limit (fleetfetch.DefaultMaxBodyBytes, 8 MiB, unless the service sets
+// body limit (fleetfetch.DefaultMaxBodyBytes, 32 MiB, unless the service sets
 // another). It has no "host" on purpose: a service that sees it rise looks at its
 // logs, and a label per site would be an unbounded series again.
 //
