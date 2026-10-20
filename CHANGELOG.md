@@ -35,7 +35,10 @@ package behaves differently.
   0.63.0), from the one-line readings written for the adoption pull requests, cut to 200 characters. Five have an off-switch: 0.105.0's second bullet (a service that builds its own
   `EgressCollectors`), 0.104.0 (stay on 0.103.x), 0.103.0, 0.102.70's second bullet and 0.63.0. No other word of any entry changed.
 
-Verified: VERIFIED_PLACEHOLDER
+Verified: every step of `.woodpecker.yml` against the pushed branch, one after the other, in the pipeline's own images on the build host: `validate`, `race`, `lint` (0 issues, and its selftest), `vuln`, `forward-compat` on
+Go 1.27.2, `api` (no incompatible change: `compat` only gains identifiers), `bench`, `release` and `fuzz` (23 targets, 5 s each); `go run ./scripts/whatchanged v0.102.60 v0.105.0` lists the ten bullets of those
+releases, 0.103.0's off-switch among them; 16 deliberate breaks of the parser, `Between`, the renderer and `release-check.sh` each fail a test or the selftest (the first run missed a code fence in column 0, which
+has a test now). The steps were run by hand in those images, not by Woodpecker.
 
 ## [0.105.0] - 2026-10-19
 
