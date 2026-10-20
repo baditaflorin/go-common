@@ -520,6 +520,7 @@ func graphCase() harnessCase {
 		[]string{
 			"fleet_graph_events_recorded_total", "fleet_graph_events_dropped_total", "fleet_graph_batches_sent_total", "fleet_graph_batches_failed_total",
 			"fleet_graph_batches_rejected_total", "fleet_graph_events_dropped_invalid_identity_total",
+			"fleet_graph_batches_sent_spiffe_total", "fleet_graph_batches_spiffe_fallback_total",
 		},
 		func(reg prometheus.Registerer) *GraphCollectors { return NewGraphCollectors(reg, "svc") }, nil)
 }

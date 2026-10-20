@@ -58,4 +58,12 @@ type Counters struct {
 	// closed. A nonzero, rising value means the service emits nothing until
 	// the variable is fixed or unset.
 	EventsDroppedInvalidIdentity int64 `json:"events_dropped_invalid_identity"`
+	// BatchesSentSPIFFE is the subset of BatchesSent delivered over the SPIFFE
+	// mTLS path (GRAPH_SPIFFE_COLLECTOR_URL), without the writer key.
+	BatchesSentSPIFFE int64 `json:"batches_sent_spiffe"`
+	// BatchesSPIFFEFallback counts batches the SPIFFE path failed to deliver
+	// (no answer, or 401, 404, 405, 421) that were then sent with the writer
+	// key in the same flush. A rising value means the mTLS path is broken and
+	// the key is carrying the traffic.
+	BatchesSPIFFEFallback int64 `json:"batches_spiffe_fallback"`
 }

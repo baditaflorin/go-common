@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -13,6 +15,9 @@ import (
 )
 
 const graphAuthFailureCooldown = time.Minute
+
+// sendTimeout bounds one POST /events, on either path.
+const sendTimeout = 5 * time.Second
 
 // unknownIdentity is the placeholder older versions stamped on events recorded
 // before Init; the collector rejects it as the writer's own identity.
@@ -64,7 +69,16 @@ type sender struct {
 	stopped           chan struct{}
 	stopOnce          sync.Once
 	shutdownCtx       context.Context
-	authCooldownUntil int64 // unix nanos; accessed atomically
+	authCooldownUntil int64 // unix nanos; accessed atomically; the writer key path only
+
+	// The SPIFFE path (spiffe.go). mtlsConnected is closed when connectMTLS
+	// returns, or at once when the path is not configured.
+	mtlsMu            sync.Mutex
+	mtlsClient        MTLSClient
+	mtlsCooldownUntil time.Time
+	mtlsClosed        bool
+	mtlsConnected     chan struct{}
+	mtlsRetryPause    time.Duration // the first pause after a failed connect
 }
 
 func newSender(cfg config, serviceID, version string, r *ring, c *atomicCounters) *sender {
@@ -74,9 +88,12 @@ func newSender(cfg config, serviceID, version string, r *ring, c *atomicCounters
 		version:   version,
 		ring:      r,
 		counters:  c,
-		client:    newGraphHTTPClient(5 * time.Second),
+		client:    newGraphHTTPClient(sendTimeout),
 		stop:      make(chan struct{}),
 		stopped:   make(chan struct{}),
+
+		mtlsConnected:  make(chan struct{}),
+		mtlsRetryPause: mtlsConnectRetryMin,
 	}
 }
 
@@ -97,12 +114,18 @@ func (s *sender) identity() (string, string) {
 
 func (s *sender) run() {
 	defer close(s.stopped)
+	if s.cfg.enabled && s.cfg.spiffeConfigured() {
+		go s.connectMTLS()
+	} else {
+		close(s.mtlsConnected)
+	}
 	tick := time.NewTicker(s.cfg.flushInterval)
 	defer tick.Stop()
 	for {
 		select {
 		case <-s.stop:
 			s.flush(s.shutdownCtx) // bounded best-effort final flush
+			s.closeMTLS()
 			return
 		case <-tick.C:
 			s.flush(context.Background())
@@ -159,17 +182,26 @@ func (s *sender) flush(contexts ...context.Context) {
 // send reports the collector's verdict on the batch. After anything but
 // sendOK, flush stops: no more batches leave this process until a later
 // scheduled flush.
+//
+// The batch goes over the SPIFFE path when it is connected and not cooling
+// down, and with the writer key otherwise. A failure of the SPIFFE path itself
+// (mtlsPathFailure, or no answer at all) sends the same batch once more with
+// the key; any answer from the collector is final for this batch.
 func (s *sender) send(parent context.Context, events []Event) sendResult {
-	if !s.canWriteAt(time.Now()) {
-		return sendRetain
-	}
-	writerAPIKey := s.cfg.currentWriterAPIKey()
-	if writerAPIKey == "" {
+	now := time.Now()
+	if !s.canWriteAt(now) {
 		return sendRetain
 	}
 	serviceID, version := s.identity()
 	if serviceID == "" {
 		return sendRetain
+	}
+	mtls := s.mtlsClientAt(now)
+	writerAPIKey := ""
+	if mtls == nil {
+		if writerAPIKey = s.cfg.currentWriterAPIKey(); writerAPIKey == "" {
+			return sendRetain
+		}
 	}
 	stampOwnIdentity(events, serviceID)
 	batch := Batch{
@@ -183,41 +215,93 @@ func (s *sender) send(parent context.Context, events []Event) sendResult {
 		atomic.AddInt64(&s.counters.BatchesFailed, 1)
 		return sendRetain
 	}
-	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.collectorURL+"/events", bytes.NewReader(body))
+	if mtls != nil {
+		code, err := s.post(parent, mtls, s.cfg.spiffeCollectorURL, body, "", serviceID, version)
+		switch {
+		case err == nil && code >= 200 && code < 300:
+			atomic.AddInt64(&s.counters.BatchesSent, 1)
+			atomic.AddInt64(&s.counters.BatchesSentSPIFFE, 1)
+			return sendOK
+		case err == nil && !mtlsPathFailure(code):
+			if code == http.StatusForbidden {
+				// The listener took this workload but maps it to another
+				// writer than this batch names: the key may be right.
+				s.mtlsPathFailed(now, "status 403")
+			}
+			atomic.AddInt64(&s.counters.BatchesFailed, 1)
+			if rejectedStatus(code) {
+				atomic.AddInt64(&s.counters.BatchesRejected, 1)
+				return sendRejected
+			}
+			return sendRetain
+		}
+		reason := fmt.Sprintf("status %d", code)
+		if err != nil {
+			reason = err.Error()
+		}
+		s.mtlsPathFailed(now, reason)
+		if !s.keyUsableAt(now) {
+			atomic.AddInt64(&s.counters.BatchesFailed, 1)
+			return sendRetain
+		}
+		if writerAPIKey = s.cfg.currentWriterAPIKey(); writerAPIKey == "" {
+			atomic.AddInt64(&s.counters.BatchesFailed, 1)
+			return sendRetain
+		}
+		atomic.AddInt64(&s.counters.BatchesSPIFFEFallback, 1)
+	}
+	code, err := s.post(parent, s.client, s.cfg.collectorURL, body, writerAPIKey, serviceID, version)
 	if err != nil {
 		atomic.AddInt64(&s.counters.BatchesFailed, 1)
 		return sendRetain
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "go-common-graph/"+version+" ("+serviceID+")")
-	req.Header.Set(header.APIKey, writerAPIKey)
-	if s.cfg.node != "" {
-		req.Header.Set(NodeHeader, s.cfg.node)
-	}
-	resp, err := s.client.Do(req)
-	if err != nil {
-		atomic.AddInt64(&s.counters.BatchesFailed, 1)
-		return sendRetain
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	if code >= 200 && code < 300 {
 		atomic.AddInt64(&s.counters.BatchesSent, 1)
 		return sendOK
 	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+	if code == http.StatusUnauthorized || code == http.StatusForbidden {
 		// Auth failures indicate a policy/key mismatch, not transient
 		// backpressure. Cool down for a minute to avoid hammering the
 		// verifier while preserving the remaining ring for observation.
 		atomic.StoreInt64(&s.authCooldownUntil, time.Now().Add(graphAuthFailureCooldown).UnixNano())
 	}
 	atomic.AddInt64(&s.counters.BatchesFailed, 1)
-	if rejectedStatus(resp.StatusCode) {
+	if rejectedStatus(code) {
 		atomic.AddInt64(&s.counters.BatchesRejected, 1)
 		return sendRejected
 	}
 	return sendRetain
+}
+
+// post sends one batch body to endpoint/events and returns the status code,
+// or the error when there was no answer. The writer key header is set only
+// when writerAPIKey is not empty, so the SPIFFE path never carries it.
+func (s *sender) post(parent context.Context, client interface {
+	Do(*http.Request) (*http.Response, error)
+}, endpoint string, body []byte, writerAPIKey, serviceID, version string) (int, error) {
+	ctx, cancel := context.WithTimeout(parent, sendTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/events", bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "go-common-graph/"+version+" ("+serviceID+")")
+	if writerAPIKey != "" {
+		req.Header.Set(header.APIKey, writerAPIKey)
+	}
+	if s.cfg.node != "" {
+		req.Header.Set(NodeHeader, s.cfg.node)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	// Read the short answer so the connection can be reused: on the SPIFFE
+	// path a new connection is a new mTLS handshake.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	_ = resp.Body.Close()
+	return resp.StatusCode, nil
 }
 
 // stampOwnIdentity fills the service's own side of each event (the caller of
@@ -246,6 +330,15 @@ func (s *sender) configuredForWrite() bool {
 
 func (s *sender) canWriteAt(now time.Time) bool {
 	if !s.configuredForWrite() {
+		return false
+	}
+	return s.mtlsClientAt(now) != nil || s.keyUsableAt(now)
+}
+
+// keyUsableAt reports whether the writer key path is configured and not
+// cooling down after a 401 or 403.
+func (s *sender) keyUsableAt(now time.Time) bool {
+	if !s.cfg.keyPathConfigured() {
 		return false
 	}
 	until := atomic.LoadInt64(&s.authCooldownUntil)
@@ -303,6 +396,11 @@ type atomicCounters struct {
 	// EventsDroppedInvalidIdentity counts events dropped because an invalid
 	// GRAPH_SERVICE_ID makes the identity fail closed.
 	EventsDroppedInvalidIdentity int64
+	// BatchesSentSPIFFE is the subset of BatchesSent delivered over the SPIFFE
+	// path; BatchesSPIFFEFallback counts batches sent with the writer key
+	// after the SPIFFE path failed for them.
+	BatchesSentSPIFFE     int64
+	BatchesSPIFFEFallback int64
 }
 
 func (c *atomicCounters) snapshot() Counters {
@@ -314,5 +412,7 @@ func (c *atomicCounters) snapshot() Counters {
 		BatchesFailed:                atomic.LoadInt64(&c.BatchesFailed),
 		BatchesRejected:              atomic.LoadInt64(&c.BatchesRejected),
 		EventsDroppedInvalidIdentity: atomic.LoadInt64(&c.EventsDroppedInvalidIdentity),
+		BatchesSentSPIFFE:            atomic.LoadInt64(&c.BatchesSentSPIFFE),
+		BatchesSPIFFEFallback:        atomic.LoadInt64(&c.BatchesSPIFFEFallback),
 	}
 }
