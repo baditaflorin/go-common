@@ -42,11 +42,25 @@ func withWebshareDirectBaseURL(t *testing.T, url string) {
 // the deadline passes. The initial fetch is deliberately asynchronous
 // (see newWebshareDirectSupplier's doc comment) so tests must wait for it
 // instead of asserting immediately after construction.
+//
+// refreshOnce installs the pool first and counts the outcome after (RefreshSuccesses, then the
+// time of the last success), so a caller that has just seen a proxy URL can still read zero
+// successes and a negative age. For a webshare_direct supplier this waits for both too, so a test
+// that reads the pool state next sees a refresh that is fully recorded.
 func waitForNonEmptyProxyURL(t *testing.T, s Supplier, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if u := s.ProxyURL(); u != "" {
+			if ws, ok := s.(*webshareDirectSupplier); ok {
+				for time.Now().Before(deadline) {
+					if st := ws.poolSnapshot(time.Now().UnixNano()); st.RefreshSuccesses >= 1 && st.LastRefreshAgeSeconds >= 0 {
+						return u
+					}
+					time.Sleep(time.Millisecond)
+				}
+				t.Fatalf("a proxy URL is served, but no successful refresh was recorded after %s: %+v", timeout, ws.poolSnapshot(time.Now().UnixNano()))
+			}
 			return u
 		}
 		time.Sleep(2 * time.Millisecond)
