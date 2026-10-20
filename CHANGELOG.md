@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.105.1] - 2026-10-20
+
+The CI pipeline runs its steps in two stages instead of one after another, and a pull request fuzzes only the packages it touches. No package changes.
+
+Why: a pull request pipeline took 358 to 576 s (six recent ones: 387, 412, 576, 358, 422 and 384 s, 733 s the day `forward-compat` was added). The steps ran one after another, and the `fuzz` step alone was
+175 to 232 s of it, about half, to mutate every target for a change that mostly touches none: of the last 13 merges to main, 8 touched no package with a Fuzz target.
+
+### Changed
+
+- `.woodpecker.yml`: the steps now form a graph (`depends_on`). Stage 1 is `refs`, `validate`, `race`, `vuln` and `forward-compat`; stage 2 is `lint`, `api`, `bench`, `release` and `fuzz`, which wait for `refs`.
+  Woodpecker 3.17 turns `depends_on` into stages (checked with `woodpecker-cli exec`: a step that depends on a fast step still starts only when every step of the previous stage is done), so a pipeline takes about as long as
+  the slowest step of each stage. Concurrency is capped at five steps; the other four steps have no `depends_on`, which in a graph pipeline means "start now". The agent runs one workflow at a time
+  (`WOODPECKER_MAX_WORKFLOWS=1`) but all steps of that workflow at once and is shared with the fleet's other pull requests; the CPU work is the same as before (a test run is about 450 CPU-seconds, three of them in stage 1),
+  it now happens in a shorter burst. Every `when` is unchanged and the lint image is still pinned by digest. A step may only depend on a step that exists for the same event, or Woodpecker refuses the whole
+  pipeline ("depends on step ... which is filtered out"): all of the steps that run for pull requests only depend on `refs`, which runs for both events.
+- A step that fails now skips the next stage (it already skipped everything after it). Stage 1 is allowed to finish, so a pull request sees every stage 1 failure in one run.
+- `fuzz` runs for pushes to main as well as pull requests. It had never run on main: a pull request ran every target, main ran none. Now a pull request runs `scripts/fuzz-changed.sh 5s` and a push to main runs
+  `scripts/fuzz.sh 5s`, every target, so each is mutated at least once per merge. That adds the full fuzz run (about 190 s on its own) to a main pipeline; main pipelines gate nothing, and the step starts with stage 2, so it overlaps `lint` and `api`. A nightly run with a long
+  `-fuzztime` needs a cron schedule on the Woodpecker server and is not set up here.
+
+### Added
+
+- `scripts/fuzz-changed.sh [fuzztime] [base-ref]`: fuzzes only the targets of the packages with a changed file (the diff from the base chosen by `scripts/lib/base-ref.sh`, the merge base with the target branch for a pull request,
+  to the working tree; the old path of a rename counts; a file under `testdata/` belongs to its package, so a committed crash re-runs its target). It fuzzes every package when `go.mod`, `go.sum` or `scripts/fuzz.sh` changed or no base can be found,
+  and passes at once when no touched package has a Fuzz target. A package that only imports a changed one is not fuzzed: 38 of 77 packages are, or are imported by, a package that has a Fuzz target, most of those imports incidental (`response`,
+  `telemetry` and `secrets` are imported by four fuzzed packages that no target exercises through them), which would make the smoke nearly a full run again; `go test` still replays every seed corpus on every pull request.
+  `FUZZ_ALL=1` and `FUZZ_DRY_RUN=1` are the escape hatch and the way to see what it would do. This is a real narrowing: a regression that only a mutation run of a dependent package's target would find is now found on the
+  merge to main, not on the pull request.
+- `scripts/fuzz-changed-selftest.sh`, in the `validate` step: a throwaway git repository and a fake `go`, 21 cases: which targets run for a change in a package with targets, without, nested, in `testdata/`, renamed, deleted or untracked,
+  a nested module, a function named `Fuzzy`, the full-run triggers, no base, a dry run, and a pull request compared with its merge base while the target branch moved on. Five deliberate breaks of the script
+  (no `testdata` exclusion, no nested-module exclusion, a looser target pattern, no `go.mod` trigger, diffing against HEAD instead of the working tree) each fail it.
+- A `refs` step: in a pull request it fetches the target branch and the tags once, with three tries. The checkout holds the commit and its history but no other branch and no tag, so every step that compares with the
+  target branch fetched it itself; with the steps side by side, five `git fetch` into one repository at once can fail on a ref lock. `lint` no longer fetches; `release-check.sh`'s own fetch finds nothing to do.
+
+Verified: `woodpecker-cli lint` (3.17) accepts the file; `woodpecker-cli exec --local` on the build host ran the whole pull request pipeline (exit 0, all ten steps) and started the push pipeline's first stage; the selftest
+passes in `golang:1.26`; `scripts/fuzz-changed.sh` was run over the last 13 merges to main (8 fuzz nothing, 4 fuzz 1 to 7 packages, 1 fuzzes everything). The measured pipeline durations are in the pull request.
+
 ## [0.105.0] - 2026-10-19
 
 The egress and fleetfetch collectors no longer give every site a process fetches its own series: `host` is bounded at 32 heavy hitters per process, and the two histograms
