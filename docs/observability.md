@@ -404,7 +404,7 @@ Wiring order:
 Label cardinality (`promx` `http_*`):
 
 - The `route` label is the raw `r.URL.Path`, capped at 512 distinct values (and,
-  since v0.106.0, a path that is not valid UTF-8 or is over 256 bytes is `_other`
+  since v0.107.0, a path that is not valid UTF-8 or is over 256 bytes is `_other`
   and never named: `GET /%ff` made the middleware panic after the handler had run,
   and a 1 MiB path would have been kept for the life of the process); the
   first 512 seen keep their own series, everything later is `_other` for the
@@ -428,7 +428,7 @@ Label cardinality (`promx` `http_*`):
   (`/{id}`, `/{uuid}`, `/{token}`) and `promx` does not. `WithPromRoute` is the
   way to return a template instead.
 - `fleet_degraded_total{primitive,suffix}` comes from whatever string is passed
-  to `degraded.Sink.Append`. **Since v0.106.0** a process names at most 64
+  to `degraded.Sink.Append`. **Since v0.107.0** a process names at most 64
   primitives and 16 suffixes and counts the rest under `_other`; it was uncapped.
   The `host` labels of the backoff, backoffcoord and ratecoord metrics are capped at
   256 first-come values (the old egress rule, see v0.105.0 for why it fits a host
@@ -437,11 +437,11 @@ Label cardinality (`promx` `http_*`):
   `check`, `ruleset`, `upstream` come from names in code: keep them constants.
 - The `status` label was the response code as written, anything from 100 to 999,
   and a handler that relays an upstream's status writes whatever the upstream sent.
-  **Since v0.106.0** a code nobody registered is its class (`499` is `4xx`, which a
+  **Since v0.107.0** a code nobody registered is its class (`499` is `4xx`, which a
   `status=~"4.."` matcher still selects) and one outside 100-599 is `_other`.
 - The `scheme` label of `safehttp_egress_requests_total` was the scheme of the URL
   the caller handed to the client, so a service that fetches the URLs its users send
-  could be made to mint one series set per invented scheme. **Since v0.106.0** it is
+  could be made to mint one series set per invented scheme. **Since v0.107.0** it is
   `http`, `https` or `_other`.
 - The metrics' cardinality is checked by tests, not by a linter: a lint rule on
   `WithLabelValues(` (forbidigo, tried with the pinned golangci-lint) matches the

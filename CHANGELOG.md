@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.106.0] - 2026-10-20
+## [0.107.0] - 2026-10-20
 
 Nothing in go-common bounded or tested how many series a metric can create, and two labels taken from requests took the fleet's Prometheus down in three days (`method` in 0.102.74,
 `host` on the egress and fleetfetch histograms in 0.105.0). This release adds the tools that bound and test a label (`promx.BoundedLabel`, `testhelpers/promxtest`, a per-metric

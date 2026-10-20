@@ -30,7 +30,7 @@ import (
 // on 2026-10-19). "host" is a BoundedLabel, so a host that is not valid UTF-8 or
 // is longer than MaxLabelValueLen counts under "_other" too. "scheme" is "http" or
 // "https", and "_other" for any other scheme in the URL a caller handed to the
-// client (the label was the raw scheme before 0.106.0). "outcome" is a fixed-size
+// client (the label was the raw scheme before 0.107.0). "outcome" is a fixed-size
 // enum drawn from safehttp.EgressOutcome (~9 values), so the product label space is
 // bounded.
 //
