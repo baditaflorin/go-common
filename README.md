@@ -71,6 +71,7 @@ Every change to the module has to pass, in CI (Woodpecker, `.woodpecker.yml`):
 | `scripts/bench-gate.sh` | A hot-path benchmark that started allocating more (allocs/op, against the merge base) |
 | `scripts/release-check.sh` | A CHANGELOG version that is malformed, already tagged, or not the next free one |
 | `scripts/fuzz-changed.sh` (short smoke of the packages the change touches; a push to main runs `scripts/fuzz.sh`, every target) | Panics and hangs on hostile input in the parsers |
+| `scripts/coverage-ratchet.sh` (pushes to main only; run it by hand on a pull request) | A package whose statement coverage fell below its floor in [coverage/floors.txt](coverage/README.md), or a tested package with no floor |
 | `go run ./scripts/pkgindex -check` | A stale package index, or a package with no doc comment |
 | `go run ./scripts/envdoc -check` | A stale `docs/ENV.md`, or a package that declares environment variables but is not imported by the generator |
 | `lint/selftest.sh` | The shared lint config no longer firing |
