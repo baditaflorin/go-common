@@ -5,7 +5,11 @@
 # Pipelines run for pull requests, and for pushes to main; a push to a PR branch
 # is covered by its PR run, so each change is built once, not twice.
 #
-# Steps run in order. `validate` keeps its original name and commands so
+# The steps form a graph (depends_on), not a queue: they run side by side, so a
+# pipeline takes about as long as its slowest step rather than the sum of them. The
+# agent runs one workflow at a time but all of a workflow's steps at once, and it is
+# shared with the fleet's other pull requests, so keep a new step light or make it
+# wait for one that is done. `validate` keeps its original name and commands so
 # anything keyed on it is unaffected; the rest were added by the hardening work
 # (race, lint, vuln, forward compatibility, API compatibility, benchmarks, release
 # number, fuzz smoke, package index). Tool versions
@@ -22,6 +26,30 @@ clone:
       partial: false
 
 steps:
+  # The clone holds the commit and its history but no other branch and no tag. Every
+  # step that compares with the target branch or reads the tags needs them, and several
+  # `git fetch` into one repository at once can fail on a ref lock, so this one step
+  # fetches them and those steps wait for it (depends_on: [refs]). A push needs only
+  # HEAD^, which the clone has. The fetch is tried three times: a refused connection
+  # should not fail five steps.
+  refs:
+    image: golang:1.26
+    commands:
+      - git config --global --add safe.directory '*'
+      - |
+        if [ "$CI_PIPELINE_EVENT" = "pull_request" ]; then
+          for attempt in 1 2 3; do
+            git fetch -q --tags origin "+refs/heads/$CI_COMMIT_TARGET_BRANCH:refs/remotes/origin/$CI_COMMIT_TARGET_BRANCH" && exit 0
+            sleep $((attempt * 2))
+          done
+          echo "refs: cannot fetch $CI_COMMIT_TARGET_BRANCH from origin" >&2
+          exit 1
+        fi
+    when:
+      - event: pull_request
+      - event: push
+        branch: main
+
   validate:
     image: golang:1.26
     environment:
@@ -43,6 +71,11 @@ steps:
       # forward-compat.sh edits only a copy, passes the go line it was given and fails when
       # the tests do.
       - scripts/forward-compat-selftest.sh
+      # fuzz-changed.sh hands scripts/fuzz.sh the packages a change touches, and every package
+      # when it cannot tell.
+      - scripts/fuzz-changed-selftest.sh
+      # coverage-ratchet.sh reads the floors, fails below one, raises them and never lowers them.
+      - scripts/coverage-ratchet-selftest.sh
     when:
       - event: pull_request
       - event: push
@@ -62,9 +95,9 @@ steps:
 
   # Only findings in code this change touches fail the step; the legacy findings
   # do not block anyone. A PR is compared with the merge base with its target
-  # branch (not the branch tip, which may have moved on), a push with the
-  # previous commit. lint/selftest.sh proves the shared consumer config in lint/
-  # still fires.
+  # branch (not the branch tip, which may have moved on; `refs` fetched it), a push
+  # with the previous commit. lint/selftest.sh proves the shared consumer config in
+  # lint/ still fires.
   lint:
     # golangci-lint v2.14.0, pinned by digest.
     image: golangci/golangci-lint:v2.14.0@sha256:ad862ba6b3798cbe0fd9fd7408d498fd74fbd2623a92406b2fd3898faf0bf98f
@@ -72,12 +105,12 @@ steps:
       - git config --global --add safe.directory '*'
       - |
         if [ "$CI_PIPELINE_EVENT" = "pull_request" ]; then
-          git fetch -q --no-tags origin "$CI_COMMIT_TARGET_BRANCH"
           golangci-lint run --new-from-merge-base="origin/$CI_COMMIT_TARGET_BRANCH" ./...
         else
           golangci-lint run --new-from-rev=HEAD^ ./...
         fi
       - lint/selftest.sh
+    depends_on: [refs]
     when:
       - event: pull_request
       - event: push
@@ -132,6 +165,7 @@ steps:
     commands:
       - git config --global --add safe.directory '*'
       - scripts/apidiff-check.sh
+    depends_on: [refs]
     when:
       - event: pull_request
       - event: push
@@ -146,6 +180,7 @@ steps:
     commands:
       - git config --global --add safe.directory '*'
       - scripts/bench-gate.sh
+    depends_on: [refs]
     when:
       event: [pull_request]
 
@@ -155,17 +190,52 @@ steps:
     commands:
       - git config --global --add safe.directory '*'
       - scripts/release-check.sh
+    depends_on: [refs]
     when:
       event: [pull_request]
 
-  # A short mutation run of every Fuzz target. The seed corpus (including every
+  # A short mutation run of Fuzz targets. The seed corpus (including every
   # committed crash) already runs in `go test`; this is the part that mutates.
-  # Long runs belong in a nightly job: scripts/fuzz.sh 5m.
+  # A pull request fuzzes only the targets of the packages it touches
+  # (scripts/fuzz-changed.sh: about half of a pipeline was a full run, and most changes
+  # touch no fuzzed package); a push to main fuzzes every target, so each one is
+  # mutated at least once per merge. Long runs belong in a nightly job (scripts/fuzz.sh
+  # 5m), which needs a cron schedule set on the Woodpecker server.
   fuzz:
     image: golang:1.26
     environment:
       CGO_ENABLED: "0"
     commands:
-      - scripts/fuzz.sh 5s
+      - git config --global --add safe.directory '*'
+      - |
+        if [ "$CI_PIPELINE_EVENT" = "pull_request" ]; then
+          scripts/fuzz-changed.sh 5s
+        else
+          scripts/fuzz.sh 5s
+        fi
+    depends_on: [refs]
     when:
-      event: [pull_request]
+      - event: pull_request
+      - event: push
+        branch: main
+
+  # Per-package coverage floors (coverage/floors.txt, coverage/README.md): a package whose
+  # statement coverage falls below its floor, or a tested package with no floor, fails. The
+  # floors are measured minus 2 points and only ever go up. It is another full test run
+  # (about 450 CPU-seconds) on an agent shared with the fleet's pull requests, so it runs on
+  # pushes to main only, not on every pull request: run scripts/coverage-ratchet.sh by hand
+  # before a change that removes or rewrites tests. A nightly run would be `event: cron`, but
+  # the schedule is repository configuration on the Woodpecker server, so none is added here.
+  coverage:
+    image: golang:1.26
+    environment:
+      CGO_ENABLED: "0"
+      # "1" prints the table and the verdict but never fails: the switch for a floor that
+      # blocks work it should not, until the floors are fixed.
+      COVERAGE_ADVISORY: "0"
+    commands:
+      - scripts/coverage-ratchet.sh
+    depends_on: [validate]
+    when:
+      - event: push
+        branch: main

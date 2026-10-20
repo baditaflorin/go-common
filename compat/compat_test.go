@@ -1,6 +1,7 @@
 package compat
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -180,5 +181,90 @@ func TestCheckGoMod(t *testing.T) {
 		if res.Status != tc.want {
 			t.Errorf("%s: status = %s (%s), want %s", tc.name, res.Status, res.Message, tc.want)
 		}
+	}
+}
+
+const unchangedDoc = `{"schema":1,"min_safe":"v0.102.2","min_safe_date":"2026-09-27T15:03:06Z",
+	"reasons":[{"version":"v0.102.2","summary":"x"}],
+	"min_safe_unchanged":[{"version":"v0.106.0","reason":"a latent hole"}]}`
+
+func TestMinSafeUnchangedParses(t *testing.T) {
+	t.Parallel()
+	m, err := Parse([]byte(unchangedDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.MinSafeUnchanged) != 1 || m.MinSafeUnchanged[0].Version != "v0.106.0" || m.MinSafeUnchanged[0].Reason != "a latent hole" {
+		t.Fatalf("got %+v", m.MinSafeUnchanged)
+	}
+	// The record changes no verdict.
+	for ver, want := range map[string]Status{"v0.102.1": StatusBelowFloor, "v0.102.2": StatusOK, "v0.106.0": StatusOK} {
+		if res, err := m.Check(ver); err != nil || res.Status != want {
+			t.Errorf("Check(%s) = %+v, %v, want %s", ver, res, err, want)
+		}
+	}
+}
+
+func TestParseRejectsBadMinSafeUnchanged(t *testing.T) {
+	t.Parallel()
+	base := `{"schema":1,"min_safe":"v0.102.2","min_safe_date":"2026-09-27T15:03:06Z","min_safe_unchanged":%s}`
+	for name, recs := range map[string]string{
+		"not a version":    `[{"version":"banana","reason":"r"}]`,
+		"a pre-release":    `[{"version":"v0.106.0-rc.1","reason":"r"}]`,
+		"no v":             `[{"version":"0.106.0","reason":"r"}]`,
+		"no reason":        `[{"version":"v0.106.0"}]`,
+		"a blank reason":   `[{"version":"v0.106.0","reason":"  "}]`,
+		"the same release": `[{"version":"v0.106.0","reason":"a"},{"version":"v0.106.0","reason":"b"}]`,
+	} {
+		if _, err := Parse([]byte(strings.Replace(base, "%s", recs, 1))); err == nil {
+			t.Errorf("%s: Parse accepted %s", name, recs)
+		}
+	}
+}
+
+// The manifest has to stay readable by the releases of this package that predate the
+// record: they decode it with encoding/json into a Manifest that has no such field.
+func TestMinSafeUnchangedIsInvisibleToAnOlderReader(t *testing.T) {
+	t.Parallel()
+	type oldManifest struct {
+		Schema      int       `json:"schema"`
+		MinSafe     string    `json:"min_safe"`
+		MinSafeDate time.Time `json:"min_safe_date"`
+		Reasons     []Reason  `json:"reasons"`
+		Note        string    `json:"note"`
+	}
+	var old oldManifest
+	if err := json.Unmarshal([]byte(unchangedDoc), &old); err != nil {
+		t.Fatalf("an older reader fails on the record: %v", err)
+	}
+	if old.MinSafe != "v0.102.2" || len(old.Reasons) != 1 {
+		t.Fatalf("an older reader read %+v", old)
+	}
+}
+
+func TestFloorDecision(t *testing.T) {
+	t.Parallel()
+	m, err := Parse([]byte(unchangedDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		ver    string
+		status FloorStatus
+		reason string
+	}{
+		{"v0.80.0", FloorCovers, ""},
+		{"v0.102.2", FloorCovers, ""}, // the floor itself
+		{"v0.102.3", FloorUndecided, ""},
+		{"v0.106.0", FloorUnchanged, "a latent hole"},
+		{"v0.106.1", FloorUndecided, ""},
+	} {
+		st, reason, err := m.FloorDecision(tc.ver)
+		if err != nil || st != tc.status || reason != tc.reason {
+			t.Errorf("FloorDecision(%s) = %s, %q, %v; want %s, %q", tc.ver, st, reason, err, tc.status, tc.reason)
+		}
+	}
+	if _, _, err := m.FloorDecision("banana"); err == nil {
+		t.Error("FloorDecision accepted banana")
 	}
 }

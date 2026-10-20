@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.107.0] - 2026-10-20
+## [0.106.0] - 2026-10-20
 
 Nothing in go-common bounded or tested how many series a metric can create, and two labels taken from requests took the fleet's Prometheus down in three days (`method` in 0.102.74,
 `host` on the egress and fleetfetch histograms in 0.105.0). This release adds the tools that bound and test a label (`promx.BoundedLabel`, `testhelpers/promxtest`, a per-metric
@@ -55,6 +55,154 @@ labels that grew with the input. Services pick it up with the next go-common bum
 - No lint rule: forbidigo (the pinned golangci-lint) matches `WithLabelValues` calls and cannot see their arguments, so it flags `WithLabelValues("const")` like `WithLabelValues(r.URL.Path)`.
   The budget table and the harness are the check.
 
+## [0.105.5] - 2026-10-20
+
+A security fix has to settle `min_safe` in the same change: `scripts/release-check.sh` now requires it, and the decision is written down. The mechanism only: `min_safe` is not moved here,
+and no package behaves differently.
+
+### Added
+
+- A `**SECURITY:**` bullet class, written like the others (a `summary:` line, an optional `off-switch:`; no qualifier). For an entry that has one, `release-check` requires
+  `compat/compat.json`, in the same change, to either raise `min_safe` to this release (with the fix in `reasons`, and `min_safe_date` not before the entry's date) or carry a
+  `min_safe_unchanged` record for this release with a reason. One decision covers every `**SECURITY:**` bullet of the entry. It is keyed by the version, so a release that is
+  renumbered at merge has to move its record or the check fails. Why: `min_safe` is v0.102.2 (2026-09-27). 0.102.70 (2026-10-17) closed SSRF classification bypasses (NAT64, 6to4) and
+  guarded `jsbundle`'s default client, and the floor did not move and no entry says why, so nothing tells a reader whether a pin that is below 0.102.70 is exposed or whether someone
+  judged it fine. Which of the two is a human decision about go-common's own fixes; the check only makes sure that a decision exists.
+- `compat/compat.json` gains the optional `min_safe_unchanged` list (`{"version", "reason"}`), and `compat` gains `Manifest.MinSafeUnchanged`, `FloorDecision` (covered by the floor,
+  left alone on purpose with the reason, or undecided) and the validation of the records (a release version, a reason, once per release). The schema is still 1 and no record is
+  added: older releases of the package decode the file with `encoding/json` and ignore the field (`TestMinSafeUnchangedIsInvisibleToAnOlderReader` pins that, and the check
+  below ran the previous release's own tests against a manifest that has a record). 0.102.70 stays undecided; it is not for this change to decide it.
+- `scripts/whatchanged` lists the `**SECURITY:**` bullets like the others, with the decision under each (`Floor: ...`). The one bullet of this kind that predates the class, in
+  v0.80.0, was written `**SECURITY:` with the colon inside the bold, which the grammar already reads; it gets its `summary:` and so shows in `compat/changes.json`, as
+  "covered by the floor".
+- `scripts/release-check-selftest.sh` gains 13 cases (34 to 47 in all): no decision, a record for the release, one record for two bullets, a record for another release (the
+  renumbering case), a record without a reason, the floor raised properly, without its reason listed, with the old date, and both raised and recorded, an unreadable `compat.json`, a
+  `**SECURITY:**` bullet without a summary or with a qualifier, and an entry with no such bullet and an unreadable `compat.json` (not read).
+- `docs/releasing.md` describes the class and the two ways to settle the floor.
+
+Verified: every step of `.woodpecker.yml` against the pushed branch, by hand, in the pipeline's own images on the build host: `validate`, `race`, `lint` (0 issues), `vuln`, `forward-compat` on Go 1.27.2, `api`, `bench`, `release` and
+`fuzz` (23 targets); the previous release's own `compat` package (v0.105.0, untouched) passes its tests, a 5 s `FuzzCheck` run and `compatcheck` against a `compat.json` that has a `min_safe_unchanged` record; ten deliberate breaks of the
+rule and of the new `compat` code each fail a test or the selftest.
+
+## [0.105.4] - 2026-10-20
+
+A behaviour change now has to take a minor release: `scripts/release-check.sh` fails a patch release that carries one. Release tooling only; no package behaves differently.
+
+### Added
+
+- The rule: a change that claims a patch release (the same major and minor as the newest tag) and has a `**BREAKING (behavioural):**` bullet fails `release-check`, with the line of
+  the bullet and the way out. Why: of the 10 behavioural entries since 0.100.0, 6 shipped in patch releases (0.102.69, 0.102.70 twice, 0.102.72, 0.102.73, 0.102.74); the other four
+  were minors (0.103.0, 0.105.0). A service that followed "a patch is safe" took exit-code, metrics-label and SSRF-classification changes in five patches, and the version number
+  gave no sign of it. It is rule 6 of `docs/api-policy.md`, which used to say "prefer a minor bump ... not something CI enforces yet". Only behaviour is gated: a `**BREAKING:**`
+  (API) bullet, and one with another qualifier such as `(only for 0.102.59)`, may still be in a patch, as before.
+- The exception, for a change a service can take in a patch (an urgent security fix is the case: waiting for a minor leaves services exposed): the bullet is marked
+  `**BEHAVIOURAL (patch-safe):**` instead, and carries a `summary:` and a `reason:` line saying why a patch may carry it. It is the only form that marker has, and `reason:` belongs
+  to it alone (`scripts/whatchanged` refuses both mistakes). These bullets are in `compat/changes.json` (class `behavioural`, with `reason`) and in the output of
+  `scripts/whatchanged`, which prints the reason under the summary; the feed's schema is still 1, the field is additive.
+- `scripts/whatchanged -release X.Y.Z -latest-tag vA.B.C` is where the rule lives, so that it is tested in Go with the rest of the grammar; `release-check.sh` passes it the newest tag.
+  `scripts/release-check-selftest.sh` gains 12 cases (22 to 34 in all): a behaviour change in a patch, in a minor, in a major and in a patch after an untagged release (the rule is
+  against the newest tag, not the entry below), two in one patch, patch-safe with and without a reason, with another qualifier, a reason on a BREAKING bullet, an API change and a
+  bullet about one version in a patch (not gated), and no tag at all (nothing to compare with).
+- `docs/api-policy.md` rule 6 and `docs/releasing.md` say it.
+
+Verified: every step of `.woodpecker.yml` against the pushed branch, by hand, in the pipeline's own images on the build host: `validate`, `race`, `lint` (0 issues), `vuln`, `forward-compat` on Go 1.27.2, `api`, `bench`, `release` and
+`fuzz`. The first `validate` run failed on `proxysupplier`'s `TestWebshareDirect_FailedInitialFetchIsRetriedWithBackoff`, a timing assertion in a package this change does not touch, while the host was busy; the whole step
+passes on a rerun and that test passes 20 of 20 alone. Seven deliberate breaks of the rule (the patch test always true, any qualifier gated, minors gated too, `-latest-tag` not passed by the script, the reason not required, a
+reason allowed on a BREAKING bullet, any qualifier accepted for patch-safe) each fail a test or the selftest.
+
+## [0.105.3] - 2026-10-20
+
+A per-package coverage ratchet in CI: a package that loses test coverage, or a new tested package nobody tracked, fails the pipeline of main (pull requests can run it by hand). Stacked on the CI stages change (0.105.1): it adds one step, to the second stage of main's pipeline. No package changes.
+
+Why: statement coverage is 84.5% on average over 72 tested packages (v0.105.0) but nothing stopped a package from falling, and the weakest ones sit on the per-request path: `middleware` 67.6% (`server` wires it into 357 repositories), `response` 69.9% (163 importers), `openapi` 72.6% (99), and `spiffe` 34.9%, `shutdown` 56.7%, `backoffcoord` 58.9%.
+
+### Added
+
+- `coverage/floors.txt`: one line per tested package, `<package> <percent>`; initial values are the measured coverage minus 2 points, rounded down (`middleware` 65, `response` 67, `openapi` 70, `spiffe` 32). The 2 points are slack for timing-dependent tests: three runs of the whole suite on one tree differed by at most 0.5 points in a package (`server`).
+- `scripts/coverage-ratchet.sh`: runs `go test -cover ./...`, prints a table (package, floor, now, status) and fails when a package is below its floor, when `go test` fails, or when a tested package has no floor yet. `--update` raises floors to measured minus the margin (`COVERAGE_MARGIN`, default 2) and never lowers one,
+  adds new packages and keeps stale lines; it refuses to write while a package is below its floor or tests fail, so it cannot paper over a regression. A package with a floor whose tests are gone counts as 0%, below it. `--from FILE` judges a saved output without running Go; `COVERAGE_ADVISORY=1` prints the verdict but never fails (the rollback switch). It compares in tenths of a percent, so 82.0 against a floor of 82 is a pass.
+- `scripts/coverage-ratchet-selftest.sh`, in the `validate` step: a fake `go` with canned output, 36 checks (rounding, never lowering, new and stale packages, a regression of 0.1 point, a failing `go test`, no-test and no-statement packages, `--from`, the margin, bad input). Six deliberate breaks of the script (`<=`, lowering on update, no margin, ignoring `go test`'s exit code, forgetting a package whose tests vanished, advisory always on) each fail it.
+- A `coverage` step in `.woodpecker.yml`, **on pushes to main only**, after `validate` (second stage). It is another full test run, about 450 CPU-seconds, on a single agent shared with the fleet's pull requests (a pull request pipeline measured 400 s wall with queue contention), so pull requests do not pay it. The cost of that choice: a pull request can lower coverage and only main turns red, so `coverage/README.md` says to run `scripts/coverage-ratchet.sh` by hand before a change that removes or rewrites tests. A nightly run needs a cron schedule on the Woodpecker server and is not set up here. `COVERAGE_ADVISORY: "0"` is the step's switch.
+- `coverage/README.md`: what to do when it fails, how to raise a floor, and how to turn it off.
+- Tests, in a separate commit: `response` (`Success`, `ErrorResp`, `NewError`, `FromError`, `(*Error).Error`, the default observer) 69.9% to 90.4%, and `openapi` (`ScanDir`, hidden and vendor directories, an unreadable file, every `AddRoute` method) 72.6% to 93.4%; their floors are raised to 88 and 91 with `--update`. `middleware` (67.6%) is not touched here: another change owns that directory, so its floor stays at 65.
+
+Verified: three runs of `go test -count=1 -cover ./...` in `golang:1.26` on the build host (72 packages, mean 84.6%, no failures); floors written from run 1 and runs 2 and 3 pass them; the selftest passes; `woodpecker-cli lint` (3.17) accepts the file. Line coverage is not quality: it keeps tests from disappearing, it does not say they assert anything.
+
+## [0.105.2] - 2026-10-20
+
+The `**BREAKING...**` bullets of this file now end with a one-line summary and, when there is one, the way back to the old behaviour. A generator reads them into `compat/changes.json`,
+and `go run .../scripts/whatchanged <from> <to>` prints what changed between two versions as a section for a pull request body. Release tooling and one additive `compat` API: no
+package behaves differently.
+
+### Added
+
+- Two field lines for a `**BREAKING...**` bullet, written as nested bullets at its end: `  - summary: ` (required, 1 to 200 characters: what changes for a service that bumps, and
+  what to check) and `  - off-switch: ` (optional: the setting, option or call that restores the old behaviour without a release). They are appended, so no existing line of a bullet
+  changed; the grammar, and what is refused, is in `docs/releasing.md`. Why: to put "behaviour changes since your pin" into the fleet's adoption pull requests the bullets were parsed
+  and summarised by hand, and a first automatic truncation cut 0.103.0's bullet before its actionable half, `FLEET_EGRESS_DEFAULT_TRANSPORT=off`. The summary is the one line, and the
+  off-switch is kept as a field of its own so that no shortening can drop it.
+- `compat/changes.json`, generated from `CHANGELOG.md` by `go run ./scripts/whatchanged -gen` and embedded in the `compat` package: `compat.LoadChanges`, `ParseChanges` and
+  `ChangeFeed.Between(from, to)` (releases newer than `from`, up to and including `to`; a pre-release or pseudo-version pin sorts below its own release, so that release's notes are
+  included). Schema 1. A reader ignores fields and classes it does not know, so a later class cannot break a consumer that is older than it. It holds 12 changes, every bullet that
+  starts with `**BREAKING`; `TestEveryBreakingBulletIsInTheFeed` counts them with a scan that shares nothing with the parser.
+- `scripts/whatchanged` (Go, the standard library and `compat` only): `go run github.com/baditaflorin/go-common/scripts/whatchanged@latest <from> [<to>]` prints the section;
+  `-gen` writes the file; `-check` exits 1 on a grammar problem or a stale file, as `scripts/pkgindex -check` does for `docs/PACKAGES.md`; `-release X.Y.Z` is what release-check runs.
+  It refuses what it cannot place instead of skipping it: a marker it cannot read (`- **BREAKING**: x`, `**BREAKING CHANGE:**`, one on a wrapped line, in a paragraph or in a nested
+  bullet), a field line written almost right (three spaces, a capital `S`, two spaces after the colon), a field given twice, a `## ` line that is not an entry heading, an unclosed
+  code fence. A bullet that falls out of the feed unseen is the failure this exists to prevent.
+- `scripts/release-check.sh` runs `scripts/whatchanged -release` for the version the change claims, so a `**BREAKING...**` bullet without its `summary:`, a field of more than 200
+  characters (counted as characters, under any locale) or a `compat/changes.json` that is not what `CHANGELOG.md` says, in any entry, fails the `release` step.
+  `TestFeedIsCurrent` in `scripts/whatchanged` is the same drift check inside `go test ./...`: it runs on a push to main as well, and needs no line in `.woodpecker.yml`.
+- `scripts/release-check-selftest.sh`: runs release-check in throwaway git repositories with real tags, 22 cases (the version rules it already had, which had no test, and the new
+  field rules). `TestReleaseCheckSelftest` runs it from `go test ./...` (not under `-race`), so every pipeline does.
+- `docs/releasing.md` has the grammar, the commands and what CI does; rule 3 of `docs/api-policy.md` points to it.
+
+### Changed
+
+- The 12 existing `**BREAKING...**` bullets are backfilled with their fields (0.105.0 twice, 0.104.0, 0.103.0, 0.102.74, 0.102.73, 0.102.72, 0.102.70 twice, 0.102.69, 0.102.60 and
+  0.63.0), from the one-line readings written for the adoption pull requests, cut to 200 characters. Five have an off-switch: 0.105.0's second bullet (a service that builds its own
+  `EgressCollectors`), 0.104.0 (stay on 0.103.x), 0.103.0, 0.102.70's second bullet and 0.63.0. No other word of any entry changed.
+
+Verified: every step of `.woodpecker.yml` against the pushed branch, one after the other, in the pipeline's own images on the build host: `validate`, `race`, `lint` (0 issues, and its selftest), `vuln`, `forward-compat` on
+Go 1.27.2, `api` (no incompatible change: `compat` only gains identifiers), `bench`, `release` and `fuzz` (23 targets, 5 s each); `go run ./scripts/whatchanged v0.102.60 v0.105.0` lists the ten bullets of those
+releases, 0.103.0's off-switch among them; 16 deliberate breaks of the parser, `Between`, the renderer and `release-check.sh` each fail a test or the selftest (the first run missed a code fence in column 0, which
+has a test now). The steps were run by hand in those images, not by Woodpecker.
+
+The CI pipeline runs its steps in two stages instead of one after another, and a pull request fuzzes only the packages it touches. No package changes.
+
+Why: a pull request pipeline took 358 to 576 s (six recent ones: 387, 412, 576, 358, 422 and 384 s, 733 s the day `forward-compat` was added). The steps ran one after another, and the `fuzz` step alone was
+175 to 232 s of it, about half, to mutate every target for a change that mostly touches none: of the last 13 merges to main, 8 touched no package with a Fuzz target.
+
+### Changed
+
+- `.woodpecker.yml`: the steps now form a graph (`depends_on`). Stage 1 is `refs`, `validate`, `race`, `vuln` and `forward-compat`; stage 2 is `lint`, `api`, `bench`, `release` and `fuzz`, which wait for `refs`.
+  Woodpecker 3.17 turns `depends_on` into stages (checked with `woodpecker-cli exec`: a step that depends on a fast step still starts only when every step of the previous stage is done), so a pipeline takes about as long as
+  the slowest step of each stage. Concurrency is capped at five steps; the other four steps have no `depends_on`, which in a graph pipeline means "start now". The agent runs one workflow at a time
+  (`WOODPECKER_MAX_WORKFLOWS=1`) but all steps of that workflow at once and is shared with the fleet's other pull requests; the CPU work is the same as before (a test run is about 450 CPU-seconds, three of them in stage 1),
+  it now happens in a shorter burst. Every `when` is unchanged and the lint image is still pinned by digest. A step may only depend on a step that exists for the same event, or Woodpecker refuses the whole
+  pipeline ("depends on step ... which is filtered out"): all of the steps that run for pull requests only depend on `refs`, which runs for both events.
+- A step that fails now skips the next stage (it already skipped everything after it). Stage 1 is allowed to finish, so a pull request sees every stage 1 failure in one run.
+- `fuzz` runs for pushes to main as well as pull requests. It had never run on main: a pull request ran every target, main ran none. Now a pull request runs `scripts/fuzz-changed.sh 5s` and a push to main runs
+  `scripts/fuzz.sh 5s`, every target, so each is mutated at least once per merge. That adds the full fuzz run (about 190 s on its own) to a main pipeline; main pipelines gate nothing, and the step starts with stage 2, so it overlaps `lint` and `api`. A nightly run with a long
+  `-fuzztime` needs a cron schedule on the Woodpecker server and is not set up here.
+
+### Added
+
+- `scripts/fuzz-changed.sh [fuzztime] [base-ref]`: fuzzes only the targets of the packages with a changed file (the diff from the base chosen by `scripts/lib/base-ref.sh`, the merge base with the target branch for a pull request,
+  to the working tree; the old path of a rename counts; a file under `testdata/` belongs to its package, so a committed crash re-runs its target). It fuzzes every package when `go.mod`, `go.sum` or `scripts/fuzz.sh` changed or no base can be found,
+  and passes at once when no touched package has a Fuzz target. A package that only imports a changed one is not fuzzed: 38 of 77 packages are, or are imported by, a package that has a Fuzz target, most of those imports incidental (`response`,
+  `telemetry` and `secrets` are imported by four fuzzed packages that no target exercises through them), which would make the smoke nearly a full run again; `go test` still replays every seed corpus on every pull request.
+  `FUZZ_ALL=1` and `FUZZ_DRY_RUN=1` are the escape hatch and the way to see what it would do. This is a real narrowing: a regression that only a mutation run of a dependent package's target would find is now found on the
+  merge to main, not on the pull request.
+- `scripts/fuzz-changed-selftest.sh`, in the `validate` step: a throwaway git repository and a fake `go`, 21 cases: which targets run for a change in a package with targets, without, nested, in `testdata/`, renamed, deleted or untracked,
+  a nested module, a function named `Fuzzy`, the full-run triggers, no base, a dry run, and a pull request compared with its merge base while the target branch moved on. Five deliberate breaks of the script
+  (no `testdata` exclusion, no nested-module exclusion, a looser target pattern, no `go.mod` trigger, diffing against HEAD instead of the working tree) each fail it.
+- A `refs` step: in a pull request it fetches the target branch and the tags once, with three tries. The checkout holds the commit and its history but no other branch and no tag, so every step that compares with the
+  target branch fetched it itself; with the steps side by side, five `git fetch` into one repository at once can fail on a ref lock. `lint` no longer fetches; `release-check.sh`'s own fetch finds nothing to do.
+
+Verified: `woodpecker-cli lint` (3.17) accepts the file; `woodpecker-cli exec --local` on the build host ran the whole pull request pipeline (exit 0, all ten steps) and started the push pipeline's first stage; the selftest
+passes in `golang:1.26`; `scripts/fuzz-changed.sh` was run over the last 13 merges to main (8 fuzz nothing, 4 fuzz 1 to 7 packages, 1 fuzzes everything). The measured pipeline durations are in the pull request.
+
 ## [0.105.0] - 2026-10-19
 
 The egress and fleetfetch collectors no longer give every site a process fetches its own series: `host` is bounded at 32 heavy hitters per process, and the two histograms
@@ -67,6 +215,7 @@ lose `host`. This is the durable fix for the Metrics Hub Prometheus OOM loop of 
   `sum(rate(..._sum)) / sum(rate(..._count))`, which is unchanged. Why: a histogram costs a series per bucket, so per host it was the largest cost in the fleet's Prometheus:
   `safehttp_egress_duration_seconds_bucket` was 611,628 of 1.42 M head series on 2026-10-19 (go-fleet-metrics-hub #112 now drops it at scrape), and
   `fleet_fetch_cache_age_seconds_bucket` then became the largest metric, 145,170 series, after growing from 90k to 140k in three hours.
+  - summary: `safehttp_egress_duration_seconds` and `fleet_fetch_cache_age_seconds` lose their `host` label: a query that filters or groups them by `host` now gets one series per service.
 - **BREAKING (behavioural):** `host` on `safehttp_egress_requests_total`, `safehttp_egress_response_bytes_total` and `fleet_fetch_total` takes at most 32 named values per process
   (was 256), and a host gets one only on its 64th request, provided those 64 come before 1024 other unnamed hosts have been seen (the count restarts then). Every other request
   counts under `host="_other"`, so sums over `host` stay exact. Named hosts are never evicted: the label takes at most 34 values (`_other` and `_unknown` included) whatever a
@@ -75,6 +224,8 @@ lose `host`. This is the durable fix for the Metrics Hub Prometheus OOM loop of 
   `safehttp_egress_requests_total` series for 34,406 live ones. The hosts that recur (upstream APIs, the selftest target, deep-crawled sites) keep their names, so
   `topk(15, sum by (host) (...))` on the fleet-egress dashboard shows them instead of the first domains crawled after boot. The cost: a process's first 63 requests to a host
   count under `_other`, so a host a low-volume service calls rarely gets its name late or never.
+  - summary: `host` on `safehttp_egress_requests_total`, `safehttp_egress_response_bytes_total` and `fleet_fetch_total` takes at most 32 named values per process (was 256); every other host counts under `_other`.
+  - off-switch: for an `EgressCollectors` a service builds itself, `promx.WithHostLimit(256)` and `promx.WithHostMinHits(1)` restore the old naming; `fleet_fetch_total` takes no setting
 - `WithHostLimit(n)` with `n <= 0` keeps the default (now 32); it meant 256 before.
 - A host without a slot, once every slot is taken, costs one read-locked map lookup. It took the write lock on every call before, which for a crawler was 94% of its requests.
 
@@ -123,9 +274,11 @@ The minimum Go version is now 1.26 (it was 1.25).
   images set `GOTOOLCHAIN=local`, so an older image fails with `go: go.mod requires go >= 1.26.0 (running go 1.25.14; GOTOOLCHAIN=local)` instead of downloading a toolchain. A service that cannot move
   yet stays on 0.103.x, and `scripts/backport.sh` cuts a `release/0.103` line only when a real service needs a security fix (`docs/releasing.md`).
   Moving the builder image to 1.26 first, without touching the `go` line, is safe in that order: an image newer than the `go` line always builds.
+  - summary: `go.mod` says `go 1.26.0`: a service that adopts this release needs a Go 1.26 builder (`golang:1.26` or newer), and `go get` raises its own `go` line to 1.26.0.
+  - off-switch: stay on 0.103.x; `scripts/backport.sh` cuts a `release/0.103` line only when a real service needs a security fix (docs/releasing.md)
 - A service's own `go` line decides the default of each `GODEBUG` setting, so raising it to 1.26.0 flips four defaults for that service (each can be put back with a `godebug name=value` line in its go.mod):
   `urlstrictcolons` (`net/url.Parse` now rejects a host with colons outside brackets, such as `http://localhost:1:2`), `cryptocustomrand` (most `crypto/*` APIs ignore a custom random `io.Reader`),
-  `tlssecpmlkem` (the default TLS key exchange adds the hybrid post-quantum shares SecP256r1MLKEM768 and SecP384r1MLKEM1024, so the ClientHello and its JA3/JA4 fingerprint change), and
+  `tlssecpmlkem` (the default TLS key exchange offers two more hybrid post-quantum groups, SecP256r1MLKEM768 and SecP384r1MLKEM1024: the ClientHello is 4 bytes larger and its JA3/JA4 fingerprint changes, and no extra key share is sent; measured with a Go 1.26 client against a local listener), and
   `httpservecontentmaxranges` (`http.ServeContent` allows up to 200 ranges per request).
 - CI builds on `golang:1.26`. The `forward-compat` step now tests the next line, Go 1.27 (`FORWARD_COMPAT_GO_MINOR`), so the step keeps showing what Go changes before the minimum moves again.
 
@@ -228,6 +381,8 @@ This is the first release tagged since v0.102.68; the entries 0.102.69 to 0.102.
   start-up check names a value it does not recognise). `server.New` logs one line saying what it did, never a proxy value.
   The write happens once, early, because `net/http` reads the proxy function without a lock: a service that starts requests on the default transport before `server.New` runs can race
   with it (the race detector reports it; in practice it is one word written once), and should call `egress.InstallDefaultTransport()` at the top of `main` instead.
+  - summary: `server.New` sends fleet-internal destinations (container names, private and tailnet addresses, our domains) direct on `http.DefaultTransport`; the rest still follows `HTTP_PROXY`/`NO_PROXY`.
+  - off-switch: `FLEET_EGRESS_DEFAULT_TRANSPORT=off` (also `false`, `0`, `no`, `disabled`) in the service's environment, no release needed
 
 ### Added
 
@@ -256,6 +411,7 @@ Metrics-wiring fixes for the problems the wave-4 observability review found ([do
   method: a probe with 300 methods made 300 series sets, and about 900 requests made a 2 MB scrape. Methods are case-sensitive, so `get` is `OTHER` too. The request is still
   counted and only the label changed: a dashboard or alert that selects a non-standard method by name (`method="PROPFIND"` on a WebDAV service) must select `"OTHER"` instead.
   The nine standard methods are unchanged.
+  - summary: the `promx` HTTP metrics label a request `method="OTHER"` when its method is not one of the nine standard ones: a dashboard or alert that selects a non-standard method by name must select `"OTHER"`.
 
 ### Added
 
@@ -286,6 +442,7 @@ Metrics-wiring fixes for the problems the wave-4 observability review found ([do
   (Docker `restart: on-failure`) will now restart such a service, so a port that stays taken becomes a restart loop with the reason in the log, where it used to be a silent exit.
   A service that calls `srv.Start()` itself is unchanged: with `WithGracefulDrain` a listen failure already ended the process with status 1 (`log.Fatalf`), and without it `Start`
   returns the error to its caller, as its documentation says.
+  - summary: `server.Run`/`RunTier` now log the error from `Server.Start` and exit with status 1 (before: status 0, no message), so a restart-on-failure policy restarts a service whose port is taken.
 
 ### Fixed
 
@@ -302,6 +459,7 @@ deprecations. One behaviour change: three call sites now return an error, not a 
   or `FLEET_REQUIRE_PROXY=1`) and no proxy variable is set. They run per request and in worker goroutines, where a deployment mistake should not take the process down. `Fetch`
   and `Recover` now return an error and fetch nothing (still fail-closed); `RecoverAll` logs the reason and returns nil. A caller that relied on the panic to stop the process
   must check the error. The start-up constructors, `safehttp.NewClient` among them, still panic as before.
+  - summary: `client.Fetch` and `jsbundle.Recover`/`RecoverAll` return an error instead of panicking when proxy egress is required and no proxy variable is set; a caller that relied on the panic must check it.
 
 ### Fixed
 
@@ -369,9 +527,12 @@ benchmarks with an allocation gate, a security floor for pins, and release tooli
   `64:ff9b::a9fe:a9fe` (the cloud metadata address) and `2002:7f00:1::` were allowed. Reaching them needs a NAT64 or 6to4 gateway on the path, which a typical
   container host lacks, so this closes a latent hole rather than a live one. A NAT64 or 6to4 address that carries a public IPv4 address is still allowed. Found by
   the new SSRF corpus; `FuzzIsBlocked` now checks the embedded forms too.
+  - summary: `safehttp.IsBlocked` (so `GuardHost`, `CheckURL`, the guarded dialer, `egressproxy.DefaultGuard`) also refuses IPv6 addresses that carry a blocked IPv4 address through NAT64 or 6to4.
 - **BREAKING (behavioural):** `jsbundle.RecoverOptions.Client`, when nil, is now a guarded `safehttp` client (20 s timeout, refuses internal addresses, also
   after redirects) instead of `http.DefaultClient`, which had no timeout and no SSRF guard, while the URLs it fetches come from pages and error reports. Pass a
   `Client` to opt out, for example an `httptest` server's client in a test.
+  - summary: `jsbundle.RecoverOptions.Client`, when nil, is a guarded `safehttp` client (20 s timeout, refuses internal addresses) instead of `http.DefaultClient`.
+  - off-switch: set `RecoverOptions.Client` (for example an `httptest` server's client in a test)
 - `config.Load` read `service.yaml` naively: any indented `name:` or `version:` replaced the service's own (the template's `owner.name` did), a trailing
   `# comment` stayed in the value, and a missing file printed `DEBUG: Failed to open service.yaml` to stdout. Only top-level keys count now, comments and quotes are
   stripped, and a missing file is silent. It only changed the result for callers that pass an empty app name.
@@ -413,6 +574,7 @@ targets found are fixed (one changes behaviour: see `validate` below). No export
   such as `pattern=a|b` accepted `abc`. The tag is now wrapped in `^(?:...)$`: one that already has `^...$` is unaffected, one that relied on substring matching starts
   rejecting. No `pattern=` tag exists in any local repository outside go-common's own tests. Found by `FuzzBindBytes` in the first real CI run of the fuzz step on a later
   PR in this series; the crashing input is committed under `validate/testdata/fuzz/` and replayed by `go test`.
+  - summary: `validate`'s `pattern=` tag now requires the whole value to match (it was applied unanchored): a tag that relied on substring matching starts rejecting.
 
 ### Added
 
@@ -604,6 +766,7 @@ targets found are fixed (one changes behaviour: see `validate` below). No export
   host's `NO_PROXY` listing it. `safehttp` is deliberately unchanged: it is the generic public-web client, and the runner's strict egress policy
   keeps even our own public hostnames on the proxy for proxy_egress services that scan targets with it. Third-party destinations are unchanged.
 - **BREAKING (only for 0.102.59):** `GRAPH_USE_EGRESS_PROXY` is removed; `graph` is always direct. Nothing used it.
+  - summary: `GRAPH_USE_EGRESS_PROXY` is removed and `graph` is always direct: only a service on 0.102.59 that set it is affected (nothing used it).
 - `golang.org/x/net` is an indirect dependency again (the Graph client no longer builds a proxy function from the environment).
 
 ## [0.102.59] - 2026-10-17
@@ -1660,6 +1823,7 @@ embedded version string (consumers pin via `go.mod`).
   *future* privileged header too, not just the ones known dangerous
   today. New regression test `TestWithMCPDoesNotForwardUnlistedHeaders`
   locks this in.
+  - summary: `server/mcp.go`'s MCP bridge copied any request header a caller sent into the replayed request; it now forwards only an explicit allowlist of headers.
 
 ## v0.79.0 — 2026-08-06
 
@@ -2055,6 +2219,8 @@ embedded version string (consumers pin via `go.mod`).
   for services with their own registry. The default `/metrics` runtime
   metrics for `server`-based services are unaffected — those come from
   `promx` and stay as-is. Supersedes the auto-wire added in #34 / v0.61.0.
+  - summary: `obs` is opt-in: `server.New` no longer starts the localhost pprof and `/metrics` debug server (127.0.0.1:6060); a service that wants it calls `obs.Init()` in `main()`.
+  - off-switch: `stop, _ := obs.Init()` and `defer stop()` in `main()` bring the old debug server back
 
 - **`promx` inbound HTTP metrics now cap "route" label cardinality** (default
   512, configurable via `WithRouteLimit`). The default `RouteFunc` returns the

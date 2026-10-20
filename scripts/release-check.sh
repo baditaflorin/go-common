@@ -10,12 +10,16 @@
 #   - the tag vX.Y.Z already exists: another change released it first. Two changes
 #     both claimed 0.102.66 on 2026-10-17, and the same happened to 0.102.67 and
 #     0.102.68; whichever merges second must renumber,
-#   - X.Y.Z is not newer than the newest tag, or than the previous top entry.
+#   - X.Y.Z is not newer than the newest tag, or than the previous top entry,
+#   - a bullet the behavioural-change feed carries (**BREAKING...**) lacks its
+#     summary: line, or a field breaks the grammar, or compat/changes.json is not what
+#     CHANGELOG.md says (scripts/whatchanged -release; docs/releasing.md has the grammar).
 # A change that leaves CHANGELOG.md alone claims no release, and passes.
 #
 # Tags are fetched first (a CI clone often has none). The base comes from
 # scripts/lib/base-ref.sh. Nothing here creates a tag: this repository's CI does
-# not tag, see docs/releasing.md.
+# not tag, see docs/releasing.md. The feed check needs go: the CI step runs in a
+# golang image, and scripts/release-check-selftest.sh tests this script.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -59,6 +63,13 @@ fi
 prev_top="$(git show "${base}:CHANGELOG.md" 2>/dev/null | sed -n 's/^## \[\([0-9][0-9.]*\)\] - .*/\1/p' | head -1 || true)"
 if [ -n "$prev_top" ] && ! newer "$version" "$prev_top"; then
   fail "${version} is not newer than the entry it is added above (${prev_top})"
+fi
+
+# The grammar of the feed bullets, in every entry, and the generated file: the Go program
+# owns both, so the rules live in one place. It prints each problem with its line.
+command -v go >/dev/null 2>&1 || fail "go is needed to check the feed bullets of CHANGELOG.md (scripts/whatchanged); run this where Go is installed"
+if ! go run -buildvcs=false ./scripts/whatchanged -release "$version" -latest-tag "$latest_tag"; then
+  fail "CHANGELOG.md or compat/changes.json breaks the rules above; docs/releasing.md has the grammar of the feed bullets"
 fi
 
 echo "release-check: ${version} is free (latest tag ${latest_tag:-none}, previous entry ${prev_top:-none})"
