@@ -241,8 +241,7 @@ func (c *Client) adminCall(ctx context.Context, method, path string, body []byte
 	}
 	if resp.StatusCode >= 400 {
 		result = "client_error"
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("apikey %s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(b)))
+		return fmt.Errorf("apikey %s %s: HTTP %d: %s", method, path, resp.StatusCode, errorBodyText(resp.Body))
 	}
 	if out == nil {
 		return nil
@@ -263,4 +262,18 @@ func (c *Client) adminCall(ctx context.Context, method, path string, body []byte
 		return nil
 	}
 	return json.Unmarshal(envelope.Data, out)
+}
+
+// maxErrorBodyBytes bounds how much of an error response goes into the error
+// message: enough for the keystore's JSON error, not enough for a misbehaving
+// endpoint or a proxy's error page to fill memory or the logs the error ends up in.
+const maxErrorBodyBytes = 4 << 10
+
+// errorBodyText reads at most maxErrorBodyBytes of an error response and marks a cut.
+func errorBodyText(body io.Reader) string {
+	b, _ := io.ReadAll(io.LimitReader(body, maxErrorBodyBytes+1))
+	if len(b) > maxErrorBodyBytes {
+		return strings.TrimSpace(string(b[:maxErrorBodyBytes])) + " [truncated]"
+	}
+	return strings.TrimSpace(string(b))
 }

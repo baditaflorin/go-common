@@ -11,6 +11,12 @@ The variables that go-common packages declare in the `env` registry, with what t
 | `FLEET_DIRECT_DOMAINS` | list | unset | Comma-separated apex domains, each with at least one dot, that egress treats as the fleet's own in addition to the built-in ones: requests to them and to their subdomains never use the egress proxy. |
 | `FLEET_EGRESS_DEFAULT_TRANSPORT` | string | `enabled` | Set to off, false, 0 or no to keep http.DefaultTransport on the plain environment proxy rule (NO_PROXY only), so that plain http.Clients send requests to the fleet's own hosts through HTTP_PROXY/HTTPS_PROXY again. By default server.New makes them go direct (package egress). Anything unrecognised also turns it off. |
 
+## `fleetfetch`
+
+| Variable | Kind | Default | Description |
+| --- | --- | --- | --- |
+| `FLEET_FETCH_MAX_BODY_BYTES` | int | `8388608` | Response-body limit in bytes for every fleetfetch client that does not set its own with WithMaxBodyBytes or WithUnboundedBody: a longer body is cut there and Response.Truncated is set. 0 removes the limit, which is discouraged: one oversized response can take all of a worker's memory. An unparsable or negative value is ignored. |
+
 ## `graph`
 
 | Variable | Kind | Default | Description |

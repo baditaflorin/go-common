@@ -49,13 +49,32 @@ func WithTimeout(d time.Duration) Option {
 	return func(c *Client) { c.timeout = d }
 }
 
-// WithMaxBodyBytes limits the response body bytes retained by the client.
-// A non-positive value keeps the historical unlimited behavior. Consumers
-// that parse only a bounded prefix can use this to cap memory for both cache
-// responses and direct fallback responses. Larger bodies are truncated
-// without turning an otherwise successful fetch into an error.
+// WithMaxBodyBytes sets the most of a response body the client keeps, for both
+// cache responses and direct fallback responses. Without it the limit is
+// EnvMaxBodyBytes, else DefaultMaxBodyBytes (8 MiB). A longer body is cut at n
+// bytes and Response.Truncated is set; the fetch is not turned into an error. A
+// non-positive n is ignored (the limit stays the default): it used to mean
+// "unlimited", which is now spelled WithUnboundedBody so that nobody gets it by
+// passing an unset configuration value.
+//
+// A caller that wants to know a body was over its own limit can ask for n+1 bytes
+// and compare len(Body) with n, as many do, or read Response.Truncated.
 func WithMaxBodyBytes(n int64) Option {
-	return func(c *Client) { c.maxBodyBytes = n }
+	return func(c *Client) {
+		if n > 0 {
+			c.maxBodyBytes = n
+		}
+	}
+}
+
+// WithUnboundedBody removes the response-body limit for this client: every body is
+// read whole, whatever its size. It is the explicit opt-out from
+// DefaultMaxBodyBytes and discouraged. A scraping client reads pages that
+// strangers choose, and one multi-gigabyte response then takes all of a worker's
+// memory. Prefer WithMaxBodyBytes with the largest body the service can use. It
+// overrides EnvMaxBodyBytes; the last of it and WithMaxBodyBytes wins.
+func WithUnboundedBody() Option {
+	return func(c *Client) { c.maxBodyBytes = unboundedBody }
 }
 
 // WithFallbackOnTimeout makes a slow cache (a cache request that

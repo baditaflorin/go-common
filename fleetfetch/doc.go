@@ -73,6 +73,16 @@
 // now-warming cache. Opt into best-effort direct fetch on timeout with
 // WithFallbackOnTimeout when a body matters more than avoiding egress.
 //
+// # Response size
+//
+// A Client keeps at most DefaultMaxBodyBytes (8 MiB) of a response body, whichever
+// path served it. A longer body is cut there and Response.Truncated is set; the
+// fetch is not an error. WithMaxBodyBytes sets another limit, the environment
+// variable FLEET_FETCH_MAX_BODY_BYTES changes it for clients that set none, and
+// WithUnboundedBody (or the variable at 0) removes it, which is discouraged: the
+// pages a scraper fetches are chosen by strangers, and one oversized response then
+// takes all of a worker's memory.
+//
 // # Endpoint
 //
 // Default endpoint is http://go_infrastructure_fetch_cache:18205 —

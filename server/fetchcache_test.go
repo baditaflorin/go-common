@@ -191,3 +191,45 @@ func TestDefaultFetchDelegate_CommonCrawlFailureDoesNotFetchOrigin(t *testing.T)
 		t.Fatalf("live fallback origin hits = %d, want one", originHits)
 	}
 }
+
+// The delegate is a transparent cache in front of safehttp: a body the fleetfetch
+// client had to cut at its limit must not reach the caller as if it were whole. The
+// request falls through to the direct path instead, and the caller gets every byte.
+func TestDefaultFetchDelegate_BodyOverTheLimitFallsThroughDirect(t *testing.T) {
+	safehttp.SetDefaultFetchDelegate(nil)
+	t.Cleanup(func() { safehttp.SetDefaultFetchDelegate(nil) })
+	safehttp.SetAllowedPrivateIPs([]net.IP{net.ParseIP("127.0.0.1")})
+	t.Cleanup(func() { safehttp.SetAllowedPrivateIPs(nil) })
+
+	full := strings.Repeat("0123456789", 20) // 200 bytes
+	cacheHits := 0
+	cache := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		cacheHits++
+		w.Header().Set("X-FetchCache-Fetched-At", time.Now().UTC().Format(time.RFC3339))
+		_, _ = io.WriteString(w, full)
+	}))
+	defer cache.Close()
+	originHits := 0
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		originHits++
+		_, _ = io.WriteString(w, full)
+	}))
+	defer origin.Close()
+
+	t.Setenv(fleetfetch.EnvCacheURL, strings.Replace(cache.URL, "127.0.0.1", "localhost", 1))
+	t.Setenv(fleetfetch.EnvMaxBodyBytes, "64")
+	_ = server.New(&config.Config{AppName: "go_fetchcache_overlimit_test", Version: "0.0.0", Port: "0"})
+
+	resp, err := safehttp.NewClient(safehttp.WithTimeout(2 * time.Second)).Get(origin.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) != full {
+		t.Fatalf("the caller got %d bytes, want all %d: a cut body was passed off as whole", len(body), len(full))
+	}
+	if cacheHits != 1 || originHits != 1 {
+		t.Fatalf("cache hits %d, origin hits %d; want 1 and 1 (cache tried, then direct)", cacheHits, originHits)
+	}
+}

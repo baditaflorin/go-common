@@ -65,6 +65,15 @@ func (d fetchCacheDelegate) FetchGet(ctx context.Context, target string, h http.
 	if err != nil {
 		return archiveFailure()
 	}
+	if r.Truncated {
+		// This adapter is a transparent cache in front of safehttp: it must hand
+		// over the whole body or none. A body cut at the client's limit
+		// (fleetfetch.DefaultMaxBodyBytes) is none: live requests fall through to the
+		// direct path, which streams the body to the caller (who sets its own
+		// limits), and an archive-only request gets the same 502 as any other
+		// archive failure, never a partial capture.
+		return archiveFailure()
+	}
 	return &safehttp.FetchResult{Status: r.Status, Header: r.Header, Body: r.Body}, nil
 }
 

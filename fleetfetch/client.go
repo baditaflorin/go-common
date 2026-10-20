@@ -40,9 +40,15 @@ const fetchCacheHopHeader = "X-Fetch-Cache-Hop"
 // verbatim; the cache-side metadata is broken out into typed fields
 // so callers can log hit rates without parsing headers themselves.
 type Response struct {
-	Status      int
-	Header      http.Header
-	Body        []byte
+	Status int
+	Header http.Header
+	Body   []byte
+	// Truncated is true when the body was longer than the client's limit
+	// (DefaultMaxBodyBytes, WithMaxBodyBytes, EnvMaxBodyBytes) and Body holds only
+	// its first bytes. Header, including Content-Length, still describes the whole
+	// response. The fetch itself succeeded: a caller that cannot use a partial body
+	// checks this, and one that needs larger bodies raises the limit.
+	Truncated   bool
 	FinalURL    string
 	Hit         bool      // true if served from cache
 	AgeSeconds  int       // age of the cached entry; 0 on miss
@@ -270,6 +276,9 @@ func NewClient(opts ...Option) *Client {
 			c.cacheURL = DefaultURL
 		}
 	}
+	if c.maxBodyBytes == 0 {
+		c.maxBodyBytes = bodyLimitFromEnv()
+	}
 	if c.apiKey == "" {
 		c.apiKey = os.Getenv(EnvAPIKey)
 	}
@@ -338,6 +347,8 @@ type Stats struct {
 	Fallbacks int64
 	Timeouts  int64
 	Errors    int64
+	// Truncated counts responses whose body was cut at the limit.
+	Truncated int64
 }
 
 // isTimeout reports whether err represents a deadline/timeout (as

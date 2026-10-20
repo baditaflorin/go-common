@@ -53,6 +53,8 @@ type Event struct {
 	Status     int
 	AgeSeconds int
 	Duration   time.Duration
+	// Truncated is true when the response handed back was cut at the body limit.
+	Truncated bool
 }
 
 var defaultObserver atomic.Pointer[Observer]

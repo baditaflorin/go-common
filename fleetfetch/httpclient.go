@@ -152,6 +152,11 @@ func (t *fetchCacheTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	if res.ViaFallback {
 		hdr.Set("X-FetchCache-Via-Fallback", "true")
 	}
+	if res.Truncated {
+		// The body below holds only the first bytes; Content-Length above is the
+		// upstream's and may say more.
+		hdr.Set("X-FetchCache-Truncated", "true")
+	}
 
 	respReq := req.Clone(req.Context())
 	respReq.URL = finalURL
