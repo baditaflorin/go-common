@@ -26,7 +26,7 @@ import (
 // hosts beyond fold to "_other").
 type RateCoordCollectors struct {
 	service string
-	cap     *hostCardCap
+	cap     *BoundedLabel
 
 	decisions *prometheus.CounterVec
 	fallback  *prometheus.CounterVec
@@ -41,7 +41,7 @@ func NewRateCoordCollectors(reg prometheus.Registerer) *RateCoordCollectors {
 	}
 	c := &RateCoordCollectors{
 		service: ServiceID(),
-		cap:     newHostCardCap(256),
+		cap:     NewBoundedLabel(256),
 		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "ratecoord_decisions_total",
 			Help: "Total ratecoord.Client.Wait calls, labelled by host and outcome.",
@@ -62,7 +62,7 @@ func NewRateCoordCollectors(reg prometheus.Registerer) *RateCoordCollectors {
 
 // ObserveRate satisfies ratecoord.Observer.
 func (c *RateCoordCollectors) ObserveRate(ev ratecoord.Event) {
-	host := c.cap.label(ev.Host)
+	host := c.cap.Value(ev.Host)
 	outcome := "allowed"
 	switch {
 	case ev.FellBack && !ev.Allowed:

@@ -161,7 +161,7 @@ func WithCancellationRegistry(cfg CancellationConfig) Option {
 
 		// 1. Mount the DELETE /cancel/<id> handler. Method-gated so a
 		//    stray GET probe doesn't accidentally cancel a request.
-		s.Mux.HandleFunc(CancelPathPrefix, func(w http.ResponseWriter, r *http.Request) {
+		s.mount(CancelPathPrefix, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodDelete {
 				w.Header().Set("Allow", http.MethodDelete)
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -184,7 +184,7 @@ func WithCancellationRegistry(cfg CancellationConfig) Option {
 				return
 			}
 			http.Error(w, "no in-flight request matches id", http.StatusNotFound)
-		})
+		}))
 
 		// 2. Append the registration middleware. It runs after the
 		//    default RequestID middleware (which is installed before

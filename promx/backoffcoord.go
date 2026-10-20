@@ -17,7 +17,7 @@ import (
 // "outcome" is one of: no_wait, waited, unreachable.
 type BackoffCoordCollectors struct {
 	service string
-	cap     *hostCardCap
+	cap     *BoundedLabel
 
 	consults *prometheus.CounterVec
 	consult  *prometheus.HistogramVec
@@ -33,7 +33,7 @@ func NewBackoffCoordCollectors(reg prometheus.Registerer) *BackoffCoordCollector
 	}
 	c := &BackoffCoordCollectors{
 		service: ServiceID(),
-		cap:     newHostCardCap(256),
+		cap:     NewBoundedLabel(256),
 		consults: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "backoffcoord_consults_total",
 			Help: "Total backoffcoord.Client.Consult calls, labelled by host and outcome.",
@@ -55,7 +55,7 @@ func NewBackoffCoordCollectors(reg prometheus.Registerer) *BackoffCoordCollector
 
 // ObserveBackoffCoord satisfies backoffcoord.Observer.
 func (c *BackoffCoordCollectors) ObserveBackoffCoord(ev backoffcoord.Event) {
-	host := c.cap.label(ev.Host)
+	host := c.cap.Value(ev.Host)
 	c.consults.WithLabelValues(c.service, host, ev.Outcome).Inc()
 	c.consult.WithLabelValues(c.service).Observe(ev.ConsultLatency.Seconds())
 	if ev.Waited > 0 {

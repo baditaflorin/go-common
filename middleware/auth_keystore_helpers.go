@@ -38,6 +38,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			local[t] = true
 		}
 	}
+	public := newPublicPrefixes(opts.PublicPathPrefixes)
 	logf := func(format string, a ...any) {
 		if opts.Logger != nil {
 			opts.Logger.Printf(format, a...)
@@ -88,10 +89,17 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			//    fleet contract. /capabilities is scraped unauthenticated by
 			//    the catalog and hub so users can discover query flags.
 			//    A service-declared PublicPathPrefixes entry (opt-in, see its
-			//    doc comment) bypasses the same way.
-			if r.URL.Path == "/health" || r.URL.Path == "/version" || r.URL.Path == "/selftest" || r.URL.Path == "/_gw_health" || r.URL.Path == "/capabilities" || r.URL.Path == "/openapi.json" || r.URL.Path == "/agent.json" || isPublicPathPrefix(r.URL.Path, opts.PublicPathPrefixes) {
+			//    doc comment) bypasses the same way. Either only for a
+			//    canonical path (auth_keystore_path.go): a path that names one
+			//    in another form is refused, not authenticated.
+			switch classifyPublicPath(r.URL, public) {
+			case pathPublic:
 				observe(AuthSourceBypass, AuthResultAllow, 0)
 				next.ServeHTTP(w, r)
+				return
+			case pathAmbiguous:
+				observe(AuthSourceBypass, AuthResultDeny, 0)
+				denyBadPath(w)
 				return
 			}
 

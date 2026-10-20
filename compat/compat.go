@@ -13,6 +13,15 @@
 // The floor is about go-common's own fixes. It does not claim that a version at
 // or above it is free of known vulnerabilities: advisories in go-common's
 // dependencies and in the Go toolchain are tracked in scripts/govulncheck-allow.txt.
+//
+// A release that ships a security fix settles the floor in the same change: either
+// MinSafe is raised to it, or a MinSafeUnchanged record says why it stays (docs/releasing.md).
+//
+// The package also carries the change feed (changes.json): the CHANGELOG.md bullets
+// marked BREAKING, each with a one-line summary and, when there is one, the way back
+// to the old behaviour. LoadChanges reads it and ChangeFeed.Between answers "what
+// changes if I move my pin from one version to another"; scripts/whatchanged prints
+// the answer for a pull request body, and docs/releasing.md has the grammar.
 package compat
 
 import (
@@ -35,6 +44,15 @@ type Reason struct {
 	Summary string `json:"summary"`
 }
 
+// Unchanged is the decision that a release's security fix does not move the floor.
+type Unchanged struct {
+	// Version is the release that shipped the fix, for example "v0.106.0".
+	Version string `json:"version"`
+	// Reason says why the floor stays where it is: what the fix closes, and why a
+	// service on an older release is not left exposed to it.
+	Reason string `json:"reason"`
+}
+
 // Manifest is the parsed compat.json.
 type Manifest struct {
 	Schema int `json:"schema"`
@@ -44,6 +62,11 @@ type Manifest struct {
 	// (which carry only a commit time) relative to the floor.
 	MinSafeDate time.Time `json:"min_safe_date"`
 	Reasons     []Reason  `json:"reasons"`
+	// MinSafeUnchanged records, for a release whose CHANGELOG.md entry has a
+	// **SECURITY:** bullet, that the floor was considered and left alone (the
+	// alternative to raising it). Optional: a reader that does not know the field
+	// ignores it, so the manifest stays readable by older releases of this package.
+	MinSafeUnchanged []Unchanged `json:"min_safe_unchanged,omitempty"`
 	// Lines holds the floor of each older release line that has security
 	// backports, keyed "vMAJOR.MINOR" (for example "v0.97": "v0.97.1"). A pin on a
 	// listed line is judged against that line's floor, not MinSafe. Empty unless
@@ -104,7 +127,56 @@ func Parse(data []byte) (Manifest, error) {
 			return Manifest{}, fmt.Errorf("compat: lines[%q] = %s must be a release of that line (key %s)", line, floor, want)
 		}
 	}
+	seen := map[string]bool{}
+	for i, u := range m.MinSafeUnchanged {
+		v, err := parseVersion(u.Version)
+		if err != nil || v.pre != "" {
+			return Manifest{}, fmt.Errorf("compat: min_safe_unchanged[%d]: %q is not a release version", i, u.Version)
+		}
+		if strings.TrimSpace(u.Reason) == "" {
+			return Manifest{}, fmt.Errorf("compat: min_safe_unchanged[%d] (%s) has no reason", i, u.Version)
+		}
+		if seen[u.Version] {
+			return Manifest{}, fmt.Errorf("compat: min_safe_unchanged names %s twice", u.Version)
+		}
+		seen[u.Version] = true
+	}
 	return m, nil
+}
+
+// FloorStatus says what the floor does about the security fix a release shipped.
+type FloorStatus string
+
+const (
+	// FloorCovers means the release is at or below min_safe: a pin below it is reported.
+	FloorCovers FloorStatus = "covered"
+	// FloorUnchanged means the floor was considered for this release and left alone;
+	// the reason is in min_safe_unchanged.
+	FloorUnchanged FloorStatus = "unchanged"
+	// FloorUndecided means neither: no decision is recorded for the release.
+	FloorUndecided FloorStatus = "undecided"
+)
+
+// FloorDecision says what the floor does about the security fix shipped in release
+// ver, and, for FloorUnchanged, the recorded reason.
+func (m Manifest) FloorDecision(ver string) (FloorStatus, string, error) {
+	v, err := parseVersion(ver)
+	if err != nil {
+		return "", "", fmt.Errorf("compat: %w", err)
+	}
+	floor, err := parseVersion(m.MinSafe)
+	if err != nil {
+		return "", "", fmt.Errorf("compat: min_safe: %w", err)
+	}
+	if v.compareCore(floor) <= 0 {
+		return FloorCovers, "", nil
+	}
+	for _, u := range m.MinSafeUnchanged {
+		if u.Version == ver {
+			return FloorUnchanged, u.Reason, nil
+		}
+	}
+	return FloorUndecided, "", nil
 }
 
 type version struct {

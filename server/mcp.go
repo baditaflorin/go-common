@@ -67,7 +67,7 @@ func mountMCP(s *Server) {
 	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
 		return mcpSrv
 	}, nil)
-	s.Mux.Handle("/mcp", handler)
+	s.mount("/mcp", handler)
 }
 
 // toMCPTool translates one agent.Tool into the SDK's wire Tool shape.

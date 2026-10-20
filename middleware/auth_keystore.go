@@ -166,26 +166,22 @@ type KeystoreOpts struct {
 	// field must never cause by a configuration mistake. Default nil — no
 	// effect on any service that doesn't opt in.
 	//
+	// The exemption applies only to a canonical path (the same rule covers the
+	// fixed /health, /version, ... list): no "." or ".." segment, no "//", no
+	// encoded dot, slash or backslash (%2e, %2f, %5c) in the raw or the decoded
+	// form, and at most a trailing slash. A request that names a public path in
+	// any other form is answered 400 and goes no further, with or without a key,
+	// because routers differ in how they read such a path (one redirects it, one
+	// cleans it, one decodes it twice), and the exemption must not depend on that.
+	// The refusal is observed as AuthSourceBypass with AuthResultDeny. Send the
+	// canonical path.
+	//
 	// Never declare a prefix that also serves a keystore-gated route:
 	// everything under it is unauthenticated, for every method, with no
-	// per-route override.
+	// per-route override. server.WithKeystoreAuthPublicPrefixes checks the
+	// routes registered through the server's own helpers against the prefixes
+	// when Start runs; this field cannot, because it sees no routes.
 	PublicPathPrefixes []string
-}
-
-// isPublicPathPrefix reports whether path starts with one of prefixes. "" and
-// "/" are never treated as a match even if present in the list — either
-// would make every route public, which PublicPathPrefixes exists to avoid
-// by a configuration mistake.
-func isPublicPathPrefix(path string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if p == "" || p == "/" {
-			continue
-		}
-		if strings.HasPrefix(path, p) {
-			return true
-		}
-	}
-	return false
 }
 
 // ScopeChecker is the abstract interface for out-of-band scope

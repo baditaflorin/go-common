@@ -43,7 +43,7 @@ import (
 // caller set fleetfetch.WithFallbackOnTimeout.
 type FleetFetchCollectors struct {
 	service string
-	cap     *hostCardCap
+	cap     *BoundedLabel
 
 	total    *prometheus.CounterVec
 	duration *prometheus.HistogramVec
@@ -60,7 +60,7 @@ func NewFleetFetchCollectors(reg prometheus.Registerer) *FleetFetchCollectors {
 	}
 	c := &FleetFetchCollectors{
 		service: ServiceID(),
-		cap:     newHeavyHitterCap(defaultHostLimit, defaultHostMinHits, 0),
+		cap:     NewBoundedLabel(defaultHostLimit, WithMinHits(defaultHostMinHits)),
 		total: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "fleet_fetch_total",
 			Help: "Total fleetfetch.Client.Get calls, labelled by upstream host and outcome.",
@@ -86,7 +86,7 @@ func NewFleetFetchCollectors(reg prometheus.Registerer) *FleetFetchCollectors {
 
 // ObserveFleetFetch satisfies fleetfetch.Observer.
 func (c *FleetFetchCollectors) ObserveFleetFetch(ev fleetfetch.Event) {
-	host := c.cap.label(ev.Host)
+	host := c.cap.Value(ev.Host)
 	c.total.WithLabelValues(c.service, host, ev.Result).Inc()
 	c.duration.WithLabelValues(c.service, ev.Result).Observe(ev.Duration.Seconds())
 	if ev.Result == "hit" && ev.AgeSeconds > 0 {
