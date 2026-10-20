@@ -18,6 +18,8 @@
 
 Not changed: with none of the new variables set, nothing behaves differently; the key path, its `401`/`403` cool-down and `GRAPH_COLLECTOR_URL`'s canonical-host rule are as before.
 
+Verified on a build host in golang:1.26 containers: gofmt, `go vet ./...`, `go test -count=1 ./...` (all packages), `go build ./...`, `pkgindex -check`, `envdoc -check`, the dependency budget and its doc, `whatchanged -check`, `release-check` (0.109.0 is free), `-race` on graph, promx, server and spiffe, and apidiff (no incompatible change).
+
 ## [0.108.1] - 2026-10-20
 
 Release bookkeeping, no package behaves differently: the security floor now covers the 0.102.70 fixes, 0.107.0's gate fix has its floor decision and a `**SECURITY:**` bullet, and the 0.105.2 entry says where the 0.105.1 text is.
