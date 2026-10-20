@@ -26,6 +26,12 @@
       "summary": "A request under a declared PublicPathPrefixes entry, or for a fixed probe path, with a non-canonical path (dot segments, //, encoded . / \\) now gets 400 from the gate instead of skipping auth."
     },
     {
+      "version": "v0.107.0",
+      "date": "2026-10-20",
+      "class": "security",
+      "summary": "A declared public prefix was matched on the raw path; behind a router that cleans paths first, /prefix/../gated skipped auth (latent behind http.ServeMux). Fixed by the canonical-path rule."
+    },
+    {
       "version": "v0.106.0",
       "date": "2026-10-20",
       "class": "breaking",

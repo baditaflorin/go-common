@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.108.1] - 2026-10-20
+
+Release bookkeeping, no package behaves differently: the security floor now covers the 0.102.70 fixes, 0.107.0's gate fix has its floor decision and a `**SECURITY:**` bullet, and the 0.105.2 entry says where the 0.105.1 text is.
+
+### Changed
+
+- `compat/compat.json`: `min_safe` is `v0.102.70` (it was `v0.102.2`), `min_safe_date` is that release's commit time, and `reasons` gets its fixes: `safehttp.IsBlocked` also refuses a NAT64 or 6to4 address that carries a blocked IPv4 address, and `jsbundle`'s default client, which had no timeout and no SSRF guard, is guarded. 0.102.70 was never tagged; the first tagged release that has it is `v0.103.0`. Every module in the fleet is on v0.104.0 or newer (audited 2026-10-20) and no repository in the organisation references `compat.CheckGoMod` or `compatcheck` (searched 2026-10-20), so nothing starts to fail; a pin below the floor is now reported as missing those fixes, which is what the floor is for.
+- `compat/compat.json`: `min_safe_unchanged` records `v0.107.0` with its reason: the gate bypass was latent (an opt-in option, and `http.ServeMux` redirects the paths), so the floor stays at `v0.102.70` and does not report every service between it and 0.107.0. It can move to `v0.107.0` once the fleet is on it.
+- `CHANGELOG.md`: the 0.107.0 entry gets the `**SECURITY:**` bullet for the fix it already describes, and the 0.105.2 entry, which holds two changes under one heading, says where the 0.105.1 text starts.
+
+Why: `0.102.70` was the one security fix with no floor decision (0.105.5 added the rule and left it undecided), the fleet is all above it so raising the floor costs no service anything, and 0.107.0 is the first fix the new rule applies to.
+
 ## [0.108.0] - 2026-10-20
 
 `fleetfetch` clients now keep at most 32 MiB of a response body unless told otherwise, instead of reading whatever size the origin sends.
@@ -32,6 +44,8 @@ The keystore gate's exemption for declared public path prefixes (`PublicPathPref
 
 - **BREAKING (behavioural):** `TokenAuthKeystore` exempts a request from authentication, by a declared `PublicPathPrefixes` entry or by the fixed `/health`, `/version`, `/selftest`, `/_gw_health`, `/capabilities`, `/openapi.json`, `/agent.json` list, only if its path is canonical. A request whose path starts with a declared prefix (or equals a fixed path) but is not canonical is answered `400 {"error":"Bad Request","reason":"non-canonical path"}` by the gate, with or without a credential, and is not passed on. Canonical means: no `.` or `..` segment and no `//` (a trailing slash is fine), no encoded dot, slash or backslash (`%2e`, `%2f`, `%5c`, either case) in the raw or the decoded form (so `%252e` is refused too), no backslash, and the raw form starts with the declared prefix as the decoded one does (`/%63/x` is not `/c/x`). Why: the gate decided from the path as written while a router decides from the path as it reads it, and routers differ (`http.ServeMux` redirects dot segments, a router that cleans the path first serves the cleaned one, one that decodes twice reads `%2e%2e` as `..`, one that routes on the raw path keeps `%2f`). Behind a router that cleans the path before routing, `/c/../admin` and three more spellings of it reached a keystore-gated `/admin` with no key when `/c/` was declared; behind `http.ServeMux`, which `server.New` uses, they were redirected or served by the `/c/` handler. 400 and not 401: no credential makes such a path unambiguous, and a 401 would be read as a bad or missing key (see `denyBadPath`). Who is affected: a service that declares `PublicPathPrefixes` (one service at the time of writing) and a caller that sends a non-canonical path under it, e.g. `/c//tok` or `/c/tok/..`; the callbacks the option was added for, `/c/<token>[/<id>]`, are canonical. A fixed path sent with a percent-encoded letter (`/%68ealth`) is refused too. Not affected: services that declare no prefix (the fixed list is unchanged for every canonical request), and any request that matches neither test, which is authenticated exactly as before; `/health/` is still not exempt. The refusal is observed as `AuthSourceBypass` with `AuthResultDeny`, so `apikey_auth_total{source="bypass",result="deny"}` counts it. There is no off-switch, deliberately: an environment variable that restores matching on the raw path would restore the bypass behind a router that cleans paths, and the gate cannot know which router it is in front of. A service that needs a non-canonical path accepted should say which form, so the rule can allow that form and nothing else; to go back, stay on 0.105.0.
   - summary: A request under a declared PublicPathPrefixes entry, or for a fixed probe path, with a non-canonical path (dot segments, //, encoded . / \) now gets 400 from the gate instead of skipping auth.
+- **SECURITY:** a declared public path prefix (`PublicPathPrefixes`, 0.104.1 to 0.106.0) was matched against the path as written, while a router that cleans paths before routing chooses the handler from the cleaned path, so behind such a router a request like `/c/../admin` skipped authentication and reached a gated handler. `http.ServeMux`, which `server.New` uses, redirects those paths instead, so the hole was latent: the only service known to declare a prefix (it is listed in the fleet registry) routes on `Server.Mux`. 0.107.0 closes it (the canonical-path rule in the bullet above); the floor decision is in `compat/compat.json`: `min_safe` stays, with the reason.
+  - summary: A declared public prefix was matched on the raw path; behind a router that cleans paths first, /prefix/../gated skipped auth (latent behind http.ServeMux). Fixed by the canonical-path rule.
 
 ### Added
 
@@ -209,6 +223,8 @@ Verified: every step of `.woodpecker.yml` against the pushed branch, one after t
 Go 1.27.2, `api` (no incompatible change: `compat` only gains identifiers), `bench`, `release` and `fuzz` (23 targets, 5 s each); `go run ./scripts/whatchanged v0.102.60 v0.105.0` lists the ten bullets of those
 releases, 0.103.0's off-switch among them; 16 deliberate breaks of the parser, `Between`, the renderer and `release-check.sh` each fail a test or the selftest (the first run missed a code fence in column 0, which
 has a test now). The steps were run by hand in those images, not by Woodpecker.
+
+The rest of this entry, from here to the next version heading, is the 0.105.1 entry (the CI stages and `scripts/fuzz-changed.sh`, #191, tag `v0.105.1`). It was merged into this one and lost its heading; `release-check` does not accept a heading added below the top entry, so the text stays where it is.
 
 The CI pipeline runs its steps in two stages instead of one after another, and a pull request fuzzes only the packages it touches. No package changes.
 
