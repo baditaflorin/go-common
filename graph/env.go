@@ -34,6 +34,28 @@ var (
 		Name: "GRAPH_API_KEY_FILE", Kind: env.KindString,
 		Doc: "Path of the protected file holding the writer API key. It takes precedence over GRAPH_API_KEY, and an unreadable file fails closed.",
 	})
+	envSPIFFECollectorURL = env.Declare(env.Var{
+		Name: "GRAPH_SPIFFE_COLLECTOR_URL", Kind: env.KindString,
+		Doc: "HTTPS root of the collector's private SPIFFE mTLS listener, e.g. https://go-fleet-graph:8443. With GRAPH_SPIFFE_COLLECTOR_ID and SPIFFE_ENDPOINT_SOCKET, batches go there with the workload's X.509-SVID and no writer key; a configured writer key stays the fallback.",
+		Check: func(v string) error {
+			_, err := normalizeSPIFFECollectorURL(v)
+			return err
+		},
+	})
+	envSPIFFECollectorID = env.Declare(env.Var{
+		Name: "GRAPH_SPIFFE_COLLECTOR_ID", Kind: env.KindString,
+		Doc: "Exact SPIFFE ID the collector's mTLS listener must prove, e.g. spiffe://0exec.com/ns/fleet/sa/fleet-graph. Required by GRAPH_SPIFFE_COLLECTOR_URL.",
+		Check: func(v string) error {
+			if !validSPIFFEIDShape(strings.TrimSpace(v)) {
+				return fmt.Errorf("not a spiffe:// ID")
+			}
+			return nil
+		},
+	})
+	envSPIFFESocket = env.Declare(env.Var{
+		Name: "SPIFFE_ENDPOINT_SOCKET", Kind: env.KindString,
+		Doc: "SPIFFE Workload API socket (unix:///run/spire/sockets/agent.sock), set by the fleet's Compose SPIFFE overlay. graph reads it only for GRAPH_SPIFFE_COLLECTOR_URL.",
+	})
 	envReaderAPIKey = env.Declare(env.Var{
 		Name: "GRAPH_READER_API_KEY", Kind: env.KindString, Secret: true,
 		Doc: "Read-side key for graph lookups, kept separate from the writer key.",

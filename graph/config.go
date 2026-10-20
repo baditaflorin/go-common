@@ -26,16 +26,23 @@ type config struct {
 	// X-Auth-User after keystore verification in custom HTTP servers.
 	trustedCallerIPs []netip.Addr
 	// node is the logical host this process runs on (FLEET_NODE), sent as the X-Fleet-Node header.
-	node          string
-	sampleRate    float64
-	bufferSize    int
-	flushInterval time.Duration
-	flushBatch    int
+	node string
+	// The SPIFFE mTLS path (spiffe.go): the collector's private listener, its
+	// exact SPIFFE ID and the Workload API socket. All three, or the path is off.
+	spiffeCollectorURL string
+	spiffeCollectorErr error
+	spiffeCollectorID  string
+	spiffeSocket       string
+	sampleRate         float64
+	bufferSize         int
+	flushInterval      time.Duration
+	flushBatch         int
 }
 
 // loadConfig reads env vars once. Called from initOnce.
 func loadConfig() config {
 	collectorURL, collectorErr := normalizeCollectorURL(envCollectorURL.Value())
+	spiffeCollectorURL, spiffeCollectorErr := normalizeSPIFFECollectorURL(envSPIFFECollectorURL.Value())
 	c := config{
 		enabled:      parseBoolEnv(envEnabled.Name, false),
 		collectorURL: collectorURL,
@@ -51,10 +58,15 @@ func loadConfig() config {
 		targetAliases:    parseTargetAliases(envTargetAliases.Value()),
 		trustedCallerIPs: parseTrustedCallerIPs(envTrustedCallerIPs.Value()),
 		node:             loadNode(),
-		sampleRate:       parseFloatEnv(envSampleRate.Name, 1.0),
-		bufferSize:       parseIntEnv(envBufferSize.Name, 10000),
-		flushInterval:    time.Duration(parseIntEnv(envFlushInterval.Name, 10)) * time.Second,
-		flushBatch:       parseIntEnv(envFlushBatch.Name, 500),
+		// The SPIFFE path needs no writer key; with one, the key is its fallback.
+		spiffeCollectorURL: spiffeCollectorURL,
+		spiffeCollectorErr: spiffeCollectorErr,
+		spiffeCollectorID:  strings.TrimSpace(envSPIFFECollectorID.Value()),
+		spiffeSocket:       strings.TrimSpace(envSPIFFESocket.Value()),
+		sampleRate:         parseFloatEnv(envSampleRate.Name, 1.0),
+		bufferSize:         parseIntEnv(envBufferSize.Name, 10000),
+		flushInterval:      time.Duration(parseIntEnv(envFlushInterval.Name, 10)) * time.Second,
+		flushBatch:         parseIntEnv(envFlushBatch.Name, 500),
 	}
 	// Event emission is deliberately all-or-nothing: it is opt-in and
 	// requires a valid collector URL plus a dedicated writer key. This
@@ -126,14 +138,26 @@ func parseTrustedCallerIPs(raw string) []netip.Addr {
 }
 
 func (c config) eventEmissionEnabled() bool {
-	return c.eventEmissionConfigured() && c.currentWriterAPIKey() != ""
+	return c.enabled && (c.spiffeConfigured() || c.keyPathConfigured() && c.currentWriterAPIKey() != "")
 }
 
 // eventEmissionConfigured avoids filesystem reads on the request path. The
 // sender checks the current file-backed key immediately before each batch.
 func (c config) eventEmissionConfigured() bool {
-	return c.enabled && c.collectorErr == nil && c.collectorURL != "" &&
-		(c.writerAPIKeyFile != "" || c.writerAPIKey != "")
+	return c.enabled && (c.keyPathConfigured() || c.spiffeConfigured())
+}
+
+// keyPathConfigured: a valid GRAPH_COLLECTOR_URL and a writer key (or its file).
+func (c config) keyPathConfigured() bool {
+	return c.collectorErr == nil && c.collectorURL != "" && (c.writerAPIKeyFile != "" || c.writerAPIKey != "")
+}
+
+// spiffeConfigured: a valid GRAPH_SPIFFE_COLLECTOR_URL, a collector ID of the
+// right shape and a Workload API socket. Whether an SVID can be had is only
+// known when the sender connects (spiffe.go).
+func (c config) spiffeConfigured() bool {
+	return c.spiffeCollectorErr == nil && c.spiffeCollectorURL != "" &&
+		validSPIFFEIDShape(c.spiffeCollectorID) && c.spiffeSocket != ""
 }
 
 // normalizeCollectorURL accepts a root graph endpoint. Remote endpoints

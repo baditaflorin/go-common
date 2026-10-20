@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/baditaflorin/go-common/config"
 	"github.com/baditaflorin/go-common/depcheck"
@@ -14,6 +15,7 @@ import (
 	"github.com/baditaflorin/go-common/reqstats"
 	"github.com/baditaflorin/go-common/runtimetune"
 	"github.com/baditaflorin/go-common/safehttp"
+	"github.com/baditaflorin/go-common/spiffe"
 	"github.com/baditaflorin/go-common/telemetry"
 	"log"
 	"net/http"
@@ -100,7 +102,10 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// Initialise the fleet-graph identity for this process. Safe to
 	// call multiple times; subsequent calls only update identity.
 	// All outbound (safehttp) + inbound (graph.Middleware below) events
-	// are tagged with cfg.AppName from here on.
+	// are tagged with cfg.AppName from here on. The mTLS factory is what
+	// lets GRAPH_SPIFFE_COLLECTOR_URL work without graph importing the
+	// Workload API; it is used only when that variable is set.
+	graph.SetMTLSClientFactory(graphMTLSClient)
 	graph.Init(cfg.AppName, cfg.Version)
 	tracing := telemetry.Init(cfg.AppName, cfg.Version)
 
@@ -339,4 +344,13 @@ func bodyLimitMiddleware(maxBytes int64) middleware.Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// graphMTLSClient builds graph's SPIFFE mTLS client on package spiffe.
+func graphMTLSClient(ctx context.Context, socket string, allowedServerIDs []string, timeout time.Duration) (graph.MTLSClient, error) {
+	client, err := spiffe.NewHTTPClientWithTimeout(ctx, socket, allowedServerIDs, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
 }

@@ -39,8 +39,9 @@ func resetState(t *testing.T) {
 }
 
 // captureLog sends the standard logger's output to the returned buffer for the
-// rest of the test. The graph package logs nothing from goroutines, so the
-// buffer needs no lock.
+// rest of the test. The graph package logs nothing from goroutines except on
+// the SPIFFE path (spiffe.go), which no test that captures the log turns on,
+// so the buffer needs no lock.
 func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer

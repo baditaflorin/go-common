@@ -32,8 +32,11 @@ The variables that go-common packages declare in the `env` registry, with what t
 | `GRAPH_READER_API_KEY` | string | (secret) | Read-side key for graph lookups, kept separate from the writer key. |
 | `GRAPH_SAMPLE_RATE` | float | `1` | Fraction of events kept, clamped to the range 0 to 1. |
 | `GRAPH_SERVICE_ID` | string | unset | Canonical registry id used as the identity of batches and events: a lower-case DNS label. An invalid value fails closed. |
+| `GRAPH_SPIFFE_COLLECTOR_ID` | string | unset | Exact SPIFFE ID the collector's mTLS listener must prove, e.g. spiffe://0exec.com/ns/fleet/sa/fleet-graph. Required by GRAPH_SPIFFE_COLLECTOR_URL. |
+| `GRAPH_SPIFFE_COLLECTOR_URL` | string | unset | HTTPS root of the collector's private SPIFFE mTLS listener, e.g. https://go-fleet-graph:8443. With GRAPH_SPIFFE_COLLECTOR_ID and SPIFFE_ENDPOINT_SOCKET, batches go there with the workload's X.509-SVID and no writer key; a configured writer key stays the fallback. |
 | `GRAPH_TARGET_ALIASES` | list | unset | Comma-separated host=canonical-service-id pairs that map an outbound host to a service id. |
 | `GRAPH_TRUSTED_CALLER_IPS` | list | unset | Comma-separated literal IP addresses of gateways trusted to stamp X-Auth-User. Entries that are not literal IPs are ignored. |
+| `SPIFFE_ENDPOINT_SOCKET` | string | unset | SPIFFE Workload API socket (unix:///run/spire/sockets/agent.sock), set by the fleet's Compose SPIFFE overlay. graph reads it only for GRAPH_SPIFFE_COLLECTOR_URL. |
 
 ## `runtimetune`
 
