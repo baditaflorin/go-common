@@ -60,8 +60,8 @@ func TestHeadingForms(t *testing.T) {
 func TestBulletShapes(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name, body                           string
-		class, qualifier, summary, offSwitch string
+		name, body                                   string
+		class, qualifier, summary, offSwitch, reason string
 	}{
 		{
 			name:  "behavioural with both fields",
@@ -94,6 +94,11 @@ func TestBulletShapes(t *testing.T) {
 			class: "breaking", summary: "second", offSwitch: "first",
 		},
 		{
+			name:  "a patch-safe behaviour change carries its reason",
+			body:  "- **BEHAVIOURAL (patch-safe):** only a request that failed before is refused now.\n  - summary: requests that failed before are refused.\n  - reason: no accepted request changes.\n",
+			class: "behavioural", qualifier: "patch-safe", summary: "requests that failed before are refused.", reason: "no accepted request changes.",
+		},
+		{
 			name:  "a bare marker line",
 			body:  "- **BREAKING:**\n  - summary: only the marker opened it\n",
 			class: "breaking", summary: "only the marker opened it",
@@ -105,8 +110,8 @@ func TestBulletShapes(t *testing.T) {
 			continue
 		}
 		b := entries[0].bullets[0]
-		if b.class != tc.class || b.qualifier != tc.qualifier || b.summary != tc.summary || b.offSwitch != tc.offSwitch {
-			t.Errorf("%s: got class=%q qualifier=%q summary=%q off-switch=%q", tc.name, b.class, b.qualifier, b.summary, b.offSwitch)
+		if b.class != tc.class || b.qualifier != tc.qualifier || b.summary != tc.summary || b.offSwitch != tc.offSwitch || b.reason != tc.reason {
+			t.Errorf("%s: got class=%q qualifier=%q summary=%q off-switch=%q reason=%q", tc.name, b.class, b.qualifier, b.summary, b.offSwitch, b.reason)
 		}
 	}
 }
@@ -184,11 +189,18 @@ func TestFieldProblems(t *testing.T) {
 func TestMarkerProblems(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, body, want string }{
-		{"colon outside the bold", "- **BREAKING**: x\n  - summary: a\n", "starts a BREAKING bullet but not as"},
-		{"a longer marker word", "- **BREAKING CHANGE:** x\n  - summary: a\n", "starts a BREAKING bullet but not as"},
+		{"colon outside the bold", "- **BREAKING**: x\n  - summary: a\n", "bullet but not as"},
+		{"a longer marker word", "- **BREAKING CHANGE:** x\n  - summary: a\n", "bullet but not as"},
 		{"text glued to the colon", "- **BREAKING:**x\n  - summary: a\n", ""},
 		{"empty qualifier", "- **BREAKING ():** x\n  - summary: a\n", "empty qualifier"},
-		{"nested parentheses", "- **BREAKING (a (b)):** x\n  - summary: a\n", "starts a BREAKING bullet but not as"},
+		{"nested parentheses", "- **BREAKING (a (b)):** x\n  - summary: a\n", "bullet but not as"},
+		{"BEHAVIOURAL without its qualifier", "- **BEHAVIOURAL:** x\n  - summary: a\n  - reason: r\n", "BEHAVIOURAL has one form"},
+		{"BEHAVIOURAL with another qualifier", "- **BEHAVIOURAL (urgent):** x\n  - summary: a\n  - reason: r\n", "BEHAVIOURAL has one form"},
+		{"BEHAVIOURAL without a reason", "- **BEHAVIOURAL (patch-safe):** x\n  - summary: a\n", "no reason: line"},
+		{"BEHAVIOURAL without a summary", "- **BEHAVIOURAL (patch-safe):** x\n  - reason: r\n", "no summary: line"},
+		{"a reason on a BREAKING bullet", "- **BREAKING (behavioural):** x\n  - summary: a\n  - reason: r\n", "reason: belongs to a BEHAVIOURAL"},
+		{"BEHAVIOURAL colon outside the bold", "- **BEHAVIOURAL (patch-safe)**: x\n  - summary: a\n  - reason: r\n", "bullet but not as"},
+		{"BEHAVIOURAL on a wrapped line", "- an ordinary bullet that\n  **BEHAVIOURAL (patch-safe):** carries on\n", "has to open a top-level"},
 		{"another bullet character", "* **BREAKING:** x\n  - summary: a\n", "has to open a top-level"},
 		{"a paragraph", "**BREAKING:** x\n", "has to open a top-level"},
 		{"a nested bullet", "- an ordinary bullet\n  - **BREAKING:** nested\n", "has to open a top-level"},
@@ -271,5 +283,55 @@ func TestFeedOfKeepsFileOrder(t *testing.T) {
 	}
 	if empty := feedOf(nil); empty.Changes == nil {
 		t.Error("an empty feed must hold [] and not null")
+	}
+}
+
+func TestPatchBump(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		version, tag string
+		want         bool
+	}{
+		{"0.105.1", "v0.105.0", true},
+		{"0.105.9", "v0.105.0", true},
+		{"0.106.0", "v0.105.0", false},
+		{"0.105.1", "v0.104.7", false},
+		{"1.0.0", "v0.105.0", false},
+		{"0.105.1", "", false},
+		{"0.105.1", "garbage", false},
+		{"0.105.1", "v0.105.0-rc.1", true},
+	} {
+		if got := patchBump(tc.version, tc.tag); got != tc.want {
+			t.Errorf("patchBump(%q, %q) = %v, want %v", tc.version, tc.tag, got, tc.want)
+		}
+	}
+}
+
+func TestReleaseProblems(t *testing.T) {
+	t.Parallel()
+	body := "- **BREAKING (behavioural):** a\n  - summary: a\n" +
+		"- **BREAKING:** the API\n  - summary: b\n" +
+		"- **BREAKING (only for 0.1.0):** c\n  - summary: c\n" +
+		"- **BEHAVIOURAL (patch-safe):** d\n  - summary: d\n  - reason: r\n"
+	src := "# Changelog\n\n## [%s] - 2026-11-01\n\n" + body
+	for _, tc := range []struct {
+		version, tag string
+		want         int // problems
+	}{
+		{"0.105.1", "v0.105.0", 1}, // a patch with a BREAKING (behavioural) bullet
+		{"0.106.0", "v0.105.0", 0}, // a minor
+		{"1.0.0", "v0.105.0", 0},
+		{"0.105.1", "", 0}, // no tag, nothing to compare with
+	} {
+		entries := mustParse(t, strings.Replace(src, "%s", tc.version, 1))
+		probs := releaseProblems(entries[0], tc.tag)
+		if len(probs) != tc.want {
+			t.Errorf("%s after %q: %d problems %v, want %d", tc.version, tc.tag, len(probs), probs, tc.want)
+		}
+		for _, p := range probs {
+			if p.line != 5 || !strings.Contains(p.msg, "takes a minor release") || !strings.Contains(p.msg, "BEHAVIOURAL (patch-safe)") {
+				t.Errorf("problem %v: want the first bullet (line 5) and the way out", p)
+			}
+		}
 	}
 }

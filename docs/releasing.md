@@ -15,8 +15,11 @@ number and keeping old lines patched.
   below it. `scripts/release-check.sh` enforces this on every pull request. Two
   changes can claim the same number while both are open (it happened to 0.102.66,
   0.102.67 and 0.102.68 on the day this check was written); whichever merges second fails the check and renumbers.
-- A change that is BREAKING (see [api-policy.md](api-policy.md)) should take a
-  minor bump, so that consumers who follow patch releases only are not broken.
+- A change with a **BREAKING (behavioural):** bullet takes a minor bump, so that
+  consumers who follow patch releases only are not changed under them:
+  `scripts/release-check.sh` fails it otherwise, unless the bullet is marked
+  **BEHAVIOURAL (patch-safe):** with a reason (rule 6 of [api-policy.md](api-policy.md)).
+  "Patch" means the same major and minor as the newest tag, not as the entry below.
 - A change that leaves `CHANGELOG.md` alone claims no release, and the check
   passes.
 
@@ -37,8 +40,8 @@ each bullet ends with its own short form, and a generator reads it into `compat/
 
 The grammar (`scripts/whatchanged` parses exactly this, and refuses what it cannot place):
 
-- **The bullet** is a top-level `- ` bullet of an entry whose text starts `**BREAKING:**`
-  or `**BREAKING (qualifier):**`. No qualifier means the API or a build requirement
+- **The bullet** is a top-level `- ` bullet of an entry whose text starts `**BREAKING:**`,
+  `**BREAKING (qualifier):**` or `**BEHAVIOURAL (patch-safe):**`. No qualifier means the API or a build requirement
   changed; `(behavioural)` is a change no compiler sees; any other qualifier says who is
   affected (`(only for 0.102.59)`). Older entries put the first sentence in bold after the
   colon; that reads the same. The bullet runs to the next line in column 0, so its
@@ -49,6 +52,10 @@ The grammar (`scripts/whatchanged` parses exactly this, and refuses what it cann
 - **`summary:`** is required: 1 to 200 characters (characters, not bytes) saying what
   changes for a service that bumps and what it has to check. The reason is for the bullet,
   not for the summary.
+- **`reason:`** is for a bullet marked `**BEHAVIOURAL (patch-safe):**` and for no other: a
+  behaviour change that a patch release may carry, which is that marker (it has no other
+  qualifier) with its `summary:` and a `reason:` of 1 to 200 characters saying why a service
+  can take it in a patch. The feed carries these bullets like the BREAKING ones.
 - **`off-switch:`** is optional: 1 to 200 characters naming the setting, option or call
   that restores the old behaviour without waiting for a release. Leave it out when there is
   none; do not write "none".
@@ -77,7 +84,7 @@ as older than its own release, so the notes of that release are included: a note
 not apply is better than a missing one.
 
 CI enforces it twice. `scripts/release-check.sh` (the `release` step) runs
-`scripts/whatchanged -release` for the entry the change adds, and `go test ./...` runs
+`scripts/whatchanged -release` for the entry the change adds (which also applies the minor-bump rule above), and `go test ./...` runs
 `TestFeedIsCurrent` and `TestEveryBreakingBulletIsInTheFeed` in `scripts/whatchanged`, so
 a change that adds or edits a bullet without its fields and the regenerated file cannot
 merge. `scripts/release-check-selftest.sh` tests the script itself (it runs from a Go test
@@ -164,7 +171,7 @@ still on main; it blocks now that the fix (0.103.1) has merged. Do not add
 
 | Script | Checks |
 | --- | --- |
-| `scripts/release-check.sh` | The claimed version is well formed, unique and the next free one, and the entry's `**BREAKING...**` bullets carry their fields (see above) |
+| `scripts/release-check.sh` | The claimed version is well formed, unique and the next free one, the entry's `**BREAKING...**` bullets carry their fields (see above), and a behaviour change is not in a patch release |
 | `scripts/whatchanged` | Generates `compat/changes.json` from the bullets, fails when it is stale, and prints the changes between two versions |
 | `scripts/forward-compat.sh` | `go vet` and the tests still pass with a newer `go` line in go.mod (run on a copy) |
 | `scripts/apidiff-check.sh` | An incompatible API change is declared BREAKING |

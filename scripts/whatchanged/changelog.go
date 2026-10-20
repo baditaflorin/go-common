@@ -14,7 +14,8 @@ import (
 //
 //	entry   = "## [X.Y.Z] - YYYY-MM-DD" | "## vX.Y.Z - YYYY-MM-DD" | "## vX.Y.Z — YYYY-MM-DD"
 //	bullet  = "- **" CLASS [ " (" qualifier ")" ] ":" ... , at column 0, inside an entry
-//	field   = "  - summary: " text | "  - off-switch: " text     (two spaces, inside the bullet)
+//	CLASS   = "BREAKING" | "BEHAVIOURAL"   (BEHAVIOURAL takes the qualifier "patch-safe", and only that)
+//	field   = "  - summary: " text | "  - off-switch: " text | "  - reason: " text   (two spaces, inside the bullet)
 //
 // A bullet runs from its "- " line to the line before the next line that starts in
 // column 0 (the next bullet, a heading, a paragraph); blank lines and indented lines
@@ -24,6 +25,10 @@ const (
 	maxFieldLen    = 200
 	fieldSummary   = "summary"
 	fieldOffSwitch = "off-switch"
+	fieldReason    = "reason"
+
+	// patchSafe is the one qualifier of a BEHAVIOURAL bullet.
+	patchSafe = "patch-safe"
 )
 
 var (
@@ -31,17 +36,17 @@ var (
 	headingRe = regexp.MustCompile(`^## (?:\[(\d+\.\d+\.\d+)\]|v(\d+\.\d+\.\d+)) [-—] (\d{4}-\d{2}-\d{2})$`)
 	// markerRe opens a feed bullet. The colon is inside the bold text; what follows it
 	// is either the closing ** or, in older entries, the first sentence in bold.
-	markerRe = regexp.MustCompile(`^- \*\*(BREAKING)(?: \(([^()]*)\))?:(?:\*\*| |$)`)
+	markerRe = regexp.MustCompile(`^- \*\*(BREAKING|BEHAVIOURAL)(?: \(([^()]*)\))?:(?:\*\*| |$)`)
 	// looseMarkerRe is anything that reads as an attempt to write a marker, on any line:
 	// a superset of what scripts/apidiff-check.sh accepts as "declared BREAKING". A line
 	// that matches it but is not a well-formed marker at the start of a top-level bullet
 	// is an error, so a bullet cannot be left out of the feed by a typo.
-	looseMarkerRe = regexp.MustCompile(`^\s*(?:[-*+]\s+)?\*\*BREAKING`)
+	looseMarkerRe = regexp.MustCompile(`^\s*(?:[-*+]\s+)?\*\*(?:BREAKING|BEHAVIOURAL)`)
 	// fieldRe is a field line: exactly two spaces, "- ", the name, ": " and a value
 	// that has no space at either end.
-	fieldRe = regexp.MustCompile(`^  - (summary|off-switch): (\S(?:.*\S)?)$`)
+	fieldRe = regexp.MustCompile(`^  - (summary|off-switch|reason): (\S(?:.*\S)?)$`)
 	// nearFieldRe finds a line that is meant to be a field but is not written like one.
-	nearFieldRe = regexp.MustCompile(`(?i)^\s*(?:[-*+]\s+)?(summary|off-switch)\s*:`)
+	nearFieldRe = regexp.MustCompile(`(?i)^\s*(?:[-*+]\s+)?(summary|off-switch|reason)\s*:`)
 )
 
 // problem is something in CHANGELOG.md the feed cannot accept.
@@ -73,6 +78,7 @@ type bullet struct {
 	qualifier string
 	summary   string
 	offSwitch string
+	reason    string
 	lines     []bulletLine
 }
 
@@ -177,14 +183,14 @@ func parseChangelog(src []byte) ([]*entry, []problem) {
 				cur.bullets = append(cur.bullets, b)
 				open = b
 			case looseMarkerRe.MatchString(line):
-				bad(n, "starts a BREAKING bullet but not as \"- **BREAKING:** ...\" or \"- **BREAKING (qualifier):** ...\"; the feed cannot carry it")
+				bad(n, "starts a BREAKING or BEHAVIOURAL bullet but not as \"- **BREAKING:** ...\", \"- **BREAKING (qualifier):** ...\" or \"- **BEHAVIOURAL (patch-safe):** ...\"; the feed cannot carry it")
 			}
 
 		case line != "" && line[0] != ' ' && line[0] != '\t':
 			// A heading, a paragraph or a list in another style, in column 0: the bullet is over.
 			finish()
 			if looseMarkerRe.MatchString(line) {
-				bad(n, "a BREAKING marker has to open a top-level \"- \" bullet; this line is not one")
+				bad(n, "a BREAKING or BEHAVIOURAL marker has to open a top-level \"- \" bullet; this line is not one")
 			}
 
 		default: // blank or indented: inside the bullet if there is one
@@ -192,7 +198,7 @@ func parseChangelog(src []byte) ([]*entry, []problem) {
 				open.lines = append(open.lines, bulletLine{n, line, false})
 			}
 			if looseMarkerRe.MatchString(line) {
-				bad(n, "a BREAKING marker has to open a top-level \"- \" bullet; a nested or wrapped line cannot carry one")
+				bad(n, "a BREAKING or BEHAVIOURAL marker has to open a top-level \"- \" bullet; a nested or wrapped line cannot carry one")
 			}
 		}
 	}
@@ -219,6 +225,34 @@ func fenceOf(trimmed string) (byte, int) {
 		return 0, 0 // inline code that starts a line, not a fence
 	}
 	return trimmed[0], n
+}
+
+// patchBump reports whether claiming version (X.Y.Z, no v) is a patch release: the same
+// major and minor as the newest tag.
+func patchBump(version, latestTag string) bool {
+	vm := versionCoreRe.FindStringSubmatch("v" + version)
+	tm := versionCoreRe.FindStringSubmatch(latestTag)
+	return vm != nil && tm != nil && vm[1] == tm[1] && vm[2] == tm[2]
+}
+
+var versionCoreRe = regexp.MustCompile(`^v(\d+)\.(\d+)\.\d+`)
+
+// releaseProblems are the rules for a change that claims entry e as its release, on top
+// of the grammar: a behaviour change takes a minor release, unless its bullet says it is
+// safe in a patch and why. latestTag is the newest tag, "" when there is none.
+func releaseProblems(e *entry, latestTag string) []problem {
+	var probs []problem
+	if latestTag == "" || !patchBump(strings.TrimPrefix(e.version, "v"), latestTag) {
+		return nil
+	}
+	for _, b := range e.bullets {
+		if b.class == "breaking" && b.qualifier == "behavioural" {
+			probs = append(probs, problem{b.line, fmt.Sprintf(
+				"%s of %s: a behaviour change takes a minor release, and %s follows %s in the same minor: claim the next minor, or, if a service can take it in a patch, mark the bullet \"**BEHAVIOURAL (patch-safe):**\" and give it a \"  - reason: ...\" line saying why (docs/api-policy.md)",
+				b.marker(), e.version, e.version, latestTag)})
+		}
+	}
+	return probs
 }
 
 // checkBullet reads the field lines of a closed feed bullet and says what is wrong
@@ -256,10 +290,25 @@ func checkBullet(e *entry, b *bullet) []problem {
 			b.summary = value
 		case fieldOffSwitch:
 			b.offSwitch = value
+		case fieldReason:
+			b.reason = value
 		}
 	}
 	if _, ok := have[fieldSummary]; !ok {
 		bad(b.line, "no summary: line; end the bullet with \"  - summary: <one line, at most %d characters: what changes for a service that bumps, and what to check>\" (docs/releasing.md)", maxFieldLen)
+	}
+	switch b.class {
+	case "behavioural":
+		if b.qualifier != patchSafe {
+			bad(b.line, "BEHAVIOURAL has one form, \"- **BEHAVIOURAL (patch-safe):** ...\"; a behaviour change that is not safe in a patch is \"- **BREAKING (behavioural):** ...\"")
+		}
+		if _, ok := have[fieldReason]; !ok {
+			bad(b.line, "no reason: line; say why a patch release may carry it: \"  - reason: <one line, at most %d characters>\" (docs/api-policy.md)", maxFieldLen)
+		}
+	default:
+		if n, ok := have[fieldReason]; ok {
+			bad(n, "reason: belongs to a BEHAVIOURAL (patch-safe) bullet only")
+		}
 	}
 	return probs
 }
@@ -280,6 +329,7 @@ func feedOf(entries []*entry) compat.ChangeFeed {
 				Qualifier: b.qualifier,
 				Summary:   b.summary,
 				OffSwitch: b.offSwitch,
+				Reason:    b.reason,
 			})
 		}
 	}
