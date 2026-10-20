@@ -155,8 +155,10 @@ func TestPrintMode(t *testing.T) {
 	if a != out {
 		t.Errorf("0.102.60 0.103.0 differs from v0.102.60 v0.103.0")
 	}
-	if code, out, _ := runCLI("v0.105.0"); code != 0 || !strings.Contains(out, "None:") {
-		t.Errorf("nothing is newer than v0.105.0 in the feed: exit %d, %q", code, out)
+	// A release that does not exist yet: the feed has nothing newer. (This used to name the newest
+	// release of the day, v0.105.0, and failed as soon as a later release added a BREAKING bullet.)
+	if code, out, _ := runCLI("v99.0.0"); code != 0 || !strings.Contains(out, "None:") {
+		t.Errorf("nothing is newer than v99.0.0 in the feed: exit %d, %q", code, out)
 	}
 }
 
