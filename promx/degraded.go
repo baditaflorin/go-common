@@ -14,14 +14,29 @@ import (
 //
 // "primitive" is the upstream name (html-proxy, keystore, …);
 // "suffix" is the per-token bucket (down, degraded, timeout,
-// rate_limited). Cardinality is bounded by (services × siblings ×
-// 4-ish suffixes) and stable across requests because callers reuse
-// the same primitive names.
+// rate_limited). The token is whatever string the caller appended, and the
+// degraded package invites a third-party host in it, so both labels are
+// BoundedLabels: a process names at most 64 primitives and 16 suffixes
+// (degradedPrimitiveLimit, degradedSuffixLimit) and counts the rest under
+// "_other". A caller that reuses the same few primitive names, as the
+// naming convention says, never sees the difference; one that appends a
+// name per request used to mint a series per name.
 type DegradedCollectors struct {
 	service string
 
+	primitives *BoundedLabel
+	suffixes   *BoundedLabel
+
 	appends *prometheus.CounterVec
 }
+
+// The most distinct "primitive" and "suffix" values fleet_degraded_total
+// names per process. Services name their upstreams, a handful to a few dozen;
+// the suffixes are the four of the naming convention and a few more.
+const (
+	degradedPrimitiveLimit = 64
+	degradedSuffixLimit    = 16
+)
 
 // NewDegradedCollectors registers the degraded-sink collector on reg.
 // reg may be nil — the shared promx.Registry() is used in that case.
@@ -30,7 +45,9 @@ func NewDegradedCollectors(reg prometheus.Registerer) *DegradedCollectors {
 		reg = Registry()
 	}
 	c := &DegradedCollectors{
-		service: ServiceID(),
+		service:    ServiceID(),
+		primitives: NewBoundedLabel(degradedPrimitiveLimit),
+		suffixes:   NewBoundedLabel(degradedSuffixLimit),
 		appends: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "fleet_degraded_total",
 			Help: "Total degraded-sink appends, labelled by primitive and suffix (down/degraded/timeout/...).",
@@ -46,5 +63,5 @@ func (c *DegradedCollectors) ObserveDegraded(ev degraded.Event) {
 	if suffix == "" {
 		suffix = "_none"
 	}
-	c.appends.WithLabelValues(c.service, ev.Primitive, suffix).Inc()
+	c.appends.WithLabelValues(c.service, c.primitives.Value(ev.Primitive), c.suffixes.Value(suffix)).Inc()
 }

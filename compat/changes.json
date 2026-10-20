@@ -3,6 +3,34 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.106.0",
+      "date": "2026-10-20",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "a `route` or `host` label value that is not valid UTF-8 or is over 256 bytes counts under `_other` (it panicked, or was kept for the life of the process)."
+    },
+    {
+      "version": "v0.106.0",
+      "date": "2026-10-20",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`scheme` on `safehttp_egress_requests_total` is `http`, `https` or `_other` instead of whatever scheme the URL had."
+    },
+    {
+      "version": "v0.106.0",
+      "date": "2026-10-20",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`status` on `http_requests_total` folds codes that are not registered into their class (`499` becomes `4xx`) and codes outside 100-599 into `_other`."
+    },
+    {
+      "version": "v0.106.0",
+      "date": "2026-10-20",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`primitive` and `suffix` on `fleet_degraded_total` take at most 64 and 16 values per process; the rest count under `_other`."
+    },
+    {
       "version": "v0.105.0",
       "date": "2026-10-19",
       "class": "breaking",

@@ -127,20 +127,20 @@ func (f fakeCacheDelegate) FetchGet(_ context.Context, _ string, _ http.Header) 
 
 // TestHostCardinalityCap: hosts beyond the cap fold to "_other".
 func TestHostCardinalityCap(t *testing.T) {
-	c := newHostCardCap(2)
-	if got := c.label("a.example.com"); got != "a.example.com" {
+	c := NewBoundedLabel(2)
+	if got := c.Value("a.example.com"); got != "a.example.com" {
 		t.Errorf("first host should pass through, got %q", got)
 	}
-	if got := c.label("b.example.com"); got != "b.example.com" {
+	if got := c.Value("b.example.com"); got != "b.example.com" {
 		t.Errorf("second host should pass through, got %q", got)
 	}
-	if got := c.label("c.example.com"); got != "_other" {
+	if got := c.Value("c.example.com"); got != "_other" {
 		t.Errorf("third host should fold to _other, got %q", got)
 	}
-	if got := c.label("a.example.com"); got != "a.example.com" {
+	if got := c.Value("a.example.com"); got != "a.example.com" {
 		t.Errorf("already-admitted host should still resolve, got %q", got)
 	}
-	if got := c.label(""); got != "_unknown" {
+	if got := c.Value(""); got != "_unknown" {
 		t.Errorf("empty host should become _unknown, got %q", got)
 	}
 }

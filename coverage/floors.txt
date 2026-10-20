@@ -67,6 +67,7 @@ testhelpers/fakegraph 98
 testhelpers/fakekey 98
 testhelpers/httpmock 75
 testhelpers/leakcheck 90
+testhelpers/promxtest 95
 testhelpers/testclock 98
 ua 98
 validate 77

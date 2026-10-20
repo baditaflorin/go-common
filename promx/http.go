@@ -35,6 +35,14 @@ import (
 // a method and this middleware runs before authentication, so without the
 // fold anyone who can reach the port could mint a new series set per
 // distinct method.
+//
+// The "status" label is the response status code when it is a registered one
+// (about sixty: 200, 404, 429, 503...) and its class ("4xx", "5xx") when it is
+// not, because a handler that relays an upstream's status writes whatever the
+// upstream chose, anything from 100 to 999. A code outside 100-599 that nobody
+// registered is "_other". The "route" label is a BoundedLabel: past the limit,
+// and for a value that is not valid UTF-8 or longer than MaxLabelValueLen, it is
+// "_other".
 type HTTPCollectors struct {
 	service string
 
@@ -53,9 +61,9 @@ type HTTPCollectors struct {
 	// routeCap bounds the cardinality of the "route" label. Routes beyond
 	// the cap fold to "_other" so a service with parameterised paths or a
 	// scanner spraying distinct URLs can't blow up Prometheus series count
-	// (and the scrape server's memory). Mirrors the host cap already used by
-	// the egress/backoff/fleetfetch collectors. See WithRouteLimit.
-	routeCap *hostCardCap
+	// (and the scrape server's memory). The same BoundedLabel the
+	// egress/backoff/fleetfetch collectors use for "host". See WithRouteLimit.
+	routeCap *BoundedLabel
 }
 
 // HTTPOption configures NewHTTPCollectors.
@@ -122,6 +130,37 @@ func methodLabel(m string) string {
 	return methodOther
 }
 
+// statusLabels is the "status" label for every code net/http lets a handler write
+// (it panics outside 100-999): the code itself when it is a registered one
+// (http.StatusText knows about sixty), else its class ("499" is "4xx", "520" is
+// "5xx", which a "5.." matcher still selects), else OtherLabel. A table makes it
+// one load and no allocation on the request path; strconv.Itoa allocated for every
+// three-digit code.
+var statusLabels = func() (t [1000]string) {
+	for code := 100; code < len(t); code++ {
+		switch {
+		case http.StatusText(code) != "":
+			t[code] = strconv.Itoa(code)
+		case code < 600:
+			t[code] = string([]byte{byte('0' + code/100), 'x', 'x'})
+		default:
+			t[code] = OtherLabel
+		}
+	}
+	return t
+}()
+
+// statusLabel returns the "status" label for a response status code. A handler
+// can write any code from 100 to 999, and one that relays an upstream's status
+// writes whatever the upstream chose, so the label folds the codes nobody
+// registered into their class instead of giving each its own series set.
+func statusLabel(code int) string {
+	if code < 0 || code >= len(statusLabels) || statusLabels[code] == "" {
+		return OtherLabel
+	}
+	return statusLabels[code]
+}
+
 // NewHTTPCollectors registers the canonical inbound HTTP collectors on
 // reg and returns the wrapper. reg may be nil — the shared
 // promx.Registry() is used in that case.
@@ -146,7 +185,7 @@ func NewHTTPCollectors(reg prometheus.Registerer, opts ...HTTPOption) *HTTPColle
 	c := &HTTPCollectors{
 		service:  service,
 		routeFn:  o.routeFn,
-		routeCap: newHostCardCap(o.routeLimit),
+		routeCap: NewBoundedLabel(o.routeLimit),
 		requestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "http_requests_total",
 			Help: "Total inbound HTTP requests handled, labelled by method, templated route, and response status.",
@@ -189,7 +228,7 @@ func (c *HTTPCollectors) WithRoute(fn func(*http.Request) string, limit int) *HT
 	if limit <= 0 {
 		limit = c.routeCap.limit
 	}
-	v.routeCap = newHostCardCap(limit)
+	v.routeCap = NewBoundedLabel(limit)
 	return &v
 }
 
@@ -200,7 +239,7 @@ func (c *HTTPCollectors) WithRoute(fn func(*http.Request) string, limit int) *HT
 func (c *HTTPCollectors) Middleware() middleware.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			route := c.routeCap.label(c.routeFn(r))
+			route := c.routeCap.Value(c.routeFn(r))
 			method := methodLabel(r.Method)
 			c.inFlightG.Inc()
 			defer c.inFlightG.Dec()
@@ -210,7 +249,7 @@ func (c *HTTPCollectors) Middleware() middleware.Middleware {
 			next.ServeHTTP(rw, r)
 			dur := time.Since(start)
 
-			status := strconv.Itoa(rw.status)
+			status := statusLabel(rw.status)
 			c.requestsTotal.WithLabelValues(c.service, method, route, status).Inc()
 			durationObserver := c.duration.WithLabelValues(c.service, method, route)
 			if spanContext := trace.SpanContextFromContext(r.Context()); spanContext.IsSampled() {
