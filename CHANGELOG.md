@@ -12,6 +12,7 @@ lose `host`. This is the durable fix for the Metrics Hub Prometheus OOM loop of 
   `sum(rate(..._sum)) / sum(rate(..._count))`, which is unchanged. Why: a histogram costs a series per bucket, so per host it was the largest cost in the fleet's Prometheus:
   `safehttp_egress_duration_seconds_bucket` was 611,628 of 1.42 M head series on 2026-10-19 (go-fleet-metrics-hub #112 now drops it at scrape), and
   `fleet_fetch_cache_age_seconds_bucket` then became the largest metric, 145,170 series, after growing from 90k to 140k in three hours.
+  - summary: `safehttp_egress_duration_seconds` and `fleet_fetch_cache_age_seconds` lose their `host` label: a query that filters or groups them by `host` now gets one series per service.
 - **BREAKING (behavioural):** `host` on `safehttp_egress_requests_total`, `safehttp_egress_response_bytes_total` and `fleet_fetch_total` takes at most 32 named values per process
   (was 256), and a host gets one only on its 64th request, provided those 64 come before 1024 other unnamed hosts have been seen (the count restarts then). Every other request
   counts under `host="_other"`, so sums over `host` stay exact. Named hosts are never evicted: the label takes at most 34 values (`_other` and `_unknown` included) whatever a
@@ -20,6 +21,8 @@ lose `host`. This is the durable fix for the Metrics Hub Prometheus OOM loop of 
   `safehttp_egress_requests_total` series for 34,406 live ones. The hosts that recur (upstream APIs, the selftest target, deep-crawled sites) keep their names, so
   `topk(15, sum by (host) (...))` on the fleet-egress dashboard shows them instead of the first domains crawled after boot. The cost: a process's first 63 requests to a host
   count under `_other`, so a host a low-volume service calls rarely gets its name late or never.
+  - summary: `host` on `safehttp_egress_requests_total`, `safehttp_egress_response_bytes_total` and `fleet_fetch_total` takes at most 32 named values per process (was 256); every other host counts under `_other`.
+  - off-switch: for an `EgressCollectors` a service builds itself, `promx.WithHostLimit(256)` and `promx.WithHostMinHits(1)` restore the old naming; `fleet_fetch_total` takes no setting
 - `WithHostLimit(n)` with `n <= 0` keeps the default (now 32); it meant 256 before.
 - A host without a slot, once every slot is taken, costs one read-locked map lookup. It took the write lock on every call before, which for a crawler was 94% of its requests.
 
@@ -68,6 +71,8 @@ The minimum Go version is now 1.26 (it was 1.25).
   images set `GOTOOLCHAIN=local`, so an older image fails with `go: go.mod requires go >= 1.26.0 (running go 1.25.14; GOTOOLCHAIN=local)` instead of downloading a toolchain. A service that cannot move
   yet stays on 0.103.x, and `scripts/backport.sh` cuts a `release/0.103` line only when a real service needs a security fix (`docs/releasing.md`).
   Moving the builder image to 1.26 first, without touching the `go` line, is safe in that order: an image newer than the `go` line always builds.
+  - summary: `go.mod` says `go 1.26.0`: a service that adopts this release needs a Go 1.26 builder (`golang:1.26` or newer), and `go get` raises its own `go` line to 1.26.0.
+  - off-switch: stay on 0.103.x; `scripts/backport.sh` cuts a `release/0.103` line only when a real service needs a security fix (docs/releasing.md)
 - A service's own `go` line decides the default of each `GODEBUG` setting, so raising it to 1.26.0 flips four defaults for that service (each can be put back with a `godebug name=value` line in its go.mod):
   `urlstrictcolons` (`net/url.Parse` now rejects a host with colons outside brackets, such as `http://localhost:1:2`), `cryptocustomrand` (most `crypto/*` APIs ignore a custom random `io.Reader`),
   `tlssecpmlkem` (the default TLS key exchange adds the hybrid post-quantum shares SecP256r1MLKEM768 and SecP384r1MLKEM1024, so the ClientHello and its JA3/JA4 fingerprint change), and
@@ -173,6 +178,8 @@ This is the first release tagged since v0.102.68; the entries 0.102.69 to 0.102.
   start-up check names a value it does not recognise). `server.New` logs one line saying what it did, never a proxy value.
   The write happens once, early, because `net/http` reads the proxy function without a lock: a service that starts requests on the default transport before `server.New` runs can race
   with it (the race detector reports it; in practice it is one word written once), and should call `egress.InstallDefaultTransport()` at the top of `main` instead.
+  - summary: `server.New` sends fleet-internal destinations (container names, private and tailnet addresses, our domains) direct on `http.DefaultTransport`; the rest still follows `HTTP_PROXY`/`NO_PROXY`.
+  - off-switch: `FLEET_EGRESS_DEFAULT_TRANSPORT=off` (also `false`, `0`, `no`, `disabled`) in the service's environment, no release needed
 
 ### Added
 
@@ -201,6 +208,7 @@ Metrics-wiring fixes for the problems the wave-4 observability review found ([do
   method: a probe with 300 methods made 300 series sets, and about 900 requests made a 2 MB scrape. Methods are case-sensitive, so `get` is `OTHER` too. The request is still
   counted and only the label changed: a dashboard or alert that selects a non-standard method by name (`method="PROPFIND"` on a WebDAV service) must select `"OTHER"` instead.
   The nine standard methods are unchanged.
+  - summary: the `promx` HTTP metrics label a request `method="OTHER"` when its method is not one of the nine standard ones: a dashboard or alert that selects a non-standard method by name must select `"OTHER"`.
 
 ### Added
 
@@ -231,6 +239,7 @@ Metrics-wiring fixes for the problems the wave-4 observability review found ([do
   (Docker `restart: on-failure`) will now restart such a service, so a port that stays taken becomes a restart loop with the reason in the log, where it used to be a silent exit.
   A service that calls `srv.Start()` itself is unchanged: with `WithGracefulDrain` a listen failure already ended the process with status 1 (`log.Fatalf`), and without it `Start`
   returns the error to its caller, as its documentation says.
+  - summary: `server.Run`/`RunTier` now log the error from `Server.Start` and exit with status 1 (before: status 0, no message), so a restart-on-failure policy restarts a service whose port is taken.
 
 ### Fixed
 
@@ -247,6 +256,7 @@ deprecations. One behaviour change: three call sites now return an error, not a 
   or `FLEET_REQUIRE_PROXY=1`) and no proxy variable is set. They run per request and in worker goroutines, where a deployment mistake should not take the process down. `Fetch`
   and `Recover` now return an error and fetch nothing (still fail-closed); `RecoverAll` logs the reason and returns nil. A caller that relied on the panic to stop the process
   must check the error. The start-up constructors, `safehttp.NewClient` among them, still panic as before.
+  - summary: `client.Fetch` and `jsbundle.Recover`/`RecoverAll` return an error instead of panicking when proxy egress is required and no proxy variable is set; a caller that relied on the panic must check it.
 
 ### Fixed
 
@@ -314,9 +324,12 @@ benchmarks with an allocation gate, a security floor for pins, and release tooli
   `64:ff9b::a9fe:a9fe` (the cloud metadata address) and `2002:7f00:1::` were allowed. Reaching them needs a NAT64 or 6to4 gateway on the path, which a typical
   container host lacks, so this closes a latent hole rather than a live one. A NAT64 or 6to4 address that carries a public IPv4 address is still allowed. Found by
   the new SSRF corpus; `FuzzIsBlocked` now checks the embedded forms too.
+  - summary: `safehttp.IsBlocked` (so `GuardHost`, `CheckURL`, the guarded dialer, `egressproxy.DefaultGuard`) also refuses IPv6 addresses that carry a blocked IPv4 address through NAT64 or 6to4.
 - **BREAKING (behavioural):** `jsbundle.RecoverOptions.Client`, when nil, is now a guarded `safehttp` client (20 s timeout, refuses internal addresses, also
   after redirects) instead of `http.DefaultClient`, which had no timeout and no SSRF guard, while the URLs it fetches come from pages and error reports. Pass a
   `Client` to opt out, for example an `httptest` server's client in a test.
+  - summary: `jsbundle.RecoverOptions.Client`, when nil, is a guarded `safehttp` client (20 s timeout, refuses internal addresses) instead of `http.DefaultClient`.
+  - off-switch: set `RecoverOptions.Client` (for example an `httptest` server's client in a test)
 - `config.Load` read `service.yaml` naively: any indented `name:` or `version:` replaced the service's own (the template's `owner.name` did), a trailing
   `# comment` stayed in the value, and a missing file printed `DEBUG: Failed to open service.yaml` to stdout. Only top-level keys count now, comments and quotes are
   stripped, and a missing file is silent. It only changed the result for callers that pass an empty app name.
@@ -358,6 +371,7 @@ targets found are fixed (one changes behaviour: see `validate` below). No export
   such as `pattern=a|b` accepted `abc`. The tag is now wrapped in `^(?:...)$`: one that already has `^...$` is unaffected, one that relied on substring matching starts
   rejecting. No `pattern=` tag exists in any local repository outside go-common's own tests. Found by `FuzzBindBytes` in the first real CI run of the fuzz step on a later
   PR in this series; the crashing input is committed under `validate/testdata/fuzz/` and replayed by `go test`.
+  - summary: `validate`'s `pattern=` tag now requires the whole value to match (it was applied unanchored): a tag that relied on substring matching starts rejecting.
 
 ### Added
 
@@ -549,6 +563,7 @@ targets found are fixed (one changes behaviour: see `validate` below). No export
   host's `NO_PROXY` listing it. `safehttp` is deliberately unchanged: it is the generic public-web client, and the runner's strict egress policy
   keeps even our own public hostnames on the proxy for proxy_egress services that scan targets with it. Third-party destinations are unchanged.
 - **BREAKING (only for 0.102.59):** `GRAPH_USE_EGRESS_PROXY` is removed; `graph` is always direct. Nothing used it.
+  - summary: `GRAPH_USE_EGRESS_PROXY` is removed and `graph` is always direct: only a service on 0.102.59 that set it is affected (nothing used it).
 - `golang.org/x/net` is an indirect dependency again (the Graph client no longer builds a proxy function from the environment).
 
 ## [0.102.59] - 2026-10-17
@@ -2000,6 +2015,8 @@ embedded version string (consumers pin via `go.mod`).
   for services with their own registry. The default `/metrics` runtime
   metrics for `server`-based services are unaffected — those come from
   `promx` and stay as-is. Supersedes the auto-wire added in #34 / v0.61.0.
+  - summary: `obs` is opt-in: `server.New` no longer starts the localhost pprof and `/metrics` debug server (127.0.0.1:6060); a service that wants it calls `obs.Init()` in `main()`.
+  - off-switch: `stop, _ := obs.Init()` and `defer stop()` in `main()` bring the old debug server back
 
 - **`promx` inbound HTTP metrics now cap "route" label cardinality** (default
   512, configurable via `WithRouteLimit`). The default `RouteFunc` returns the
