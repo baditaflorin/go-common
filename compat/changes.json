@@ -3,6 +3,22 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.108.0",
+      "date": "2026-10-20",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "A fleetfetch client (and the server.New safehttp cache delegate) with no limit now cuts response bodies at 32 MiB and sets Response.Truncated; they were read whole before.",
+      "off_switch": "FLEET_FETCH_MAX_BODY_BYTES=<bytes>, or 0 for no limit (discouraged), in the environment; WithMaxBodyBytes(n) or WithUnboundedBody() in code"
+    },
+    {
+      "version": "v0.108.0",
+      "date": "2026-10-20",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "WithMaxBodyBytes(n <= 0) no longer means unlimited: it is ignored and the 32 MiB default stays. Unlimited is WithUnboundedBody() only.",
+      "off_switch": "WithUnboundedBody() in code, or FLEET_FETCH_MAX_BODY_BYTES=0 in the environment"
+    },
+    {
       "version": "v0.107.0",
       "date": "2026-10-20",
       "class": "breaking",

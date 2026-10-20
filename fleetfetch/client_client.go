@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -36,8 +35,9 @@ type Client struct {
 	// process default (SetDefaultCaller) then env; see resolveCaller.
 	caller string
 
-	// maxBodyBytes bounds the bytes retained from a response body. Zero means
-	// unlimited, preserving the historical behavior for existing callers.
+	// maxBodyBytes bounds the bytes retained from a response body: positive is
+	// the limit, unboundedBody (negative) none, and zero "not set", which NewClient
+	// resolves from EnvMaxBodyBytes or DefaultMaxBodyBytes (body_limit.go).
 	maxBodyBytes int64
 
 	// defaultHeaders are sent on every Get; per-request headers passed
@@ -67,6 +67,7 @@ type Client struct {
 	fallbacks atomic.Int64
 	timeouts  atomic.Int64
 	errs      atomic.Int64
+	truncated atomic.Int64
 
 	// authRejected is a permanent, per-client circuit opened by a cache-side
 	// 401/403. The API key is immutable after NewClient, so retrying the same
@@ -180,6 +181,11 @@ func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.
 	start := time.Now()
 	defer func() {
 		ev := Event{Host: hostOf(targetURL), Duration: time.Since(start)}
+		if fetchRes != nil && fetchRes.Truncated {
+			ev.Truncated = true
+			c.truncated.Add(1)
+			noteTruncated(ev.Host, c.bodyLimit())
+		}
 		switch {
 		// WithoutCache clients never touch the cache — tag their direct
 		// fetches distinctly so they don't read as cache hits/errors on a
@@ -333,7 +339,7 @@ func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.
 	}
 	defer resp.Body.Close()
 
-	body, err := c.readBody(resp.Body)
+	body, truncated, err := c.readBody(resp.Body)
 	if err != nil {
 		if archiveOnly {
 			c.errs.Add(1)
@@ -392,10 +398,11 @@ func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.
 	}
 
 	out := &Response{
-		Status:   resp.StatusCode,
-		Header:   resp.Header.Clone(),
-		Body:     body,
-		FinalURL: resp.Header.Get("X-FetchCache-Final-Url"),
+		Status:    resp.StatusCode,
+		Header:    resp.Header.Clone(),
+		Body:      body,
+		Truncated: truncated,
+		FinalURL:  resp.Header.Get("X-FetchCache-Final-Url"),
 	}
 	out.Hit, _ = strconv.ParseBool(resp.Header.Get("X-FetchCache-Hit"))
 	if v := resp.Header.Get("X-FetchCache-Age-Seconds"); v != "" {
@@ -464,7 +471,7 @@ func (c *Client) directFetch(ctx context.Context, targetURL string, headers http
 	}
 	defer resp.Body.Close()
 
-	body, err := c.readBody(resp.Body)
+	body, truncated, err := c.readBody(resp.Body)
 	if err != nil {
 		c.errs.Add(1)
 		return nil, fmt.Errorf("fleetfetch: fallback body (cache=%v): %w", cacheErr, err)
@@ -478,18 +485,12 @@ func (c *Client) directFetch(ctx context.Context, targetURL string, headers http
 		Status:      resp.StatusCode,
 		Header:      resp.Header.Clone(),
 		Body:        body,
+		Truncated:   truncated,
 		FinalURL:    final,
 		Hit:         false,
 		ViaFallback: true,
 		FetchedAt:   time.Now().UTC(),
 	}, nil
-}
-
-func (c *Client) readBody(body io.Reader) ([]byte, error) {
-	if c.maxBodyBytes > 0 {
-		return io.ReadAll(io.LimitReader(body, c.maxBodyBytes))
-	}
-	return io.ReadAll(body)
 }
 
 func (c *Client) Stats() Stats {
@@ -499,6 +500,7 @@ func (c *Client) Stats() Stats {
 		Fallbacks: c.fallbacks.Load(),
 		Timeouts:  c.timeouts.Load(),
 		Errors:    c.errs.Load(),
+		Truncated: c.truncated.Load(),
 	}
 }
 

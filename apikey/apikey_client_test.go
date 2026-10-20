@@ -1,9 +1,11 @@
 package apikey
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/baditaflorin/go-common/header"
@@ -53,5 +55,37 @@ func TestClient_Verify_MissingTierHeader_IsEmptyNotError(t *testing.T) {
 	}
 	if res.Tier != "" {
 		t.Errorf("Tier = %q, want empty for a pre-tiering key", res.Tier)
+	}
+}
+
+// An error response from the keystore ends up in the returned error, which ends up
+// in logs: only its first 4 KiB do.
+func TestClient_AdminErrorBodyIsBounded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write(bytes.Repeat([]byte("e"), 1<<20))
+	}))
+	defer srv.Close()
+	c := &Client{Endpoints: []string{srv.URL}, HTTPClient: srv.Client(), UserAgent: "test", AdminToken: "t"}
+	err := c.adminCall(context.Background(), http.MethodPost, "/admin/revoke", nil, nil)
+	if err == nil {
+		t.Fatal("want an error for a 400")
+	}
+	if n := len(err.Error()); n > 4<<10+200 {
+		t.Fatalf("error message is %d bytes; the body must be cut at 4 KiB", n)
+	}
+	if !strings.HasSuffix(err.Error(), "[truncated]") {
+		t.Fatalf("a cut body is marked: %q", err.Error()[len(err.Error())-30:])
+	}
+
+	short := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(" no such key \n"))
+	}))
+	defer short.Close()
+	c.Endpoints, c.HTTPClient = []string{short.URL}, short.Client()
+	err = c.adminCall(context.Background(), http.MethodPost, "/admin/revoke", nil, nil)
+	if err == nil || !strings.HasSuffix(err.Error(), "HTTP 400: no such key") {
+		t.Fatalf("a short error body is unchanged: %v", err)
 	}
 }

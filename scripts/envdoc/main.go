@@ -25,6 +25,7 @@ import (
 
 	_ "github.com/baditaflorin/go-common/egress"
 	"github.com/baditaflorin/go-common/env"
+	_ "github.com/baditaflorin/go-common/fleetfetch"
 	_ "github.com/baditaflorin/go-common/graph"
 	_ "github.com/baditaflorin/go-common/runtimetune"
 	_ "github.com/baditaflorin/go-common/server"
