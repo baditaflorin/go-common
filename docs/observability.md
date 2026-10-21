@@ -373,7 +373,7 @@ are 483,160 of that, because `route` is capped per label, not per
 | `proxysupplier_webshare_direct_*` | - | 1 | the other five, read at scrape time |
 | `go_container_*` | - | 1 | twenty cgroup gauges and counters, read at scrape time |
 | `fleet_graph_*` | - | 1 | six sender counters, read at scrape time |
-| `build_info` | built_at, git_sha, go_version, version | 1 | constant for the life of the process |
+| `build_info` | built_at, git_sha, go_common_version, go_version, version | 1 | constant for the life of the process |
 
 ## Known limits
 

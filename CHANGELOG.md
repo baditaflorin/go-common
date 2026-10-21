@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.109.1] - 2026-10-21
+
+`build_info` carries the go-common version the binary was linked with, as a new label, so a dashboard or an alert can tie a running service to the go-common it runs.
+
+### Added
+
+- `build_info{go_common_version}`: the version of `github.com/baditaflorin/go-common` in the binary's module list (`debug.ReadBuildInfo`): `v0.109.0` for a release, a pseudo-version for a build from a commit, `devel` when go-common is the main module (its own tests) or a `replace` points at a directory, `_unknown` when the binary carries no module information. It joins the five labels `build_info` already had (`service`, `version`, `git_sha`, `built_at`, `go_version`); there is still one series per process, constant for its life. A query that names the labels it uses is unchanged; a service's series is replaced once, at its restart, as at every release (`version` and `git_sha` are labels too). The series budget in `docs/observability.md` names the new label.
+
+Why: after a fleet-wide bump the running services could be listed with their Go toolchain (`go_version`) and their own `version`, but not with the go-common they run, so a failing selftest could not be tied to a go-common version except by comparing process start times with merge times by hand. The label is read from the binary itself, so it is what runs, not what `main` says.
+
+Verified: `go vet ./promx/` and `go test ./promx/... ./testhelpers/promxtest/...` in a `golang:1.26` container, including `TestSeriesBudgets` and `TestCollectorsAreBounded` (one series, six labels); `TestGoCommonVersionOf` covers a release, a pseudo-version, a replace by a module with a version and by a directory, go-common as the main module (with and without a tag), a module that is not linked, and a similar module path; `TestBuildInfoHasTheGoCommonVersion` reads the gathered series.
+
 ## [0.109.0] - 2026-10-21
 
 `graph` can send its event batches to the collector over SPIFFE mTLS, proving the workload's X.509-SVID instead of sending the writer key. It is off unless a service sets the new variables, and the writer key stays the fallback.
