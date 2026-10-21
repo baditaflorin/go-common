@@ -125,8 +125,10 @@ steps:
     # An exact patch, not golang:1.26: the agents hold different 1.26 patches, and
     # govulncheck's standard-library findings change between them, so a floating
     # tag can pass on one agent and fail on another. Bump it with the Go patch
-    # release (and look at scripts/govulncheck-allow.txt when you do).
-    image: golang:1.26.9
+    # release (and look at scripts/govulncheck-allow.txt when you do). 1.26.10 closes
+    # GO-2026-6809 (crypto/x509, distrust of compromised intermediates), which 1.26.9
+    # reports as reachable through net/http.
+    image: golang:1.26.10
     environment:
       CGO_ENABLED: "0"
     commands:
