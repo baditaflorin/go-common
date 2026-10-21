@@ -25,6 +25,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"net/http"
 	"runtime"
+	"runtime/debug"
 	"sync"
 )
 
@@ -146,7 +147,8 @@ func Handler() http.Handler {
 //	go build -ldflags "-X github.com/baditaflorin/go-common/promx.GitSHA=$(git rev-parse --short HEAD) \
 //	                    -X github.com/baditaflorin/go-common/promx.BuiltAt=$(date -u +%FT%TZ)"
 //
-// `go_version` is populated from runtime.Version() automatically.
+// `go_version` is populated from runtime.Version() automatically, and `go_common_version`
+// from the module list the toolchain embeds in the binary (see goCommonVersion).
 type BuildMeta struct {
 	GitSHA  string
 	BuiltAt string
@@ -163,15 +165,59 @@ func registerBuildInfo(reg prometheus.Registerer, serviceID, version string) {
 	g := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "build_info",
 		Help: "Build/version metadata for the running service. Value is always 1.",
-	}, []string{"service", "version", "git_sha", "built_at", "go_version"})
+	}, []string{"service", "version", "git_sha", "built_at", "go_version", "go_common_version"})
 	g.WithLabelValues(
 		serviceID,
 		version,
 		fallback(GitSHA, "_unknown"),
 		fallback(BuiltAt, "_unknown"),
 		runtime.Version(),
+		goCommonVersion(),
 	).Set(1)
 	reg.MustRegister(g)
+}
+
+// goCommonModule is the module this package belongs to.
+const goCommonModule = "github.com/baditaflorin/go-common"
+
+// goCommonVersion is the version of go-common this binary was linked with, read from the
+// module list the Go toolchain embeds in every binary (debug.ReadBuildInfo). It lets a
+// dashboard or an alert tie a running service to the go-common it runs, which build_info's
+// own `version` (the service's) cannot: `v0.109.0` for a release, a pseudo-version for a
+// build from a commit, `devel` when go-common is the main module (its own tests) or a
+// replace points at a directory, and `_unknown` when the binary carries no module
+// information.
+func goCommonVersion() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "_unknown"
+	}
+	return goCommonVersionOf(bi)
+}
+
+func goCommonVersionOf(bi *debug.BuildInfo) string {
+	if bi.Main.Path == goCommonModule {
+		return orDevel(bi.Main.Version)
+	}
+	for _, d := range bi.Deps {
+		if d.Path != goCommonModule {
+			continue
+		}
+		if d.Replace != nil { // the code in the binary is the replacement's; a directory has no version
+			return orDevel(d.Replace.Version)
+		}
+		return orDevel(d.Version)
+	}
+	return "_unknown"
+}
+
+// orDevel maps the empty version of a replace-to-directory and the "(devel)" of a main
+// module to one value.
+func orDevel(v string) string {
+	if v == "" || v == "(devel)" {
+		return "devel"
+	}
+	return v
 }
 
 func fallback(v, def string) string {
