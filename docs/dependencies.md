@@ -2,7 +2,7 @@
 
 # Third-party dependencies per package
 
-65 importable packages, 38 of them with no third-party module at all, and 41 under a budget. Generated from `go list -deps`; CI fails if this file is stale.
+66 importable packages, 39 of them with no third-party module at all, and 42 under a budget. Generated from `go list -deps`; CI fails if this file is stale.
 
 go-common is one Go module, but a service only builds, and only lists in its own `go.mod` and `go.sum`, the
 third-party modules that the packages it imports reach. This page measures that for every package, so that
@@ -61,6 +61,7 @@ Heaviest first, then by name.
 | [`apikey`](../apikey/) | 0 | yes | - | - |
 | [`backoffcoord`](../backoffcoord/) | 0 | yes | - | - |
 | [`bootgate`](../bootgate/) | 0 | yes | - | - |
+| [`botwall`](../botwall/) | 0 | yes | - | - |
 | [`browserheaders`](../browserheaders/) | 0 | yes | - | - |
 | [`cache`](../cache/) | 0 | yes | - | - |
 | [`cgroup`](../cgroup/) | 0 | yes | - | - |

@@ -2,7 +2,7 @@
 
 # Package index
 
-73 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
+74 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
 
 | Package | Summary |
 | --- | --- |
@@ -10,6 +10,7 @@
 | [`apikey`](../apikey/) | The canonical client for the fleet's keystore service (baditaflorin/go-apikey-service). |
 | [`backoffcoord`](../backoffcoord/) | Provides a distributed backoff coordinator client. |
 | [`bootgate`](../bootgate/) | An opt-in primitive for "do not start heavy boot-time work all at once": it spreads a service's first heavy cycle out in time and backs off while the host is overloaded. |
+| [`botwall`](../botwall/) | Recognises the interstitial pages a bot-protection vendor answers a client it distrusts with: a captcha, a "checking your browser" wait, an "Access Denied" page. |
 | [`browserheaders`](../browserheaders/) | Generates a coherent set of browser-typical HTTP request headers for outbound calls that need to evade trivial bot detection. |
 | [`cache`](../cache/) | Provides a generic, concurrency-safe LRU+TTL cache. |
 | [`cgroup`](../cgroup/) | Reads resource counters and limits for the current Linux cgroup. |
