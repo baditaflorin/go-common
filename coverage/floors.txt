@@ -4,6 +4,7 @@ agent 85
 apikey 83
 backoffcoord 56
 bootgate 94
+botwall 96
 browserheaders 93
 cache 98
 cgroup 75

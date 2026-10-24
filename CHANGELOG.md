@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.110.0] - 2026-10-24
+
+`botwall`: the one copy of the bot-protection challenge-page detector that go-js-proxy and the fleet fetch cache each carried, so a new vendor rule or a precision fix is made once.
+
+### Added
+
+- `botwall.Detect(html) string`: the vendor of a challenge page (`akamai`, `aws_waf`, `cloudflare`, `datadome`, `google_sorry`, `imperva`, `perimeterx`, `sucuri`) or `""`. `botwall.Vendors()` lists those values (sorted, a copy) for a service that pre-registers a per-vendor metric label. `MaxBody` (160 KiB) and `MaxVisibleText` (3,000 non-space bytes) are the two size limits: a document over either is never a challenge page. Vendor-specific marker pairs only, never a generic "captcha" or "access denied"; the Imperva and AWS WAF rules need the interstitial's own shape, because both vendors inject a script into every page of a protected site (real 404 pages of abbeyroad.com, abelandcole.co.uk and a16zcrypto.com were flagged by the vendor's injected script or SDK name alone before go-js-proxy 0.12.2 and fetch cache 0.3.49).
+
+Why: the detector was written twice, identically, in go-js-proxy 0.12.0 and fetch cache 0.3.48, and both copies had to change together for the Imperva / AWS WAF precision fix. The two services adopt this package in their next releases; the code is moved, not rewritten, and the services' own tests keep their end-to-end cases.
+
+Verified: `go vet ./botwall/`, `go test -race -cover ./botwall/` (98.3%). The tests are the ported ones from both services (every vendor fixture, the ordinary-page and real-404 negative cases, `visibleTextLen`) plus the exact size and visible-text boundaries, the rule that each vendor needs its own marker pair, `Vendors()` being exactly what `Detect` can return, and `FuzzDetect` (25 s locally, 761,327 executions: terminates, only a listed vendor or `""`, `""` over `MaxBody`, deterministic). A mutation check (10 loosened rules: script alone enough for Imperva, AWS and Cloudflare, host alone for DataDome, title alone for Akamai, name alone for Sucuri, any "captcha" for PerimeterX, both caps off by one, script bodies counted as text) is caught by the tests; the first run left the DataDome and Akamai ones alive and the negative cases above were added for them.
+
 ## [0.109.1] - 2026-10-21
 
 `build_info` carries the go-common version the binary was linked with, as a new label, so a dashboard or an alert can tie a running service to the go-common it runs.
