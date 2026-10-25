@@ -135,12 +135,17 @@ type Server struct {
 // shims. Useful for tests (httptest.NewServer(srv.Handler())) and
 // for callers that want to embed the server in a non-stdlib
 // listener. Start() uses this internally.
+//
+// Every response it sends carries X-Service-Name (Config.AppName) and
+// X-Service-Version (Config.Version), whatever answered it; a handler cannot
+// replace them (identity.go).
 func (s *Server) Handler() http.Handler {
-	appName := ""
+	appName, version := "", ""
 	if s.Config != nil {
-		appName = s.Config.AppName
+		appName, version = s.Config.AppName, s.Config.Version
 	}
-	return telemetry.HTTPMiddleware(s.wrapDefaults(fetchSourceMiddleware(appName, middleware.Chain(s.Mux, s.Middlewares...))))
+	return identityMiddleware(appName, version,
+		telemetry.HTTPMiddleware(s.wrapDefaults(fetchSourceMiddleware(appName, middleware.Chain(s.Mux, s.Middlewares...)))))
 }
 
 // buildHTTPServer constructs the *http.Server with the resolved

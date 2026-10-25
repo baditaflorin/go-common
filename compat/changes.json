@@ -3,6 +3,13 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.111.0",
+      "date": "2026-10-25",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "every `server.New` response carries `X-Service-Name` (AppName) and `X-Service-Version` (Version); a handler's own values for these two headers are replaced."
+    },
+    {
       "version": "v0.108.0",
       "date": "2026-10-20",
       "class": "breaking",

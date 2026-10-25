@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.111.0] - 2026-10-25
+
+Every response a `server.New` service sends names the service and its release in two headers, `X-Service-Name` and `X-Service-Version`, so a caller can record which release produced an answer when the body names none.
+
+### Added
+
+- `server`: `X-Service-Name` (`Config.AppName`, what `/health` reports as `service`) and `X-Service-Version` (`Config.Version`, what `/version` reports) on every response `Server.Handler` sends, so on everything `Start`, `Run` and `RunTier` serve: a handler's answers, success or error (a `meshresult.WriteOutcome` envelope, `http.Error`, an empty 503), the keystore gate's 401 and 403, the mux's 404, 405 and redirect, the 400 for a repeated `source` parameter, `/health`, `/version`, `/readyz`, `/metrics`, `/metrics/json`, `/capabilities`, `/schema`, `/selftest` (the default and a registered suite, 200 or 503), HEAD requests and streamed responses. It is the outermost layer of the handler, so nothing inside it can answer without the headers. A value that is empty, longer than 256 bytes or holds a control character is not sent. Nothing secret: both values are already public at `/health` and `/version`, which the keystore gate never closes.
+- `header.ServiceName` (`X-Service-Name`) and `header.ServiceVersion` (`X-Service-Version`).
+
+Why: DomainScope records on every enrichment row the release of the fleet service that produced it, so bad data can be traced to a release and a backfill can re-run only the rows of old releases. Many answers name no release in their body (analyze-headers answers `{"status","data"}`; no `meshresult.WriteOutcome` envelope has a version; plain-text errors have none), so those rows have a NULL version. DomainScope's client reads these two headers when the body names none (go-url-categorizer-api PR #2945, deployed); this is the producer side, and it reaches a service when the service bumps go-common and is redeployed.
+
+### Changed
+
+- **BREAKING (behavioural):** the server's values win over a handler's. They are set before the handler runs and set again when the response starts (the first `WriteHeader` of 200 or above, `Write` or `Flush`) or when the handler returns without writing, so a value a handler set, added, deleted or overwrote in place is replaced, and a 1xx informational response does not end that. Why: the headers name the process that wrote the response. A service that relays another answer must not pass on that answer's identity, and a website must not be able to claim one through a relay. The fleet fetch cache is the case in point: it runs `server.New` and adds every header it stored from the service it fetched (`writeEntry`), so its answers carry the cache's own pair, never the stored service's (DomainScope already ignores the headers on answers the cache served, for this reason). A relay that wants to say who produced the body says it in a header of its own. No repository in the organisation sets either header today (code search, 2026-10-25), so no service's answers change beyond the two added headers. The writer forwards `Flush` and has `FlushError` and `Unwrap`, like the middleware writers, so streaming and `http.ResponseController` (deadlines, `Hijack`) work through it.
+  - summary: every `server.New` response carries `X-Service-Name` (AppName) and `X-Service-Version` (Version); a handler's own values for these two headers are replaced.
+
+Cost: one allocation (the writer, 96 bytes) and about 0.16 to 0.19 us per response (`BenchmarkIdentityMiddleware`, new). `BenchmarkServerRequest` (the whole default stack) went from 78 to 77 allocs/op and from 5,875 to 5,947 B/op on the same build host (golang:1.26, 2000 iterations, every run identical); the one allocation fewer was not traced.
+
+Verified on a build host (0mcp_docker_build) in golang:1.26 containers: gofmt, `go vet ./...`, `go test -count=1 ./...` (76 packages), `go build ./...`, `go test -race` of server, header, middleware, reqstats and telemetry, `pkgindex -check`, `envdoc -check`, the dependency budget and its doc, `whatchanged -gen` and `-check`; `release-check`, `apidiff-check`, `bench-gate`, the full `-race` run and the fuzz step in CI. The tests send every response class above through `httptest.NewServer(srv.Handler())` and check that each carries exactly one value of each header; a handler that sets, adds, deletes or overwrites them in place (writing or not); a fetch-cache server that replays a stored `X-Service-*` pair the way `writeEntry` does; unusable values (empty, CR LF, DEL, over 256 bytes; none usable leaves the handler unwrapped); a streamed answer through `http.Flusher` and through `http.ResponseController`; 103 Early Hints then 200; `SetWriteDeadline` and `Hijack` through `http.ResponseController`; and at most one allocation per response.
+
 ## [0.110.0] - 2026-10-24
 
 `botwall`: the one copy of the bot-protection challenge-page detector that go-js-proxy and the fleet fetch cache each carried, so a new vendor rule or a precision fix is made once.
