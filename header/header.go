@@ -43,6 +43,18 @@ const (
 	FleetCaller = "X-Fleet-Caller"
 )
 
+// Service identity response headers. server.New puts both on every response a
+// service sends (success, error, 404, /health, ...), so a caller can record which
+// release produced an answer even when the body names none. They name the
+// process that wrote the response, never a service whose answer it relays.
+const (
+	// ServiceName is the answering service's name, as /health reports it.
+	ServiceName = "X-Service-Name"
+
+	// ServiceVersion is the answering service's release, as /version reports it.
+	ServiceVersion = "X-Service-Version"
+)
+
 // Client credential headers — set by callers, read by auth middleware.
 const (
 	// APIKey is the fleet API key header sent by service-to-service
