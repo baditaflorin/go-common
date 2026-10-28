@@ -14,6 +14,11 @@ import (
 // receive graph credentials. A scoped key is still secret material.
 const graphCanonicalCollectorHost = "fleet-graph.0exec.com"
 
+// defaultFlushSeconds is how often a writer sends its buffered events. A busy service still fills a 500-event batch well
+// inside it (the ring holds 10000), and a quiet one sends one batch with everything it saw instead of three. Fleet-wide
+// that is a third of the POST /events requests, each of which costs the collector a keystore check and a log line.
+const defaultFlushSeconds = 30
+
 type config struct {
 	enabled          bool
 	collectorURL     string
@@ -65,7 +70,7 @@ func loadConfig() config {
 		spiffeSocket:       strings.TrimSpace(envSPIFFESocket.Value()),
 		sampleRate:         parseFloatEnv(envSampleRate.Name, 1.0),
 		bufferSize:         parseIntEnv(envBufferSize.Name, 10000),
-		flushInterval:      time.Duration(parseIntEnv(envFlushInterval.Name, 10)) * time.Second,
+		flushInterval:      time.Duration(parseIntEnv(envFlushInterval.Name, defaultFlushSeconds)) * time.Second,
 		flushBatch:         parseIntEnv(envFlushBatch.Name, 500),
 	}
 	// Event emission is deliberately all-or-nothing: it is opt-in and

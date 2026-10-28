@@ -98,8 +98,8 @@ var (
 		Doc: "Events buffered before the oldest are dropped; at least 64.",
 	})
 	envFlushInterval = env.Declare(env.Var{
-		Name: "GRAPH_FLUSH_INTERVAL", Kind: env.KindInt, Default: "10",
-		Doc: "Seconds between flushes of buffered events (an integer number of seconds, not a duration); at least 1.",
+		Name: "GRAPH_FLUSH_INTERVAL", Kind: env.KindInt, Default: "30",
+		Doc: "Seconds between flushes of buffered events (an integer number of seconds, not a duration); at least 1. Each wait is spread by up to 10 % either way, so the writers do not flush in step.",
 	})
 	envFlushBatch = env.Declare(env.Var{
 		Name: "GRAPH_FLUSH_BATCH", Kind: env.KindInt, Default: "500",
