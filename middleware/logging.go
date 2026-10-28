@@ -3,7 +3,9 @@ package middleware
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -83,6 +85,50 @@ func isSkipped(path string) bool {
 	return false
 }
 
+// clientIPBehindProxy is the address the gateway saw (X-Real-IP, which the fleet's nginx templates set from $remote_addr), or "" when
+// there is none to trust. "ip" stays the connection's peer, which behind the gateway is always the gateway itself; the header is
+// believed only when that peer is a loopback, private or link-local address, so a client that reaches a service directly cannot
+// choose what is logged. It is a log field, never an authorization input.
+func clientIPBehindProxy(r *http.Request) string {
+	raw := strings.TrimSpace(r.Header.Get("X-Real-IP"))
+	if raw == "" {
+		return ""
+	}
+	claimed, err := netip.ParseAddr(raw)
+	if err != nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return ""
+	}
+	peer, err := netip.ParseAddr(host)
+	if err != nil {
+		return ""
+	}
+	peer = peer.Unmap()
+	if !peer.IsLoopback() && !peer.IsPrivate() && !peer.IsLinkLocalUnicast() {
+		return ""
+	}
+	return claimed.Unmap().String()
+}
+
+// fleetNodeHeader is the X-Fleet-Node a graph writer sets on its batch (the logical host it runs on), when it is a lowercase DNS label
+// of at most 63 characters; anything else is dropped so the header cannot put arbitrary text into the log.
+func fleetNodeHeader(r *http.Request) string {
+	v := strings.TrimSpace(r.Header.Get("X-Fleet-Node"))
+	if v == "" || len(v) > 63 || v[0] == '-' || v[len(v)-1] == '-' {
+		return ""
+	}
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+			return ""
+		}
+	}
+	return v
+}
+
 // Logging logs request details using slog and injects a per-request
 // child logger (enriched with request_id, method, path) into the context
 // so downstream handlers can call middleware.LoggerFromContext(r.Context()).
@@ -104,6 +150,12 @@ func Logging(next http.Handler) http.Handler {
 			slog.String("path", r.URL.Path),
 			slog.String("ip", r.RemoteAddr),
 		)
+		if ip := clientIPBehindProxy(r); ip != "" {
+			reqLogger = reqLogger.With(slog.String("client_ip", ip))
+		}
+		if node := fleetNodeHeader(r); node != "" {
+			reqLogger = reqLogger.With(slog.String("node", node))
+		}
 
 		// Inject the child logger into the context before calling next.
 		ctx := WithLogger(r.Context(), reqLogger)
