@@ -12,7 +12,6 @@ import (
 	"github.com/baditaflorin/go-common/graph"
 	"github.com/baditaflorin/go-common/metrics"
 	"github.com/baditaflorin/go-common/middleware"
-	"github.com/baditaflorin/go-common/profiling"
 	"github.com/baditaflorin/go-common/promx"
 	"github.com/baditaflorin/go-common/safehttp"
 	"github.com/baditaflorin/go-common/telemetry"
@@ -190,7 +189,7 @@ func (s *Server) Start() error {
 	if err := s.validateRoutes(); err != nil {
 		return err
 	}
-	stopProfiling := startServerProfiling(s.Config.AppName, profiling.StartFromEnv)
+	stopProfiling := startProfiling(s.Config.AppName)
 	defer stopProfiling()
 	defer s.shutdownTelemetry()
 	addr := ":" + s.Config.Port
@@ -247,22 +246,6 @@ func (s *Server) Start() error {
 	}
 	log.Printf("server: stopped cleanly")
 	return nil
-}
-
-func startServerProfiling(appName string, start func(string) (profiling.StopFunc, error)) profiling.StopFunc {
-	serviceName := appName
-	if alias := KebabAlias(appName); alias != "" {
-		serviceName = alias
-	}
-	stop, err := start(serviceName)
-	if err != nil {
-		log.Printf("server: profiling startup error: %v", err)
-		return func() {}
-	}
-	if stop == nil {
-		return func() {}
-	}
-	return stop
 }
 
 func (s *Server) shutdownTelemetry() {

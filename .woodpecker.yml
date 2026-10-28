@@ -68,6 +68,12 @@ steps:
       # A budgeted small package may not gain a third-party module (scripts/dep-budget.txt),
       # and docs/dependencies.md must match what the packages import.
       - scripts/dep-budget-selftest.sh && scripts/dep-budget.sh && scripts/dep-budget.sh --check-doc
+      # The opt-out build tags (gocommon_nospiffe, gocommon_nopyroscope) keep the SPIFFE and
+      # Pyroscope clients out of a binary built with them and leave a default build alone
+      # (scripts/linkcheck.txt, docs/footprint.md); the code behind a tag has to build,
+      # vet and pass the server tests with the tags on.
+      - scripts/linkcheck-selftest.sh && scripts/linkcheck.sh
+      - go build -tags gocommon_nospiffe,gocommon_nopyroscope ./... && go vet -tags gocommon_nospiffe,gocommon_nopyroscope ./server/... && go test -count=1 -tags gocommon_nospiffe,gocommon_nopyroscope ./server/...
       # forward-compat.sh edits only a copy, passes the go line it was given and fails when
       # the tests do.
       - scripts/forward-compat-selftest.sh

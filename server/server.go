@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"github.com/baditaflorin/go-common/config"
 	"github.com/baditaflorin/go-common/depcheck"
@@ -15,7 +14,6 @@ import (
 	"github.com/baditaflorin/go-common/reqstats"
 	"github.com/baditaflorin/go-common/runtimetune"
 	"github.com/baditaflorin/go-common/safehttp"
-	"github.com/baditaflorin/go-common/spiffe"
 	"github.com/baditaflorin/go-common/telemetry"
 	"log"
 	"net/http"
@@ -344,13 +342,4 @@ func bodyLimitMiddleware(maxBytes int64) middleware.Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-// graphMTLSClient builds graph's SPIFFE mTLS client on package spiffe.
-func graphMTLSClient(ctx context.Context, socket string, allowedServerIDs []string, timeout time.Duration) (graph.MTLSClient, error) {
-	client, err := spiffe.NewHTTPClientWithTimeout(ctx, socket, allowedServerIDs, timeout)
-	if err != nil {
-		return nil, err
-	}
-	return client, nil
 }

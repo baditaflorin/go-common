@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.111.2] - 2026-10-28
+
+Two opt-out build tags that keep the SPIFFE Workload API client and the Pyroscope client out of a `server.New` binary, a CI check that holds them there, and `docs/footprint.md`, which says what a service pays for importing go-common. A binary built without the tags does what it did and is the same size to the byte; nothing changes for any service until it adds a tag to its own build.
+
+### Added
+
+- Build tag `gocommon_nospiffe`: `server` does not import `spiffe`, so the binary links neither go-spiffe nor go-jose. `graph`'s SPIFFE path (`GRAPH_SPIFFE_COLLECTOR_URL`) then has no Workload API client: the factory `server.New` installs returns an error that names the tag, which graph's sender logs on its first attempt and every tenth after it, and the sender keeps using the writer key as it does while the Workload API is unreachable. Without the variable the factory is never called.
+- Build tag `gocommon_nopyroscope`: `server` does not import `profiling`, so the binary does not link the Pyroscope client. With `PYROSCOPE_SERVER_ADDRESS` set it logs one line saying the binary was built without it and sends no profile.
+- `scripts/linkcheck.sh`, `scripts/linkcheck.txt` (one line per tag), `scripts/linkcheck-selftest.sh` and the reference service `scripts/linkcheck/service`: with each tag the feature's packages are absent from `go list -deps` of the reference service, and without it they are present, so a refactor cannot turn a tag into a no-op or make a default build lose a feature. `scripts/linkcheck.sh --size` also builds both and prints the stripped sizes.
+- `docs/footprint.md`: the measured cost of a `server.New` service against plain `net/http` (binary, modules, idle RSS split into private and file-backed, start-up, initialisation, goroutines, per request), what each feature costs, and why nested modules or separate repositories would not change it.
+
+### Changed
+
+- `server`: the code that imports `spiffe` (`graphMTLSClient`) and `profiling` (`startProfiling`, `startServerProfiling`) moved to files behind `//go:build !gocommon_nospiffe` and `!gocommon_nopyroscope`, with a counterpart behind each tag; the two tests that need the real packages moved with them. No behaviour change without a tag.
+- CI: the `validate` step runs `scripts/linkcheck-selftest.sh` and `scripts/linkcheck.sh`, and builds, vets and tests `server` with both tags.
+
+Why: the question was whether go-common makes every service heavy and whether it should be split into modules. A `server.New` service is 20.4 MB against 5.8 MB for plain `net/http`, but 16.6 of its 19.6 MB idle RSS are the executable's own pages, mapped clean from the page cache (2.6 MB is private), and go-common's own code is 0.4 MB of it. The rest is what the service kit links (OpenTelemetry with gRPC and protobuf, Prometheus, go-spiffe, Pyroscope, the MCP SDK). A binary links packages, not modules, so nested modules or separate repositories would not change what it links; what changes it is not importing a package. SPIFFE and Pyroscope are the two features no service in the scanned repositories configures and every `server.New` binary links, so they get a tag. The MCP SDK (`WithMCP`, used by 129 repositories) and the OTLP exporter are left alone; `docs/footprint.md` says what dropping them would save.
+
+Cost: none for a binary built without a tag (20,361,378 bytes before and after to the byte for the minimal service, and 20,369,570 for one with `client`, `selftest`, `metrics` and the rest of the usual import set; idle RSS the same within the spread). With both tags, the minimal service goes from 20,361,378 to 19,083,426 bytes (-1.28 MB, -6.3%), from 43 linked modules to 38 and from 503 packages to 468; idle RSS from 19.24 to 17.95 MB (-1.29 MB, -6.7%, of which 0.1 MB private and the rest the executable's pages), and the same start-up time, initialisation and goroutine counts within the run-to-run spread (12 runs each, golang:1.26.10, 3 cores, medians; `docs/footprint.md` has the method).
+
 ## [0.111.1] - 2026-10-28
 
 go-common is licensed under the Apache License 2.0 from this release on. It was public without a license file, which leaves everyone but its author without the right to use it.
@@ -11,6 +31,7 @@ go-common is licensed under the Apache License 2.0 from this release on. It was 
 - `README.md`: a License section.
 
 Why: the open-source services built on go-common (the agent-history family first) cannot be adopted by anyone else while a dependency has no license, and pkg.go.dev shows a module's documentation only when its tagged version contains a recognised license.
+
 
 ## [0.111.0] - 2026-10-25
 

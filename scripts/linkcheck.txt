@@ -1,0 +1,16 @@
+# Link budget of the reference service (scripts/linkcheck/service), enforced by
+# scripts/linkcheck.sh (the `validate` step). One line per opt-out build tag:
+#
+#   <tag[,tag...]> <package-path-prefix>...
+#
+# A binary built with -tags <tag> must not link any package under the listed prefixes,
+# and a default build must still link at least one under each of them: if it does not,
+# the tag removes nothing any more (the reference service stopped using the feature, or
+# the default changed) and the line is stale. docs/footprint.md says what each tag costs
+# and saves.
+
+# SPIFFE Workload API client for graph's mTLS path (GRAPH_SPIFFE_COLLECTOR_URL).
+gocommon_nospiffe github.com/spiffe/go-spiffe/v2 github.com/go-jose/go-jose/v4
+
+# Pyroscope continuous profiling (PYROSCOPE_SERVER_ADDRESS).
+gocommon_nopyroscope github.com/grafana/pyroscope-go
