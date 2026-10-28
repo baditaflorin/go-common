@@ -89,3 +89,8 @@ Every release needs a `CHANGELOG.md` entry. A change that removes or alters
 exported API, or changes a default or an environment variable, leads that entry
 with **BREAKING:**; see [docs/api-policy.md](docs/api-policy.md). A new package
 needs a package comment, or the index check fails.
+
+## License
+
+Apache License 2.0, see [LICENSE](LICENSE). Use it commercially if you like: keep the license text and the
+[NOTICE](NOTICE) attribution with what you distribute.

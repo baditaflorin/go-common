@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.111.1] - 2026-10-28
+
+go-common is licensed under the Apache License 2.0 from this release on. It was public without a license file, which leaves everyone but its author without the right to use it.
+
+### Added
+
+- `LICENSE`: the Apache License 2.0, the text the other open-source repositories of this account carry.
+- `NOTICE`: the copyright line and the attribution sentence that section 4(d) of the license makes redistributors keep. Anyone may use go-common commercially; the license and the NOTICE text have to travel with it.
+- `README.md`: a License section.
+
+Why: the open-source services built on go-common (the agent-history family first) cannot be adopted by anyone else while a dependency has no license, and pkg.go.dev shows a module's documentation only when its tagged version contains a recognised license.
+
 ## [0.111.0] - 2026-10-25
 
 Every response a `server.New` service sends names the service and its release in two headers, `X-Service-Name` and `X-Service-Version`, so a caller can record which release produced an answer when the body names none.
