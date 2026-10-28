@@ -1,3 +1,5 @@
+//go:build !gocommon_nospiffe
+
 package server
 
 import (
