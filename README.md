@@ -94,3 +94,5 @@ needs a package comment, or the index check fails.
 
 Apache License 2.0, see [LICENSE](LICENSE). Use it commercially if you like: keep the license text and the
 [NOTICE](NOTICE) attribution with what you distribute.
+This covers every release, including the ones tagged before v0.111.1, which were published without a license
+file (see NOTICE).

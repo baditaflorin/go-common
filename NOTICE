@@ -2,3 +2,7 @@ go-common
 Copyright 2026 Florin Badita
 
 This product includes software developed by Florin Badita (https://github.com/baditaflorin/go-common).
+
+Releases of go-common tagged before v0.111.1 (v0.111.0 and every earlier version) were published without a
+license file. The copyright holder licenses all of them, and every later release, under the Apache License,
+Version 2.0, on the same terms as the LICENSE file.

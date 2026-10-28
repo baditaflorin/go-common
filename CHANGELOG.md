@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.111.3] - 2026-10-28
+
+The Apache License 2.0 now also covers every earlier release of go-common. Until 0.111.1 the repository carried no license file, so v0.111.0 and the versions before it were published without one.
+
+### Changed
+
+- `NOTICE` and `README.md` state that the copyright holder licenses all earlier releases, and every later one, under the Apache License 2.0. The tags themselves cannot change, so a version older than v0.111.1 still has no LICENSE file inside it; this statement is the grant.
+
+Why: a module that was licensed only from one release on leaves everyone who already depends on an older version without a right to use it, and pkg.go.dev decides what to show by the files inside each tagged version.
+
 ## [0.111.2] - 2026-10-28
 
 Two opt-out build tags that keep the SPIFFE Workload API client and the Pyroscope client out of a `server.New` binary, a CI check that holds them there, and `docs/footprint.md`, which says what a service pays for importing go-common. A binary built without the tags does what it did and is the same size to the byte; nothing changes for any service until it adds a tag to its own build.
