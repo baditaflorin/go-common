@@ -19,6 +19,11 @@ const graphCanonicalCollectorHost = "fleet-graph.0exec.com"
 // that is a third of the POST /events requests, each of which costs the collector a keystore check and a log line.
 const defaultFlushSeconds = 30
 
+// defaultFlushBatch is the most events one POST /events carries. go-fleet-graph accepts 2000 since 0.4.44 (the size of one group
+// commit); an older collector refuses more than 500 with 400, and the sender drops a refused batch, so a collector below 0.4.44 must
+// not receive this default: set GRAPH_FLUSH_BATCH=500 there.
+const defaultFlushBatch = 2000
+
 type config struct {
 	enabled          bool
 	collectorURL     string
@@ -71,7 +76,7 @@ func loadConfig() config {
 		sampleRate:         parseFloatEnv(envSampleRate.Name, 1.0),
 		bufferSize:         parseIntEnv(envBufferSize.Name, 10000),
 		flushInterval:      time.Duration(parseIntEnv(envFlushInterval.Name, defaultFlushSeconds)) * time.Second,
-		flushBatch:         parseIntEnv(envFlushBatch.Name, 500),
+		flushBatch:         parseIntEnv(envFlushBatch.Name, defaultFlushBatch),
 	}
 	// Event emission is deliberately all-or-nothing: it is opt-in and
 	// requires a valid collector URL plus a dedicated writer key. This

@@ -63,7 +63,10 @@ type sender struct {
 	// pending holds at most one failed batch outside the ring. This
 	// preserves the batch for a later retry without draining additional
 	// observations during the same failing flush.
-	pending           []Event
+	pending []Event
+	// tail holds the events of a drained batch that did not fit in one request (see splitAtBytes); they go out before the ring is
+	// drained again. Only the flush goroutine touches it.
+	tail              []Event
 	counters          *atomicCounters
 	client            *http.Client
 	stop              chan struct{}
@@ -163,15 +166,24 @@ func (s *sender) flush(contexts ...context.Context) {
 		}
 		events := s.pending
 		if len(events) == 0 {
+			events, s.tail = s.tail, nil
+		}
+		if len(events) == 0 {
 			events = s.ring.drain(s.cfg.flushBatch)
 		}
 		if len(events) == 0 {
 			return
 		}
+		// The count bound alone is not enough: a batch of long paths could pass the gateway's 1 MB request limit and be answered
+		// 413, which is dropped. What does not fit goes in the next request of this flush.
+		events, rest := splitAtBytes(events, maxBatchBytes)
+		if len(rest) > 0 {
+			s.tail = append(rest, s.tail...)
+		}
 		switch s.send(ctx, events) {
 		case sendOK:
 			s.pending = nil
-			if len(events) < s.cfg.flushBatch {
+			if len(events) < s.cfg.flushBatch && len(s.tail) == 0 {
 				return // ring is now empty
 			}
 		case sendRejected:
@@ -426,4 +438,27 @@ func (c *atomicCounters) snapshot() Counters {
 		BatchesSentSPIFFE:            atomic.LoadInt64(&c.BatchesSentSPIFFE),
 		BatchesSPIFFEFallback:        atomic.LoadInt64(&c.BatchesSPIFFEFallback),
 	}
+}
+
+// maxBatchBytes bounds the encoded size of one POST /events. The gateway's default request limit is 1 MB and a batch over it is
+// answered 413, which the sender treats as a rejection and drops. An average event encodes to about 170 bytes, so a full batch of
+// 2000 is about 340 KB; this bound only bites when paths are long.
+const maxBatchBytes = 600 << 10
+
+// eventBytes is a cheap upper-ish estimate of an event's JSON size: the fixed fields plus its strings.
+func eventBytes(e Event) int {
+	return 140 + len(e.Caller) + len(e.Target) + len(e.Path) + len(e.Method) + len(e.Direction)
+}
+
+// splitAtBytes cuts events after the last one that keeps the estimated size within limit. It always keeps at least one event, so a
+// single oversized event still goes out alone rather than blocking the queue.
+func splitAtBytes(events []Event, limit int) (head, rest []Event) {
+	total := 0
+	for i, e := range events {
+		total += eventBytes(e)
+		if total > limit && i > 0 {
+			return events[:i], events[i:]
+		}
+	}
+	return events, nil
 }

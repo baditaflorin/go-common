@@ -103,7 +103,7 @@
 //	                       one log line. It is a header, never a JSON field.
 //	GRAPH_BUFFER_SIZE    — ring capacity (default 10000 events).
 //	GRAPH_FLUSH_INTERVAL — flush cadence in seconds (default 30, each wait spread by up to 10 % either way).
-//	GRAPH_FLUSH_BATCH    — max events per flush (default 500).
+//	GRAPH_FLUSH_BATCH    — max events per flush request (default 2000; needs go-fleet-graph 0.4.44, which accepts that many).
 //
 // Design rules:
 //

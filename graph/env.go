@@ -102,8 +102,8 @@ var (
 		Doc: "Seconds between flushes of buffered events (an integer number of seconds, not a duration); at least 1. Each wait is spread by up to 10 % either way, so the writers do not flush in step.",
 	})
 	envFlushBatch = env.Declare(env.Var{
-		Name: "GRAPH_FLUSH_BATCH", Kind: env.KindInt, Default: "500",
-		Doc: "Events per flush request; at least 1.",
+		Name: "GRAPH_FLUSH_BATCH", Kind: env.KindInt, Default: "2000",
+		Doc: "Events per flush request; at least 1. go-fleet-graph accepts 2000 from 0.4.44 on and refuses more than 500 before that. A request is also cut at about 600 KB.",
 	})
 	envNode = env.Declare(env.Var{
 		Name: "FLEET_NODE", Kind: env.KindString,
