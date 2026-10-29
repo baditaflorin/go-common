@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.111.5] - 2026-10-29
+
+The access log says which address a request really came from, and which host a graph batch came from.
+
+### Added
+
+- `middleware.Logging`: `request_completed` gets `client_ip` (the gateway's `X-Real-IP`) and `node` (a graph writer's `X-Fleet-Node`) when the request carries them. `client_ip` is logged only when the connection's own peer is a loopback, private or link-local address, so a client that reaches a service directly cannot choose it; `node` only when it is a lowercase DNS label. `ip` is unchanged.
+
+Why: behind the gateway `ip` is always the gateway (the collector's log showed 10.10.10.10, the nginx proxy VM, for every one of 41 batches a second, whatever server sent it). The nginx templates already forward `X-Real-IP`; the logs just never used it. Both fields are for reading logs, never for deciding who may do what.
+
 ## [0.111.4] - 2026-10-29
 
 Graph writers flush every 30 seconds instead of every 10, and no two writers keep the same rhythm.
