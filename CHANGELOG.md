@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.111.4] - 2026-10-29
+
+Graph writers flush every 30 seconds instead of every 10, and no two writers keep the same rhythm.
+
+### Changed
+
+- `graph`: `GRAPH_FLUSH_INTERVAL` defaults to 30 (was 10). Each wait is `interval * (1 +/- 10 %)`, drawn again after every flush, so writers that restarted together in a fleet deploy drift apart. Setting the variable still wins.
+
+Why: measured on the live collector over one hour (2026-10-28): 148,752 `POST /events` (41 a second) from 556 writers, carrying 2.62 million events, 17.6 per request. The collector checks the writer's key against the keystore on every request (writes are deliberately not cached, so a revoked key stops working on the next batch), so each request costs a keystore call, a log line and a queue slot. A quiet service sent three requests with a handful of events where one would do. At 30 s a busy writer still fills batches (the ring holds 10,000 events, the busiest writer produces about 70 a second, so about 2,100 per interval), and a quiet one sends one. Expect about a third of the requests; the events and their timestamps are unchanged, and the graph lags by at most half a minute more.
+
 ## [0.111.3] - 2026-10-28
 
 The Apache License 2.0 now also covers every earlier release of go-common. Until 0.111.1 the repository carried no license file, so v0.111.0 and the versions before it were published without one.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -119,18 +120,28 @@ func (s *sender) run() {
 	} else {
 		close(s.mtlsConnected)
 	}
-	tick := time.NewTicker(s.cfg.flushInterval)
-	defer tick.Stop()
+	timer := time.NewTimer(jitteredFlushDelay(s.cfg.flushInterval, rand.Float64()))
+	defer timer.Stop()
 	for {
 		select {
 		case <-s.stop:
 			s.flush(s.shutdownCtx) // bounded best-effort final flush
 			s.closeMTLS()
 			return
-		case <-tick.C:
+		case <-timer.C:
 			s.flush(context.Background())
+			timer.Reset(jitteredFlushDelay(s.cfg.flushInterval, rand.Float64()))
 		}
 	}
+}
+
+// flushJitter is the share of the interval a wait may be shortened or lengthened by. Hundreds of writers restart together after a
+// fleet deploy; with a fixed period they would keep sending in the same second for as long as they run.
+const flushJitter = 0.1
+
+// jitteredFlushDelay is the wait before the next flush: interval * (1 +/- flushJitter), spread by r in [0,1).
+func jitteredFlushDelay(interval time.Duration, r float64) time.Duration {
+	return time.Duration(float64(interval) * (1 - flushJitter + 2*flushJitter*r))
 }
 
 func (s *sender) flush(contexts ...context.Context) {
