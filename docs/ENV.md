@@ -27,7 +27,7 @@ The variables that go-common packages declare in the `env` registry, with what t
 | `GRAPH_BUFFER_SIZE` | int | `10000` | Events buffered before the oldest are dropped; at least 64. |
 | `GRAPH_COLLECTOR_URL` | string | unset | URL of the fleet-graph collector: the canonical https host or a loopback address. |
 | `GRAPH_ENABLED` | bool | `false` | Opt-in switch for emitting service-to-service call events. Emission also needs GRAPH_COLLECTOR_URL and a writer key. |
-| `GRAPH_FLUSH_BATCH` | int | `500` | Events per flush request; at least 1. |
+| `GRAPH_FLUSH_BATCH` | int | `2000` | Events per flush request; at least 1. go-fleet-graph accepts 2000 from 0.4.44 on and refuses more than 500 before that. A request is also cut at about 600 KB. |
 | `GRAPH_FLUSH_INTERVAL` | int | `30` | Seconds between flushes of buffered events (an integer number of seconds, not a duration); at least 1. Each wait is spread by up to 10 % either way, so the writers do not flush in step. |
 | `GRAPH_READER_API_KEY` | string | (secret) | Read-side key for graph lookups, kept separate from the writer key. |
 | `GRAPH_SAMPLE_RATE` | float | `1` | Fraction of events kept, clamped to the range 0 to 1. |

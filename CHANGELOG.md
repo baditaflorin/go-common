@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.111.6] - 2026-10-29
+
+A graph writer sends up to 2000 events per request instead of 500, and never more than about 600 KB.
+
+### Changed
+
+- `graph`: `GRAPH_FLUSH_BATCH` defaults to 2000 (was 500). A request is also cut at about 600 KB (`maxBatchBytes`): what does not fit goes out in the next request of the same flush, in order, and a failed request keeps its events for the next flush as before.
+- Requires go-fleet-graph 0.4.44, live since 2026-10-29: an older collector answers 400 to a batch over 500 and the sender drops a refused batch. Set `GRAPH_FLUSH_BATCH=500` for a service that talks to an older collector.
+
+Why: with 0.111.4's 30 s interval a busy writer (go-infrastructure-fetch-cache, about 42 events a second) holds about 1,270 events per flush but sent them as three requests of 500, so its request count fell only 19 % per 1,000 events. A batch of 2000 is about 340 KB at the measured 170 bytes an event, well under the gateway's 1 MB body limit (a larger one is answered 413 and dropped, which is what the byte bound prevents when paths are long). The collector commits a request as one group transaction of at most 2000 events, so the write cost per request does not grow.
+
 ## [0.111.5] - 2026-10-29
 
 The access log says which address a request really came from, and which host a graph batch came from.
