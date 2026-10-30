@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/baditaflorin/go-common/credfile"
 	"github.com/baditaflorin/go-common/header"
 	"github.com/baditaflorin/go-common/loadshed"
 	"github.com/baditaflorin/go-common/safehttp"
@@ -19,9 +20,13 @@ import (
 // with transparent fallback to a SSRF-safe direct fetch when the cache
 // is unreachable. Safe for concurrent use.
 type Client struct {
-	cacheURL       string
-	apiKey         string
-	apiKeyErr      error
+	cacheURL  string
+	apiKey    string
+	apiKeyErr error
+	// apiKeySrc is set when the key came from FLEET_FETCH_CACHE_API_KEY_FILE:
+	// every request then sends the file's current key (package credfile), so
+	// a renewed key is used without a restart.
+	apiKeySrc      *credfile.Source
 	cacheClient    *http.Client // HTTP client used to talk to the cache itself
 	fallback       *http.Client // SSRF-safe client used when cache is down
 	timeout        time.Duration
@@ -69,12 +74,15 @@ type Client struct {
 	errs      atomic.Int64
 	truncated atomic.Int64
 
-	// authRejected is a permanent, per-client circuit opened by a cache-side
-	// 401/403. The API key is immutable after NewClient, so retrying the same
-	// credentials on every origin request can only hammer the cache. A new
-	// client (normally a process restart after credential rotation) starts
-	// with a closed circuit.
-	authRejected atomic.Int32
+	// authRejected is a per-client circuit opened by a cache-side 401/403.
+	// Retrying the same credentials on every origin request can only hammer
+	// the cache. A key from WithAPIKey or the env var is immutable, so for it
+	// the circuit stays open for the life of the client (a new client,
+	// normally a process restart after credential rotation, starts closed).
+	// A file-backed key closes it again as soon as the file holds another key
+	// (authRejectedGen is the credfile generation that was refused).
+	authRejected    atomic.Int32
+	authRejectedGen atomic.Uint64
 }
 
 // Get fetches targetURL through the cache. Genuine cache-service/network
@@ -252,9 +260,14 @@ func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.
 	// safehttp process-wide delegate treats this error as a signal to use its
 	// own direct transport, while direct fleetfetch callers get a typed error
 	// that makes the bad configuration visible.
+	apiKey, keyGen := c.currentAPIKey()
 	if status := int(c.authRejected.Load()); status != 0 {
-		c.errs.Add(1)
-		return nil, &CacheAuthError{StatusCode: status, CircuitOpen: true}
+		if c.apiKeySrc == nil || keyGen == c.authRejectedGen.Load() {
+			c.errs.Add(1)
+			return nil, &CacheAuthError{StatusCode: status, CircuitOpen: true}
+		}
+		// The key file has changed since the cache refused it: try the new key.
+		c.authRejected.CompareAndSwap(int32(status), 0)
 	}
 
 	q := url.Values{}
@@ -275,87 +288,110 @@ func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.
 	cctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(cctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		if archiveOnly {
-			c.errs.Add(1)
-			return nil, fmt.Errorf("fleetfetch: Common Crawl cache request: %w", err)
+	var (
+		resp      *http.Response
+		body      []byte
+		truncated bool
+		fetchedAt string
+	)
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
 		}
-		c.errs.Add(1)
-		return nil, fmt.Errorf("fleetfetch: build cache request: %w", err)
-	}
-	if c.apiKey != "" {
-		req.Header.Set(header.APIKey, c.apiKey)
-	}
-	// Identify the calling service to the cache so it can forward
-	// X-Fleet-Caller to go-js-proxy / go-html-proxy for per-enricher load
-	// attribution. Set ONLY on the internal cache request — never on the
-	// direct-to-origin fallback (directFetch), which would leak an internal
-	// header to a public site. Empty caller → header omitted (no regression).
-	if caller := c.resolveCaller(); caller != "" {
-		req.Header.Set(header.FleetCaller, caller)
-	}
-	if cacheHop != "" {
-		req.Header.Set(fetchCacheHopHeader, cacheHop)
-	}
-	for name, vals := range merged {
-		for _, v := range vals {
-			req.Header.Add(ForwardHeaderPrefix+name, v)
-		}
-	}
-
-	resp, err := c.cacheClient.Do(req)
-	if err != nil {
-		// Caller's own context expired/cancelled — they gave up.
-		// Don't fall back or direct-fetch; just propagate.
-		if ctx.Err() != nil {
-			c.errs.Add(1)
-			return nil, fmt.Errorf("fleetfetch: caller context done: %w", ctx.Err())
-		}
-		if archiveOnly {
-			c.errs.Add(1)
-			return nil, fmt.Errorf("fleetfetch: Common Crawl cache unavailable: %w", err)
-		}
-		// Cache reachable but slow (our per-request deadline fired, not
-		// a transport failure). A direct fetch of the same origin would
-		// hit the same latency and bypass singleflight, so by default
-		// we surface a timeout instead of bypassing the cache.
-		if isTimeout(err) {
-			c.timeouts.Add(1)
+	}()
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(cctx, http.MethodGet, reqURL, nil)
+		if err != nil {
 			if archiveOnly {
 				c.errs.Add(1)
-				return nil, fmt.Errorf("fleetfetch: Common Crawl cache timeout: %w", err)
+				return nil, fmt.Errorf("fleetfetch: Common Crawl cache request: %w", err)
 			}
-			if !c.fallbackOnTimeout {
-				c.errs.Add(1)
-				return nil, fmt.Errorf("%w: %v", ErrCacheTimeout, err)
-			}
-			return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache timeout: %w", err))
-		}
-		// Genuine transport failure (refused / DNS / no route): the
-		// cache is unreachable, so a direct fetch is the right
-		// degradation.
-		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache transport: %w", err))
-	}
-	defer resp.Body.Close()
-
-	body, truncated, err := c.readBody(resp.Body)
-	if err != nil {
-		if archiveOnly {
 			c.errs.Add(1)
-			return nil, fmt.Errorf("fleetfetch: Common Crawl cache body: %w", err)
+			return nil, fmt.Errorf("fleetfetch: build cache request: %w", err)
 		}
-		return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache body: %w", err))
-	}
+		if apiKey != "" {
+			req.Header.Set(header.APIKey, apiKey)
+		}
+		// Identify the calling service to the cache so it can forward
+		// X-Fleet-Caller to go-js-proxy / go-html-proxy for per-enricher load
+		// attribution. Set ONLY on the internal cache request — never on the
+		// direct-to-origin fallback (directFetch), which would leak an internal
+		// header to a public site. Empty caller → header omitted (no regression).
+		if caller := c.resolveCaller(); caller != "" {
+			req.Header.Set(header.FleetCaller, caller)
+		}
+		if cacheHop != "" {
+			req.Header.Set(fetchCacheHopHeader, cacheHop)
+		}
+		for name, vals := range merged {
+			for _, v := range vals {
+				req.Header.Add(ForwardHeaderPrefix+name, v)
+			}
+		}
 
-	// A fetched-at marker means the cache is replaying an origin result,
-	// including a negative-cached 5xx. Preserve it exactly; direct-fetching
-	// here defeats negative caching and multiplies origin load per caller.
-	fetchedAt := resp.Header.Get("X-FetchCache-Fetched-At")
-	if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && fetchedAt == "" {
-		c.authRejected.CompareAndSwap(0, int32(resp.StatusCode))
-		c.errs.Add(1)
-		return nil, &CacheAuthError{StatusCode: resp.StatusCode}
+		resp, err = c.cacheClient.Do(req)
+		if err != nil {
+			// Caller's own context expired/cancelled — they gave up.
+			// Don't fall back or direct-fetch; just propagate.
+			if ctx.Err() != nil {
+				c.errs.Add(1)
+				return nil, fmt.Errorf("fleetfetch: caller context done: %w", ctx.Err())
+			}
+			if archiveOnly {
+				c.errs.Add(1)
+				return nil, fmt.Errorf("fleetfetch: Common Crawl cache unavailable: %w", err)
+			}
+			// Cache reachable but slow (our per-request deadline fired, not
+			// a transport failure). A direct fetch of the same origin would
+			// hit the same latency and bypass singleflight, so by default
+			// we surface a timeout instead of bypassing the cache.
+			if isTimeout(err) {
+				c.timeouts.Add(1)
+				if archiveOnly {
+					c.errs.Add(1)
+					return nil, fmt.Errorf("fleetfetch: Common Crawl cache timeout: %w", err)
+				}
+				if !c.fallbackOnTimeout {
+					c.errs.Add(1)
+					return nil, fmt.Errorf("%w: %v", ErrCacheTimeout, err)
+				}
+				return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache timeout: %w", err))
+			}
+			// Genuine transport failure (refused / DNS / no route): the
+			// cache is unreachable, so a direct fetch is the right
+			// degradation.
+			return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache transport: %w", err))
+		}
+		body, truncated, err = c.readBody(resp.Body)
+		if err != nil {
+			if archiveOnly {
+				c.errs.Add(1)
+				return nil, fmt.Errorf("fleetfetch: Common Crawl cache body: %w", err)
+			}
+			return c.directFetch(ctx, targetURL, merged, fmt.Errorf("cache body: %w", err))
+		}
+
+		// A fetched-at marker means the cache is replaying an origin result,
+		// including a negative-cached 5xx. Preserve it exactly; direct-fetching
+		// here defeats negative caching and multiplies origin load per caller.
+		fetchedAt = resp.Header.Get("X-FetchCache-Fetched-At")
+		if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && fetchedAt == "" {
+			// A file-backed key that the cache does not know may just have been
+			// renewed: read the file once more and, if it holds another key, send
+			// the request once more with it. Never a second time.
+			if resp.StatusCode == http.StatusUnauthorized && attempt == 0 && c.apiKeySrc != nil {
+				if _, changed := c.apiKeySrc.Rejected(apiKey); changed {
+					_ = resp.Body.Close()
+					apiKey, keyGen = c.apiKeySrc.Current()
+					continue
+				}
+			}
+			c.authRejectedGen.Store(keyGen)
+			c.authRejected.CompareAndSwap(0, int32(resp.StatusCode))
+			c.errs.Add(1)
+			return nil, &CacheAuthError{StatusCode: resp.StatusCode}
+		}
+		break
 	}
 	if resp.StatusCode >= 500 && fetchedAt == "" {
 		if archiveOnly {
@@ -512,4 +548,13 @@ func isProxyConnectForbidden(err error) bool {
 		return false
 	}
 	return errors.Is(err, ErrProxyConnectForbidden)
+}
+
+// currentAPIKey is the key the next cache request sends and, for a
+// file-backed key, its credfile generation (0 otherwise).
+func (c *Client) currentAPIKey() (string, uint64) {
+	if c.apiKeySrc != nil {
+		return c.apiKeySrc.Current()
+	}
+	return c.apiKey, 0
 }

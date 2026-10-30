@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/baditaflorin/go-common/credfile"
 	"github.com/baditaflorin/go-common/secrets"
 )
 
@@ -140,14 +141,25 @@ func credentialFailureReason(err error) string {
 
 // credentialAttempt wraps the vault read of one attempt so the retry can
 // repeat exactly that read: the URL and key that passed the approved-host
-// checks, without consulting the environment or key files again (a service may
-// have removed either since start).
+// checks, without consulting the environment again (a service may have removed
+// it since start). A key from FLEET_SECRETS_API_KEY_FILE is the one exception:
+// keySrc follows that file (package credfile, which keeps the last good key
+// when the file goes away), so a retry sends a key renewed in the meantime.
 type credentialAttempt struct {
 	read    func(ctx context.Context, baseURL, apiKey string) (string, error)
 	baseURL string
 	apiKey  string
+	keySrc  *credfile.Source
 	called  bool
 	err     error
+}
+
+// key is the vault key the next attempt sends.
+func (a *credentialAttempt) key() string {
+	if a.keySrc != nil {
+		return a.keySrc.Value()
+	}
+	return a.apiKey
 }
 
 func (a *credentialAttempt) readToken(ctx context.Context, baseURL, apiKey string) (string, error) {
@@ -249,9 +261,18 @@ func (r *credentialRetry) run(ctx context.Context, deps initDeps, base Config, a
 		if tracingIsUp() {
 			return
 		}
-		token, err := attempt.read(ctx, attempt.baseURL, attempt.apiKey)
+		key := attempt.key()
+		token, err := attempt.read(ctx, attempt.baseURL, key)
 		if ctx.Err() != nil {
 			return
+		}
+		if err != nil && attempt.keySrc != nil && isUnauthorized(err) {
+			// A refused file-backed key: if the file now holds another one
+			// (renewed), the next attempt sends it; otherwise stop as before.
+			if _, changed := attempt.keySrc.Rejected(key); changed {
+				last = err
+				continue
+			}
 		}
 		if err == nil && token != "" {
 			installed, installErr := installLateProvider(ctx, deps, base, token)

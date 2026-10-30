@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/baditaflorin/go-common/backoffcoord"
 	"github.com/baditaflorin/go-common/cgroup"
 	"github.com/baditaflorin/go-common/circuitbreaker"
+	"github.com/baditaflorin/go-common/credfile"
 	"github.com/baditaflorin/go-common/degraded"
 	"github.com/baditaflorin/go-common/depcheck"
 	"github.com/baditaflorin/go-common/fleetfetch"
@@ -98,7 +100,7 @@ func harnessCases() []harnessCase {
 	return []harnessCase{
 		httpCase(), egressCase(), fleetFetchCase(), backoffCase(), backoffCoordCase(), rateCoordCase(),
 		degradedCase(), authCase(), adminCase(), selftestCase(), depCase(), policyCase(), envelopeCase(),
-		circuitCase(), workpoolCase(), loadshedCase(), webshareCase(), cgroupCase(), graphCase(), buildInfoCase(),
+		circuitCase(), workpoolCase(), loadshedCase(), webshareCase(), cgroupCase(), graphCase(), credfileCase(), buildInfoCase(),
 	}
 }
 
@@ -513,6 +515,51 @@ func cgroupCase() harnessCase {
 			reg.MustRegister(c)
 			return c
 		}, nil)
+}
+
+// credfileHarness feeds the collector a snapshot the probes build, instead of
+// the process-wide credfile registry.
+type credfileHarness struct {
+	mu    sync.Mutex
+	stats []credfile.Stats
+}
+
+func (h *credfileHarness) snapshot() []credfile.Stats {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]credfile.Stats(nil), h.stats...)
+}
+
+func (h *credfileHarness) add(name string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	errs := map[string]uint64{}
+	for _, r := range credfileReasons {
+		errs[r] = 1
+	}
+	h.stats = append(h.stats, credfile.Stats{Name: name, Expiry: time.Unix(1800000000, 0), ReloadOK: 1, ReloadError: 1, StaleUses: 1, Errors: errs})
+}
+
+func credfileCase() harnessCase {
+	return newCase("credfile", []string{"NewCredfileCollectors"},
+		[]string{"fleet_credential_expiry_timestamp_seconds", "fleet_credential_reload_total", "fleet_credential_reload_errors_total", "fleet_credential_stale_use_total"},
+		func(reg prometheus.Registerer) *credfileHarness {
+			h := &credfileHarness{}
+			reg.MustRegister(newCredfileCollectors("svc", h.snapshot))
+			return h
+		}, nil,
+		probe("configured credentials", func(h *credfileHarness, _ *promxtest.Inputs) {
+			for _, n := range names("credential", configuredNames) {
+				h.add(n)
+			}
+		}),
+		// Names are code, not input, but a credential opened with a name built
+		// from data must still not grow the series: everything past the first
+		// 16 names, and anything that is not a plain name, is "_other".
+		probe("hostile names", func(h *credfileHarness, in *promxtest.Inputs) {
+			in.Each(in.Names(), h.add)
+		}),
+	)
 }
 
 func graphCase() harnessCase {

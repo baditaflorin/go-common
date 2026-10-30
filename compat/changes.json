@@ -3,6 +3,21 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.112.0",
+      "date": "2026-10-31",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`FLEET_FETCH_CACHE_API_KEY_FILE` and `FLEET_SECRETS_API_KEY_FILE` keys are re-read when the file changes and once on a 401; env-var keys are unchanged.",
+      "off_switch": "`FLEET_CREDFILE_RELOAD=off` in the service's environment, no release needed"
+    },
+    {
+      "version": "v0.112.0",
+      "date": "2026-10-31",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "`ResolveCritical` errors name `fleet-runner key provision <slug>` as the fix instead of `key issue --never-expires`; a log parser keyed on the old text needs updating."
+    },
+    {
       "version": "v0.111.0",
       "date": "2026-10-25",
       "class": "breaking",

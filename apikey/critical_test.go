@@ -18,7 +18,7 @@ func TestResolveCritical_Unset(t *testing.T) {
 		"slug=svc-x",
 		"env=CRIT_TEST_A,CRIT_TEST_B",
 		"reason=unset",
-		"fix=`fleet-runner key issue svc-x",
+		"fix=`fleet-runner key provision svc-x",
 		CriticalRunbookURL,
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -37,7 +37,7 @@ func TestResolveCritical_LegacyFallbackRejected(t *testing.T) {
 		"slug=svc-y",
 		"env=CRIT_TEST_KEY",
 		"unknown_prefix",
-		"fleet-runner key issue svc-y",
+		"fleet-runner key provision svc-y",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error missing %q\nfull error: %s", want, err)

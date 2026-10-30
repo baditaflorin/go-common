@@ -291,6 +291,8 @@ func NewClient(opts ...Option) *Client {
 				c.apiKey = strings.TrimSpace(string(keyBytes))
 				if c.apiKey == "" {
 					c.apiKeyErr = errors.New("fleetfetch: API key file is empty")
+				} else {
+					c.attachAPIKeyFile(keyPath)
 				}
 			}
 		}

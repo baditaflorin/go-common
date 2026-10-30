@@ -2,7 +2,7 @@
 
 # Package index
 
-74 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
+75 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
 
 | Package | Summary |
 | --- | --- |
@@ -22,6 +22,7 @@
 | [`config`](../config/) | Loads service configuration from service.yaml and environment variables. |
 | [`credentiallease`](../credentiallease/) | A task-bound client for a credential broker. |
 | [`credentiallease/broker`](../credentiallease/broker/) | Provides the fail-closed HTTP core for credentiallease v1. |
+| [`credfile`](../credfile/) | Reads a credential (an API key) from a file and keeps it current: a renewed key that is atomically written over the file is picked up without a restart, a callee's 401 triggers one immediate re-read… |
 | [`dataformat`](../dataformat/) | Provides bidirectional conversion primitives between the structured data formats commonly seen across the fleet: JSON, CSV, XML, YAML and TOML. |
 | [`dbx`](../dbx/) | The common, context-aware database entry point for Go Common. |
 | [`degraded`](../degraded/) | Accumulates degradation reasons for the current request and surfaces them in the response.Envelope "degraded" array. |

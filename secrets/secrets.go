@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baditaflorin/go-common/credfile"
 	"github.com/baditaflorin/go-common/response"
 )
 
@@ -36,6 +37,10 @@ const (
 	defaultFleetSecretsURL = "https://fleet-secrets.0exec.com"
 	maxAPIKeyFileBytes     = 8 << 10
 )
+
+// APIKeyCredential is the credential name of FLEET_SECRETS_API_KEY_FILE in the
+// fleet_credential_* metrics (package credfile).
+const APIKeyCredential = "fleet_secrets_api_key"
 
 var ErrMissingAPIKey = errors.New("secrets: Fleet Secrets API key is not configured")
 
@@ -90,6 +95,7 @@ func (e *StatusError) Error() string {
 type Client struct {
 	baseURL   string
 	apiKey    string
+	keySrc    *credfile.Source // set when the key came from FLEET_SECRETS_API_KEY_FILE
 	http      Doer
 	fallbacks []string // extra vault base URLs, tried in order after baseURL
 	cache     *diskCache
@@ -113,6 +119,12 @@ func New(baseURL, apiKey string, httpClient Doer) *Client {
 // resolves its caller key from protected runtime configuration. A custom
 // Doer is accepted for tests; nil uses a short-timeout HTTP client that never
 // follows redirects, so the API key cannot be forwarded to another host.
+//
+// The key is FLEET_SECRETS_API_KEY, else the protected file named by
+// FLEET_SECRETS_API_KEY_FILE, else FLEET_API_KEY. A key from the file is
+// followed (package credfile): a renewed key written over the file is used
+// within a minute, or at once when the vault answers 401, without a restart;
+// FLEET_CREDFILE_RELOAD=off reads it once, as before 0.112.0.
 func NewFromEnv(getenv func(string) string, httpClient Doer) (*Client, error) {
 	if getenv == nil {
 		getenv = os.Getenv
@@ -127,12 +139,14 @@ func NewFromEnv(getenv func(string) string, httpClient Doer) (*Client, error) {
 	}
 
 	apiKey := strings.TrimSpace(getenv("FLEET_SECRETS_API_KEY"))
+	var keySrc *credfile.Source
 	if apiKey == "" {
 		if path := strings.TrimSpace(getenv("FLEET_SECRETS_API_KEY_FILE")); path != "" {
 			apiKey, err = readProtectedFile(path, maxAPIKeyFileBytes)
 			if err != nil {
 				return nil, errors.New("secrets: Fleet Secrets API key file is unavailable or has unsafe permissions")
 			}
+			keySrc = followKeyFile(path)
 		}
 	}
 	if apiKey == "" {
@@ -153,7 +167,46 @@ func NewFromEnv(getenv func(string) string, httpClient Doer) (*Client, error) {
 			Transport: DirectTransport(),
 		}
 	}
-	return New(baseURL, apiKey, httpClient).WithEnv(getenv), nil
+	c := New(baseURL, apiKey, httpClient)
+	if keySrc != nil {
+		c.keySrc = keySrc
+	}
+	return c.WithEnv(getenv), nil
+}
+
+// followKeyFile attaches the reloading source to a key file NewFromEnv has
+// just read with its own checks. When the file cannot be followed (replaced
+// in between), the client keeps the value it read, as it always did.
+func followKeyFile(path string) *credfile.Source {
+	src, err := credfile.Open(APIKeyCredential, path, credfile.Options{Protected: true, MaxBytes: maxAPIKeyFileBytes})
+	if err != nil {
+		return nil
+	}
+	return src
+}
+
+// currentKey is the key the next request sends.
+func (c *Client) currentKey() string {
+	if c.keySrc != nil {
+		return c.keySrc.Value()
+	}
+	return c.apiKey
+}
+
+// fetchWithKey is one URL's attempt. A 401 to a file-backed key reads the file
+// once more; if it holds another key (a renewal landed), the request is sent
+// once more with it. It returns the key that was used last.
+func (c *Client) fetchWithKey(ctx context.Context, base, name string) (string, string, error) {
+	key := c.currentKey()
+	v, err := c.fetch(ctx, base, name, key)
+	var se *StatusError
+	if err != nil && c.keySrc != nil && errors.As(err, &se) && se.StatusCode == http.StatusUnauthorized && ctx.Err() == nil {
+		if fresh, changed := c.keySrc.Rejected(key); changed {
+			key = fresh
+			v, err = c.fetch(ctx, base, name, key)
+		}
+	}
+	return v, key, err
 }
 
 // Get fetches a single secret's plaintext value by name, decoding the
@@ -208,10 +261,13 @@ func (c *Client) GetDetailed(ctx context.Context, name string) (Result, error) {
 		return Result{}, errors.New("secrets: name must be a simple identifier")
 	}
 	var lastErr error
+	var key string // the key of the last attempt, which the disk cache is keyed by
 	for i, base := range append([]string{c.baseURL}, c.fallbacks...) {
-		v, err := c.fetch(ctx, base, name)
+		var v string
+		var err error
+		v, key, err = c.fetchWithKey(ctx, base, name)
 		if err == nil {
-			c.cache.store(name, v, c.apiKey)
+			c.cache.store(name, v, key)
 			src := SourceLive
 			if i > 0 {
 				src = SourceAlt
@@ -227,20 +283,20 @@ func (c *Client) GetDetailed(ctx context.Context, name string) (Result, error) {
 			break // out of time: do not start another network attempt
 		}
 	}
-	if v, age, ok := c.cache.load(name, c.apiKey); ok {
+	if v, age, ok := c.cache.load(name, key); ok {
 		return Result{Value: v, Source: SourceCache, Age: age}, nil
 	}
 	return Result{}, lastErr
 }
 
-func (c *Client) fetch(ctx context.Context, base, name string) (string, error) {
+func (c *Client) fetch(ctx context.Context, base, name, apiKey string) (string, error) {
 	url := base + "/secrets/" + name
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("secrets: build request for %q: %w", name, err)
 	}
-	if c.apiKey != "" {
-		req.Header.Set("X-API-Key", c.apiKey)
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
 	}
 	req.Header.Set("Accept", "application/json")
 

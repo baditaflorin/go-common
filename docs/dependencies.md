@@ -2,7 +2,7 @@
 
 # Third-party dependencies per package
 
-66 importable packages, 39 of them with no third-party module at all, and 42 under a budget. Generated from `go list -deps`; CI fails if this file is stale.
+67 importable packages, 40 of them with no third-party module at all, and 43 under a budget. Generated from `go list -deps`; CI fails if this file is stale.
 
 go-common is one Go module, but a service only builds, and only lists in its own `go.mod` and `go.sum`, the
 third-party modules that the packages it imports reach. This page measures that for every package, so that
@@ -70,6 +70,7 @@ Heaviest first, then by name.
 | [`compat`](../compat/) | 0 | yes | - | - |
 | [`config`](../config/) | 0 | yes | - | - |
 | [`credentiallease/broker`](../credentiallease/broker/) | 0 | yes | - | - |
+| [`credfile`](../credfile/) | 0 | yes | - | - |
 | [`degraded`](../degraded/) | 0 | yes | - | - |
 | [`depcheck`](../depcheck/) | 0 | yes | - | - |
 | [`deploymentintent`](../deploymentintent/) | 0 | yes | - | - |

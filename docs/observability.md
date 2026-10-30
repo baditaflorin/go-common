@@ -375,6 +375,10 @@ are 483,160 of that, because `route` is capped per label, not per
 | `proxysupplier_webshare_direct_*` | - | 1 | the other five, read at scrape time |
 | `go_container_*` | - | 1 | twenty cgroup gauges and counters, read at scrape time |
 | `fleet_graph_*` | - | 1 | six sender counters, read at scrape time |
+| `fleet_credential_expiry_timestamp_seconds` | credential | 17 | 16 credential names (first-come, from `credfile.Open`) and `_other`; only credentials loaded from a file |
+| `fleet_credential_reload_total` | credential, result | 34 | 17 x 2 results (`ok`, `error`) |
+| `fleet_credential_reload_errors_total` | credential, reason | 136 | 17 x 8 reasons (the `credfile.Reason*` list) |
+| `fleet_credential_stale_use_total` | credential | 17 | 17 |
 | `build_info` | built_at, git_sha, go_common_version, go_version, version | 1 | constant for the life of the process |
 
 ## Known limits
