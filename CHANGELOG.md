@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.112.0] - 2026-10-31
+
+A key delivered as a file follows that file: a renewed key written over it is used without a restart. Groundwork for giving every keystore key an expiry (fleet-state `docs/architecture/ephemeral-credentials`, evidence-key-lifecycle.md 5.3 and 4.3); nothing renews keys yet, and nothing changes for a service whose keys come from environment variables.
+
+### Added
+
+- `credfile`: a reloading key file. `credfile.Open(name, path, opts)` reads the key at start (a failure there fails as before), then looks at the file at most every 30 s (never more than 60 s) when the key is used or the metrics are scraped, and re-reads it when its inode, size or modification time changed. `Source.Rejected(used)` is the 401 path: one immediate re-read (at most one per 5 s per file) and "changed" only if the file now holds another key, so a caller retries once and never loops. A file that goes missing or turns unusable (empty, oversized, world-readable, a value `Validate` refuses) keeps the last good key and counts the failure and every use of the stale key. A non-secret `<path>.meta` sidecar (`credfile.Meta`: `expires_at`, `key_id`, `issued_at`, `renew_after`, `successor_of`, `key_sha256`) gives the key's expiry; a sidecar whose `key_sha256` belongs to another key is ignored, and counted only if it outlives one check interval, so the two renames of a renewal are not an error. The value is never in an error, a log line, `%v` of a Source, `Stats` or a metric. Stdlib only.
+- `promx`: `NewCredfileCollectors`, wired by `AutoWire`, exports `fleet_credential_expiry_timestamp_seconds{credential}`, `fleet_credential_reload_total{credential,result}`, `fleet_credential_reload_errors_total{credential,reason}` and `fleet_credential_stale_use_total{credential}` for the credentials a process loaded from files (none for env-var keys). The credential label is bounded to 16 names plus `_other`; budgets are in docs/observability.md.
+- `apikey.ResolveCriticalFile(slug, fileEnv, envVars...)` and `MustResolveCriticalFile`: `ResolveCritical` for a key delivered as a file (`FLEET_API_KEY_FILE` by convention). It returns a `*CriticalKey` whose `Value()` follows the file and whose `Rejected` is the 401 path. When `fileEnv` is set the file wins over the env chain (as `GRAPH_API_KEY_FILE` does), so a renewed file is never shadowed by a stale env value; when it is not set, the env chain behaves exactly as `ResolveCritical`. Services opt in; `ResolveCritical` itself is unchanged.
+- `FLEET_CREDFILE_RELOAD`: `off` (also `false`, `0`, `no`, `disabled`) makes every file-backed key be read once at start, as before this release.
+- `fleetfetch.APIKeyCredential` and `secrets.APIKeyCredential`: the credential names in the metrics (`fleet_fetch_cache_api_key`, `fleet_secrets_api_key`).
+
+### Changed
+
+- **BREAKING (behavioural):** a key read from `FLEET_FETCH_CACHE_API_KEY_FILE` (`fleetfetch.NewClient`) or `FLEET_SECRETS_API_KEY_FILE` (`secrets.NewFromEnv`, `telemetry.Init`) is no longer read once at start: each request sends the file's current key, a renewed file is picked up within a minute, and a 401 re-reads the file once and retries once with the new key if there is one. `fleetfetch`'s auth circuit (open for the life of the client after a 401/403) closes again when the key file holds another key. The start-time read, its checks and its error texts are unchanged, and a key from `WithAPIKey`, `FLEET_FETCH_CACHE_API_KEY`, `FLEET_SECRETS_API_KEY` or `FLEET_API_KEY` behaves exactly as before. Why: keystore keys are getting an expiry, and a key read once dies with it; renewal writes a new file. Verified with tests for an atomic replace, a 401 with and without a renewed key (one retry, never a loop), a missing file (last good key, error and stale-use counts), the off-switch, and the env-var paths unchanged; and by building and testing three fleet services against this tree.
+  - summary: `FLEET_FETCH_CACHE_API_KEY_FILE` and `FLEET_SECRETS_API_KEY_FILE` keys are re-read when the file changes and once on a 401; env-var keys are unchanged.
+  - off-switch: `FLEET_CREDFILE_RELOAD=off` in the service's environment, no release needed
+- **BREAKING (behavioural):** the remediation in `apikey.ResolveCritical` errors (`fix=`) is `fleet-runner key provision <slug>` (an expiring key, installed and the service restarted) instead of `fleet-runner key issue <slug> --never-expires`, which minted keys that never expire. The rest of the error line (`slug=`, `env=`, `reason=`, `docs=`) is unchanged.
+  - summary: `ResolveCritical` errors name `fleet-runner key provision <slug>` as the fix instead of `key issue --never-expires`; a log parser keyed on the old text needs updating.
+
 ## [0.111.6] - 2026-10-29
 
 A graph writer sends up to 2000 events per request instead of 500, and never more than about 600 KB.

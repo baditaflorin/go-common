@@ -60,6 +60,7 @@ var (
 	autoWebshare     *WebshareDirectCollectors
 	autoCgroup       *CgroupCollectors
 	autoGraph        *GraphCollectors
+	autoCredfile     *CredfileCollectors
 	autoBoundReg     *prometheus.Registry // the registry the singletons are bound to
 )
 

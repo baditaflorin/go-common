@@ -16,6 +16,7 @@ compat 93
 config 89
 credentiallease 73
 credentiallease/broker 69
+credfile 91
 dataformat 85
 dbx 73
 degraded 77

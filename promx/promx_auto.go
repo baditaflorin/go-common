@@ -2,7 +2,7 @@ package promx
 
 // AutoWire performs the full bootstrap go-common/server calls at startup:
 // Init the shared registry, then create (or reuse) one each of the egress,
-// inbound-HTTP, auth, cgroup-resource, and Fleet Graph sender collector sets. Returned collectors are package
+// inbound-HTTP, auth, cgroup-resource, Fleet Graph sender and file-backed credential collector sets. Returned collectors are package
 // singletons — repeated AutoWire calls (e.g. across tests) return the same
 // instances without re-registering with Prometheus.
 //
@@ -37,6 +37,7 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 		autoWebshare = nil
 		autoCgroup = nil
 		autoGraph = nil
+		autoCredfile = nil
 		autoBoundReg = reg
 	}
 	if autoEgress == nil {
@@ -109,6 +110,9 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 	}
 	if autoGraph == nil {
 		autoGraph = NewGraphCollectors(reg, ServiceID())
+	}
+	if autoCredfile == nil {
+		autoCredfile = NewCredfileCollectors(reg, ServiceID())
 	}
 	return autoEgress, autoHTTP, autoAuth
 }

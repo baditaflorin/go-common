@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/baditaflorin/go-common/credfile"
 	"github.com/baditaflorin/go-common/secrets"
 	"github.com/felixge/httpsnoop"
 	"go.opentelemetry.io/otel"
@@ -142,6 +143,9 @@ func initWith(deps initDeps, serviceName, serviceVersion string, opts ...Option)
 	}
 	attempt := credentialAttempt{read: deps.readToken}
 	loadErr := configureOpenObserveFromFleetSecrets(cfg, deps.getenv, attempt.readToken)
+	if attempt.called {
+		attempt.keySrc = followFleetSecretsKeyFile(deps.getenv)
+	}
 	if loadErr != nil {
 		// Export is optional. A vault or collector outage must never prevent
 		// a service from starting; without the credential we fail closed and
@@ -316,6 +320,31 @@ func resolveFleetSecretsAPIKey(getenv func(string) string) (string, error) {
 	return getenv("FLEET_API_KEY"), nil
 }
 
+// followFleetSecretsKeyFile returns the reloading source for the vault key
+// when resolveFleetSecretsAPIKey takes it from FLEET_SECRETS_API_KEY_FILE (it
+// is shared with package secrets, which reads the same file), and nil when the
+// key comes from the environment or the file cannot be followed.
+func followFleetSecretsKeyFile(getenv func(string) string) *credfile.Source {
+	if getenv("FLEET_SECRETS_API_KEY") != "" {
+		return nil
+	}
+	path := strings.TrimSpace(getenv("FLEET_SECRETS_API_KEY_FILE"))
+	if path == "" {
+		return nil
+	}
+	src, err := credfile.Open(secrets.APIKeyCredential, path, credfile.Options{Protected: true, MaxBytes: 8 << 10})
+	if err != nil {
+		return nil
+	}
+	return src
+}
+
+// isUnauthorized reports a vault answer of 401: the key was refused.
+func isUnauthorized(err error) bool {
+	var status *secrets.StatusError
+	return errors.As(err, &status) && status.StatusCode == http.StatusUnauthorized
+}
+
 // resolveOpenObserveTokenFile accepts a protected file so deployments can
 // provide the ingestion-only token without requiring runtime access to Fleet
 // Secrets. Secret files must be regular files with no group/world permissions.
@@ -378,6 +407,13 @@ func configureOpenObserveFromFleetSecrets(cfg *Config, getenv func(string) strin
 			return errors.New("telemetry: fleet secrets reader is unavailable")
 		}
 		token, err = readToken(context.Background(), secretsURL, apiKey)
+		if src := followFleetSecretsKeyFile(getenv); src != nil && isUnauthorized(err) {
+			// The key file may have been renewed since it was read: read it
+			// once more, and ask once more only if it holds another key.
+			if fresh, changed := src.Rejected(apiKey); changed {
+				token, err = readToken(context.Background(), secretsURL, fresh)
+			}
+		}
 		if err != nil || token == "" {
 			return errors.New("telemetry: could not load OpenObserve ingestion credential from fleet secrets")
 		}

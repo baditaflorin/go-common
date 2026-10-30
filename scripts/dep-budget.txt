@@ -48,6 +48,7 @@ botwall
 browserheaders
 cgroup
 compat
+credfile
 credentiallease/broker
 deploymentintent
 depcheck

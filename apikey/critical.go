@@ -28,9 +28,14 @@ const CriticalRunbookURL = "https://github.com/baditaflorin/services-registry/bl
 // slug is the service.yaml `id:` — it appears in the error so an
 // operator or AI agent can copy-paste the exact remediation:
 //
-//	fleet-runner key issue <slug> --never-expires
-//	# then set FLEET_API_KEY=<returned-key> in /opt/services/<slug>/.env
-//	# on the dockerhost and rolling-restart.
+//	fleet-runner key provision <slug>
+//	# issues a key that expires, writes it as FLEET_API_KEY into the
+//	# service's .env on the dockerhost and restarts the service.
+//
+// Never mint a never-expiring key for this: every keystore key gets an
+// expiry (fleet-state docs/architecture/ephemeral-credentials), and a service
+// that should pick up a renewed key without a restart uses
+// ResolveCriticalFile instead.
 //
 // On success, returns the resolved key. NEVER log the returned value.
 func ResolveCritical(slug string, envVars ...string) (string, error) {
@@ -42,15 +47,24 @@ func ResolveCritical(slug string, envVars ...string) (string, error) {
 	}
 	r := Resolve(envVars...)
 	if !r.Found {
-		return "", criticalErr(slug, strings.Join(envVars, ","), "unset",
-			fmt.Sprintf("fleet-runner key issue %s --never-expires; install returned value as FLEET_API_KEY on dockerhost (/opt/services/%s/.env); docker compose up -d", slug, slug))
+		return "", criticalErr(slug, strings.Join(envVars, ","), "unset", provisionFix(slug))
 	}
 	if !HasFleetPrefix(r.Key) {
-		return "", criticalErr(slug, r.Source,
-			fmt.Sprintf("unknown_prefix (expected %s* or %s*)", KeyPrefixDynamic, KeyPrefixFallback),
-			fmt.Sprintf("fleet-runner key issue %s --never-expires; install returned value as FLEET_API_KEY", slug))
+		return "", criticalErr(slug, r.Source, unknownPrefixReason(), provisionFix(slug))
 	}
 	return r.Key, nil
+}
+
+// provisionFix is the remediation every critical-key error names: provision
+// issues an expiring key (fleet-runner's default TTL), installs it where the
+// service reads it and restarts the service. It used to say `key issue
+// --never-expires`, which minted keys that never expire.
+func provisionFix(slug string) string {
+	return fmt.Sprintf("fleet-runner key provision %s (issues an expiring key, writes it as FLEET_API_KEY into the service's .env on the dockerhost and restarts it)", slug)
+}
+
+func unknownPrefixReason() string {
+	return fmt.Sprintf("unknown_prefix (expected %s* or %s*)", KeyPrefixDynamic, KeyPrefixFallback)
 }
 
 // MustResolveCritical is the fatal-on-error wrapper around

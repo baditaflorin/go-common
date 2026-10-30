@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 
+	_ "github.com/baditaflorin/go-common/credfile"
 	_ "github.com/baditaflorin/go-common/egress"
 	"github.com/baditaflorin/go-common/env"
 	_ "github.com/baditaflorin/go-common/fleetfetch"

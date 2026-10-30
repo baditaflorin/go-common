@@ -4,6 +4,12 @@
 
 The variables that go-common packages declare in the `env` registry, with what they default to and what they do. Each package still parses its own values; the registry lists them, checks the ones that are set when a service starts (a value that does not parse, a variable that was removed, a likely typo of a declared name) and shows them, redacted, on the debug server's `/debug/config`. To document a variable, declare it with `env.Declare` in its package; CI fails if this file is stale.
 
+## `credfile`
+
+| Variable | Kind | Default | Description |
+| --- | --- | --- | --- |
+| `FLEET_CREDFILE_RELOAD` | string | `on` | Set to off, false, 0, no or disabled to make every file-backed credential (FLEET_FETCH_CACHE_API_KEY_FILE, FLEET_SECRETS_API_KEY_FILE, FLEET_API_KEY_FILE) be read once at start and never again, as before go-common 0.112.0. By default a renewed key file is picked up within a minute and after a 401 (package credfile). |
+
 ## `egress`
 
 | Variable | Kind | Default | Description |
