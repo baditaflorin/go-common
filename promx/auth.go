@@ -60,8 +60,13 @@ type AuthCollectors struct {
 	spiffeFailures *prometheus.CounterVec
 	spiffeFallback *prometheus.CounterVec
 
-	fallbackMu         sync.Mutex
-	fallbackPrincipals map[string]struct{}
+	// A pointer, so AuthCollectors stays comparable (a mutex and a map in it would change its API).
+	principals *principalSet
+}
+
+type principalSet struct {
+	mu   sync.Mutex
+	seen map[string]struct{}
 }
 
 // spiffeFailureReasons are the values of spiffe_verify_failures_total{reason}
@@ -86,7 +91,8 @@ func NewAuthCollectors(reg prometheus.Registerer) *AuthCollectors {
 	service := ServiceID()
 
 	c := &AuthCollectors{
-		service: service,
+		service:    service,
+		principals: &principalSet{seen: map[string]struct{}{}},
 		authTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "apikey_auth_total",
 			Help: "Total auth decisions made by middleware.TokenAuthKeystore, labelled by the code path that produced the decision and the outcome.",
@@ -161,18 +167,15 @@ func (c *AuthCollectors) ObserveIdentityFallback(principal, reason string) {
 	if !principalLabel(principal) {
 		principal = "_other"
 	}
-	c.fallbackMu.Lock()
-	if c.fallbackPrincipals == nil {
-		c.fallbackPrincipals = make(map[string]struct{})
-	}
-	if _, seen := c.fallbackPrincipals[principal]; !seen {
-		if len(c.fallbackPrincipals) >= maxFallbackPrincipals {
+	c.principals.mu.Lock()
+	if _, seen := c.principals.seen[principal]; !seen {
+		if len(c.principals.seen) >= maxFallbackPrincipals {
 			principal = "_other"
 		} else {
-			c.fallbackPrincipals[principal] = struct{}{}
+			c.principals.seen[principal] = struct{}{}
 		}
 	}
-	c.fallbackMu.Unlock()
+	c.principals.mu.Unlock()
 	c.spiffeFallback.WithLabelValues(c.service, principal, reason).Inc()
 }
 
