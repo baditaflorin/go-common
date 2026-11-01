@@ -70,7 +70,8 @@ func (c *Client) WithCache(dir string, maxAge time.Duration) *Client {
 	return c
 }
 
-// WithEnv applies FLEET_SECRETS_FALLBACK_URLS / FLEET_SECRETS_CACHE_DIR / FLEET_SECRETS_CACHE_MAX_AGE. Unapproved fallback URLs are
+// WithEnv applies FLEET_SECRETS_FALLBACK_URLS / FLEET_SECRETS_CACHE_DIR / FLEET_SECRETS_CACHE_MAX_AGE and, when
+// FLEET_SECRETS_SPIFFE=dual, the SPIFFE read path (see spiffe.go). Unapproved fallback URLs are
 // dropped silently (the key must not travel to them); with none of the variables set it is a no-op, so it is safe to call everywhere.
 func (c *Client) WithEnv(getenv func(string) string) *Client {
 	if getenv == nil {
@@ -81,6 +82,7 @@ func (c *Client) WithEnv(getenv func(string) string) *Client {
 			c.WithFallbacks(u)
 		}
 	}
+	c.withSPIFFEEnv(getenv)
 	age, _ := time.ParseDuration(strings.TrimSpace(getenv(envCacheMaxAge)))
 	return c.WithCache(getenv(envCacheDir), age)
 }

@@ -99,6 +99,7 @@ type Client struct {
 	http      Doer
 	fallbacks []string // extra vault base URLs, tried in order after baseURL
 	cache     *diskCache
+	sp        *spiffeLeg // set by WithSPIFFE: the SPIFFE read path tried before the API key
 }
 
 // New builds a Client. baseURL is the vault root (e.g.
@@ -260,6 +261,10 @@ func (c *Client) GetDetailed(ctx context.Context, name string) (Result, error) {
 	if !validSecretName(name) {
 		return Result{}, errors.New("secrets: name must be a simple identifier")
 	}
+	if v, ok := c.trySPIFFE(ctx, name); ok {
+		c.cache.store(name, v, c.currentKey())
+		return Result{Value: v, Source: SourceSPIFFE, URL: c.sp.base}, nil
+	}
 	var lastErr error
 	var key string // the key of the last attempt, which the disk cache is keyed by
 	for i, base := range append([]string{c.baseURL}, c.fallbacks...) {
@@ -290,6 +295,11 @@ func (c *Client) GetDetailed(ctx context.Context, name string) (Result, error) {
 }
 
 func (c *Client) fetch(ctx context.Context, base, name, apiKey string) (string, error) {
+	return c.fetchVia(ctx, c.http, base, name, apiKey)
+}
+
+// fetchVia is fetch through doer; an empty apiKey sends no key (the SPIFFE path).
+func (c *Client) fetchVia(ctx context.Context, doer Doer, base, name, apiKey string) (string, error) {
 	url := base + "/secrets/" + name
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -300,7 +310,7 @@ func (c *Client) fetch(ctx context.Context, base, name, apiKey string) (string, 
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.http.Do(req)
+	resp, err := doer.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("secrets: request %q: %w", name, err)
 	}

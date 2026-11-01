@@ -14,6 +14,7 @@ import (
 	"github.com/baditaflorin/go-common/reqstats"
 	"github.com/baditaflorin/go-common/runtimetune"
 	"github.com/baditaflorin/go-common/safehttp"
+	"github.com/baditaflorin/go-common/secrets"
 	"github.com/baditaflorin/go-common/telemetry"
 	"log"
 	"net/http"
@@ -104,6 +105,9 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// lets GRAPH_SPIFFE_COLLECTOR_URL work without graph importing the
 	// Workload API; it is used only when that variable is set.
 	graph.SetMTLSClientFactory(graphMTLSClient)
+	// The same for the vault read path (FLEET_SECRETS_SPIFFE=dual): installed before telemetry.Init
+	// and profiling read their credentials. Used only when that variable is set.
+	secrets.SetSPIFFEClientFactory(secretsSPIFFEClient)
 	graph.Init(cfg.AppName, cfg.Version)
 	tracing := telemetry.Init(cfg.AppName, cfg.Version)
 

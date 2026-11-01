@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.115.0] - 2026-11-01
+
+A service can read its secrets from the vault with its SPIFFE identity instead of its API key, switched on by environment variables. Nothing changes for a service that sets none of them. Phase 3 of the ephemeral-credentials program (fleet-state `docs/architecture/ephemeral-credentials`): the caller side of go-fleet-secrets' SPIFFE acceptance (go-common 0.113 `spiffeauth` on the vault).
+
+### Added
+
+- `secrets`: with `FLEET_SECRETS_SPIFFE=dual`, `FLEET_SECRETS_SPIFFE_URL` (the vault's private mTLS listener, e.g. `https://go-fleet-secrets:8443`) and `SPIFFE_ENDPOINT_SOCKET`, `Client.Get` first reads over mTLS with the workload's X.509-SVID and sends no API key on that request; the server must prove `FLEET_SECRETS_SPIFFE_SERVER_ID` (default `spiffe://0exec.com/ns/fleet/sa/fleet-secrets`). DUAL MODE: the API key path is untouched and is the fallback. Any answer but a 200 (no connection, refused handshake, 401, 403, 404, 429, 5xx, undecodable body) sends the same `Get` to the key path, so nothing is lost; after a failure of the path itself the next reads use the key for a minute. A first read waits up to 1.5 s for the Workload API connect, so a boot-time read is not sent on the key. The result carries `Source` `spiffe` (`SourceSPIFFE`); `SPIFFEStats()` counts reads served and reads sent on to the key. The variables are applied by `WithEnv`, which `NewFromEnv`, `telemetry` and `profiling` already call, so every credential load of a go-common service takes the path. `WithSPIFFE`, `SetSPIFFEClientFactory`, `SPIFFEClient` and `SPIFFEClientFactory` are the Go API.
+- `server`: `server.New` installs the factory (built on package `spiffe`) before telemetry and profiling read their credentials; a `-tags gocommon_nospiffe` binary logs why the path is unavailable and keeps using the key. Package `secrets` stays free of third-party modules (dep budget).
+
+Verified with tests: an API key read and a SPIFFE read return the same secret and the SPIFFE one carries no key; 401/403/404/500 on the SPIFFE path fall back to the key; the cool-down after a failure of the path and none after a refusal; no factory, a failing connect and the mode off use the key; the first read waits for a slow connect; invalid URLs, IDs and sockets leave the key path. `scripts/dep-budget.sh` and the `gocommon_nospiffe` build pass.
 ## [0.114.0] - 2026-11-01
 
 A caller of the fetch cache can present its SPIFFE identity next to its API key, switched on by one environment variable. Nothing changes for a service that does not set it: no connection to the Workload API, no header, no metric series. Phase 3 of the ephemeral-credentials program (fleet-state `docs/architecture/ephemeral-credentials`), the caller side of the fetch-cache chain; the cache side is `spiffeauth` (0.113.0).
