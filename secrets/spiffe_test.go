@@ -132,7 +132,7 @@ func TestSPIFFEAndAPIKeyReadTheSameSecret(t *testing.T) {
 
 // Any refusal on the SPIFFE path sends the same Get to the API key, which answers.
 func TestSPIFFERefusalFallsBackToTheKey(t *testing.T) {
-	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError} {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError} {
 		resetSPIFFE(t)
 		v := newSPVault(t)
 		v.spiffeStatus.Store(int64(status))
@@ -272,5 +272,27 @@ func TestSPIFFEEnvValidation(t *testing.T) {
 	}
 	if c := with(map[string]string{"FLEET_SECRETS_SPIFFE_URL": "HTTPS://Go-Fleet-Secrets:8443"}); c.sp == nil || strings.ToLower(c.sp.base) != c.sp.base {
 		t.Error("URL not normalised")
+	}
+}
+
+// A 404 on the SPIFFE path is the vault's answer for this principal: it is returned as is, the key path is not asked,
+// and it is not counted as a fallback.
+func TestSPIFFENotFoundIsFinal(t *testing.T) {
+	resetSPIFFE(t)
+	v := newSPVault(t)
+	v.spiffeStatus.Store(http.StatusNotFound)
+	var connects atomic.Int64
+	SetSPIFFEClientFactory(spiffeFactoryFor(v, &connects, nil))
+	c := dualClient(t, v, v.URL)
+	_, err := c.Get(context.Background(), "s1")
+	var se *StatusError
+	if !errors.As(err, &se) || se.StatusCode != http.StatusNotFound {
+		t.Fatalf("err = %v; want a 404 StatusError", err)
+	}
+	if v.keyCalls.Load() != 0 {
+		t.Fatal("a 404 on the SPIFFE path was asked again with the key")
+	}
+	if served, fb := SPIFFEStats(); served != 1 || fb != 0 {
+		t.Fatalf("stats = %d, %d", served, fb)
 	}
 }

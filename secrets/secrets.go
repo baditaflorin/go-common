@@ -261,7 +261,10 @@ func (c *Client) GetDetailed(ctx context.Context, name string) (Result, error) {
 	if !validSecretName(name) {
 		return Result{}, errors.New("secrets: name must be a simple identifier")
 	}
-	if v, ok := c.trySPIFFE(ctx, name); ok {
+	if v, done, err := c.trySPIFFE(ctx, name); done {
+		if err != nil {
+			return Result{}, err // a definitive 404 (never served from the cache, as on the key path)
+		}
 		c.cache.store(name, v, c.currentKey())
 		return Result{Value: v, Source: SourceSPIFFE, URL: c.sp.base}, nil
 	}

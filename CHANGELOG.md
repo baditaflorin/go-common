@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.115.1] - 2026-11-01
+
+### Fixed
+
+- `secrets`: on the SPIFFE read path (`FLEET_SECRETS_SPIFFE=dual`) a 404 is final. The vault answered for the same principal, so the API key would hear the same; before, every read of a secret that does not exist (a probe for an optional credential, e.g. a service's `pyroscope-...-write-user` at every start) was asked a second time with the key and counted by the vault as "SPIFFE expected, key used". 401, 403 and 5xx still fall back to the key. Verified with a test (no key call, counted as served); the other SPIFFE tests unchanged.
+
 ## [0.115.0] - 2026-11-01
 
 A service can read its secrets from the vault with its SPIFFE identity instead of its API key, switched on by environment variables. Nothing changes for a service that sets none of them. Phase 3 of the ephemeral-credentials program (fleet-state `docs/architecture/ephemeral-credentials`): the caller side of go-fleet-secrets' SPIFFE acceptance (go-common 0.113 `spiffeauth` on the vault).

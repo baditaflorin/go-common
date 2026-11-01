@@ -272,23 +272,29 @@ func (l *spiffeLeg) refused(status int) {
 	}
 }
 
-// trySPIFFE reads name over the SPIFFE path. ok is false when the read must go the API key path.
-func (c *Client) trySPIFFE(ctx context.Context, name string) (string, bool) {
+// trySPIFFE reads name over the SPIFFE path. done is false when the read must go the API key path. A 404 is
+// final (done with err): the vault answered for the same principal, so the key would hear the same, and a secret
+// that does not exist (a probe for an optional credential) must not make every start a "fallback to the key".
+func (c *Client) trySPIFFE(ctx context.Context, name string) (value string, done bool, err error) {
 	if c.sp == nil {
-		return "", false
+		return "", false, nil
 	}
 	client := c.sp.get(ctx)
 	if client == nil {
 		spiffeFallback.Add(1)
-		return "", false
+		return "", false, nil
 	}
 	v, err := c.fetchVia(ctx, client, c.sp.base, name, "")
 	if err == nil {
 		spiffeReads.Add(1)
-		return v, true
+		return v, true, nil
+	}
+	var se *StatusError
+	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
+		spiffeReads.Add(1)
+		return "", true, err
 	}
 	spiffeFallback.Add(1)
-	var se *StatusError
 	switch {
 	case errors.As(err, &se) && se.StatusCode < 500 && se.StatusCode != http.StatusTooManyRequests:
 		c.sp.refused(se.StatusCode)
@@ -297,5 +303,5 @@ func (c *Client) trySPIFFE(ctx context.Context, name string) (string, bool) {
 	default:
 		c.sp.failed("transport")
 	}
-	return "", false
+	return "", false, nil
 }
