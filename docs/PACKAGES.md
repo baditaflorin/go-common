@@ -2,7 +2,7 @@
 
 # Package index
 
-75 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
+76 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
 
 | Package | Summary |
 | --- | --- |
@@ -67,6 +67,7 @@
 | [`server`](../server/) | Provides the canonical fleet HTTP server bootstrap. |
 | [`shutdown`](../shutdown/) | Provides a single-call graceful shutdown helper for net/http servers. **Deprecated.** |
 | [`spiffe`](../spiffe/) | Adapts the SPIFFE Workload API to credentiallease identities. |
+| [`spiffeauth`](../spiffeauth/) | Authenticates incoming requests by SPIFFE identity (an X.509-SVID over mTLS or an audience-scoped JWT-SVID) next to the API key, in dual mode: a request without a SPIFFE identity is handled exactly… |
 | [`telemetry`](../telemetry/) | Installs W3C trace propagation, creates privacy-conscious inbound/outbound HTTP spans, and exports them with OTLP/HTTP when configured. |
 | [`testhelpers/fakeexec`](../testhelpers/fakeexec/) | Provides an in-memory fake for the command-runner seam used across the fleet to shell out to git / go / docker: |
 | [`testhelpers/fakegraph`](../testhelpers/fakegraph/) | Captures graph.Event values for use in tests. |

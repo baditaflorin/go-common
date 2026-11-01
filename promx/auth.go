@@ -1,6 +1,8 @@
 package promx
 
 import (
+	"sync"
+
 	"github.com/baditaflorin/go-common/apikey"
 	"github.com/baditaflorin/go-common/middleware"
 	"github.com/prometheus/client_golang/prometheus"
@@ -29,6 +31,12 @@ import (
 //	apikey_cache_total{service, result}
 //	apikey_cache_stale_age_seconds{service}
 //	apikey_keystore_inner_duration_seconds{service, result}
+//	spiffe_verify_failures_total{service, source, reason}
+//	spiffe_apikey_fallback_total{service, principal, reason}
+//
+// The last two are the SPIFFE dual-mode counters (package spiffeauth); they
+// have no series until a service sets SPIFFEAUTH_MODE. "source" on
+// apikey_auth_total also takes "spiffe-mtls" and "spiffe-jwt".
 //
 // "source" answers operator questions like "what fraction of inbound
 // traffic is already gateway-authenticated?" — the gateway label tells
@@ -48,7 +56,31 @@ type AuthCollectors struct {
 	cacheTotal             *prometheus.CounterVec
 	cacheStaleAge          *prometheus.HistogramVec
 	cacheInnerCallDuration *prometheus.HistogramVec
+
+	spiffeFailures *prometheus.CounterVec
+	spiffeFallback *prometheus.CounterVec
+
+	// A pointer, so AuthCollectors stays comparable (a mutex and a map in it would change its API).
+	principals *principalSet
 }
+
+type principalSet struct {
+	mu   sync.Mutex
+	seen map[string]struct{}
+}
+
+// spiffeFailureReasons are the values of spiffe_verify_failures_total{reason}
+// (the spiffeauth.Reason* tokens); anything else is counted as "other" so a
+// caller of ObserveIdentityFailure cannot grow the label set.
+var spiffeFailureReasons = map[string]struct{}{
+	"invalid_svid": {}, "untrusted_domain": {}, "expired_token": {}, "wrong_audience": {},
+	"invalid_token": {}, "ttl_too_long": {}, "unmapped_id": {}, "not_ready": {}, "other": {},
+}
+
+// maxFallbackPrincipals bounds the principal label of spiffe_apikey_fallback_total.
+// The values come from the operator's peer map (at most 1024 entries), never from a request;
+// the fetch-cache chain has 354 callers, so the cap sits above that.
+const maxFallbackPrincipals = 512
 
 // NewAuthCollectors registers the keystore-auth collectors on reg.
 // reg may be nil — the shared promx.Registry() is used in that case.
@@ -59,7 +91,8 @@ func NewAuthCollectors(reg prometheus.Registerer) *AuthCollectors {
 	service := ServiceID()
 
 	c := &AuthCollectors{
-		service: service,
+		service:    service,
+		principals: &principalSet{seen: map[string]struct{}{}},
 		authTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "apikey_auth_total",
 			Help: "Total auth decisions made by middleware.TokenAuthKeystore, labelled by the code path that produced the decision and the outcome.",
@@ -84,7 +117,17 @@ func NewAuthCollectors(reg prometheus.Registerer) *AuthCollectors {
 			Buckets: prometheus.DefBuckets,
 		}, []string{"service", "result"}),
 	}
+	c.spiffeFailures = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "spiffe_verify_failures_total",
+		Help: "SPIFFE identities presented to the auth middleware and not accepted, by source (spiffe-mtls, spiffe-jwt) and reason.",
+	}, []string{"service", "source", "reason"})
+	c.spiffeFallback = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "spiffe_apikey_fallback_total",
+		Help: "Requests authenticated with an API key although the principal has a SPIFFE mapping (SPIFFE expected, not used), by reason (no_svid or the failure reason).",
+	}, []string{"service", "principal", "reason"})
 	reg.MustRegister(
+		c.spiffeFailures,
+		c.spiffeFallback,
 		c.authTotal,
 		c.keystoreCallDuration,
 		c.cacheTotal,
@@ -103,6 +146,51 @@ func (c *AuthCollectors) ObserveAuth(ev middleware.AuthEvent) {
 	if ev.Source == middleware.AuthSourceKeystore {
 		c.keystoreCallDuration.WithLabelValues(c.service, string(ev.Result)).Observe(ev.Duration.Seconds())
 	}
+}
+
+// ObserveIdentityFailure satisfies middleware.IdentityObserver.
+func (c *AuthCollectors) ObserveIdentityFailure(source middleware.AuthSource, reason string) {
+	if _, ok := spiffeFailureReasons[reason]; !ok {
+		reason = "other"
+	}
+	if source != middleware.AuthSourceSPIFFEMTLS && source != middleware.AuthSourceSPIFFEJWT {
+		source = "other"
+	}
+	c.spiffeFailures.WithLabelValues(c.service, string(source), reason).Inc()
+}
+
+// ObserveIdentityFallback satisfies middleware.IdentityObserver.
+func (c *AuthCollectors) ObserveIdentityFallback(principal, reason string) {
+	if _, ok := spiffeFailureReasons[reason]; !ok && reason != "no_svid" {
+		reason = "other"
+	}
+	if !principalLabel(principal) {
+		principal = "_other"
+	}
+	c.principals.mu.Lock()
+	if _, seen := c.principals.seen[principal]; !seen {
+		if len(c.principals.seen) >= maxFallbackPrincipals {
+			principal = "_other"
+		} else {
+			c.principals.seen[principal] = struct{}{}
+		}
+	}
+	c.principals.mu.Unlock()
+	c.spiffeFallback.WithLabelValues(c.service, principal, reason).Inc()
+}
+
+// principalLabel: the shape a peer-map principal has (spiffeauth accepts only 1-64 of
+// a-z 0-9 . _ -); anything else is not a configured principal and is counted as "_other".
+func principalLabel(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // ObserveCache satisfies apikey.CacheObserver.

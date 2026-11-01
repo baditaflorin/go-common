@@ -62,6 +62,19 @@ The variables that go-common packages declare in the `env` registry, with what t
 | `LOG_FORMAT` | string | `text` | Set to json to switch the process to structured JSON logs (package logx): the access log and everything written through the standard log package gain the service, version and node, and the trace id inside a traced request, and credentials are redacted. text, the default, leaves the output as it was. |
 | `LOG_LEVEL` | string | `info` | Minimum level when LOG_FORMAT=json: debug, info, warn or error. |
 
+## `spiffeauth`
+
+| Variable | Kind | Default | Description |
+| --- | --- | --- | --- |
+| `SPIFFEAUTH_JWT_AUDIENCE` | list | unset | Accepted JWT-SVID audiences; empty turns the JWT-SVID path off. |
+| `SPIFFEAUTH_JWT_MAX_TTL` | duration | `6m` | Longest remaining lifetime of an accepted JWT-SVID (SPIRE issues 5 m), at most 10m. |
+| `SPIFFEAUTH_MODE` | string | `off` | SPIFFE identity for incoming requests (package spiffeauth): off (default, no change) or dual (a request with a valid, mapped X.509-SVID or JWT-SVID is authenticated as the mapped principal; a request without one uses the API key as before). Roll back by unsetting it. |
+| `SPIFFEAUTH_MTLS_ADDR` | string | unset | Listen address of the extra TLS listener that verifies client X.509-SVIDs, e.g. :8443. Empty: no mTLS listener (JWT-SVIDs still work on the normal port). |
+| `SPIFFEAUTH_PEERS` | string | unset | The same JSON as SPIFFEAUTH_PEERS_FILE, inline. |
+| `SPIFFEAUTH_PEERS_FILE` | string | unset | Path of a JSON file {"peers":[{"id":"spiffe://0exec.com/ns/*/sa/<service>","principal":"<service>","tier":"","scope":""}]} mapping SPIFFE IDs to principals. "*" is allowed only as the ns segment. Wins over SPIFFEAUTH_PEERS. |
+| `SPIFFEAUTH_TRUST_DOMAINS` | list | `0exec.com` | Trust domains whose SVIDs spiffeauth accepts. |
+| `SPIFFEAUTH_UNMAPPED` | string | `deny` | A presented SVID whose SPIFFE ID is not in the peer map: deny (403, default) or fallback (count it and use the API key path). |
+
 ## Removed
 
 Still setting one of these does nothing; a service that does is told at start-up.

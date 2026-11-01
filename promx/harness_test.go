@@ -345,13 +345,17 @@ func degradedCase() harnessCase {
 
 func authCase() harnessCase {
 	sources := []middleware.AuthSource{middleware.AuthSourceBypass, middleware.AuthSourceGateway, middleware.AuthSourceLocal,
-		middleware.AuthSourceKeystore, middleware.AuthSourceMissing, middleware.AuthSourcePrivateMesh}
+		middleware.AuthSourceKeystore, middleware.AuthSourceMissing, middleware.AuthSourcePrivateMesh,
+		middleware.AuthSourceSPIFFEMTLS, middleware.AuthSourceSPIFFEJWT}
+	reasons := []string{"invalid_svid", "untrusted_domain", "expired_token", "wrong_audience", "invalid_token", "ttl_too_long",
+		"unmapped_id", "not_ready", "other", "no_svid"}
 	results := []middleware.AuthResult{middleware.AuthResultAllow, middleware.AuthResultDeny, middleware.AuthResultUnavailable,
 		middleware.AuthResultTierDenied, middleware.AuthResultTierShadowDenied}
 	cache := []apikey.CacheResult{apikey.CacheResultFresh, apikey.CacheResultStale, apikey.CacheResultInnerOK,
 		apikey.CacheResultInnerInvalid, apikey.CacheResultInnerUnavailable}
 	return newCase("auth", []string{"NewAuthCollectors"},
-		[]string{"apikey_auth_total", "apikey_keystore_call_duration_seconds", "apikey_cache_total", "apikey_cache_stale_age_seconds", "apikey_keystore_inner_duration_seconds"},
+		[]string{"apikey_auth_total", "apikey_keystore_call_duration_seconds", "apikey_cache_total", "apikey_cache_stale_age_seconds", "apikey_keystore_inner_duration_seconds",
+			"spiffe_verify_failures_total", "spiffe_apikey_fallback_total"},
 		func(reg prometheus.Registerer) *AuthCollectors { return NewAuthCollectors(reg) }, nil,
 		probe("every source and result", func(c *AuthCollectors, _ *promxtest.Inputs) {
 			for _, s := range sources {
@@ -362,6 +366,25 @@ func authCase() harnessCase {
 			for _, r := range cache {
 				c.ObserveCache(apikey.CacheEvent{Result: r, Age: time.Second, Duration: time.Millisecond})
 			}
+		}),
+		probe("every SPIFFE source and reason", func(c *AuthCollectors, _ *promxtest.Inputs) {
+			for _, s := range sources[len(sources)-2:] {
+				for _, r := range reasons[:len(reasons)-1] {
+					c.ObserveIdentityFailure(s, r)
+				}
+			}
+			for _, r := range reasons {
+				c.ObserveIdentityFallback("svc-a", r)
+			}
+		}),
+		probe("SPIFFE sources and reasons from outside the lists", func(c *AuthCollectors, in *promxtest.Inputs) {
+			in.Each(in.Names(), func(n string) {
+				c.ObserveIdentityFailure(middleware.AuthSource(n), n)
+				c.ObserveIdentityFallback("svc-a", n)
+			})
+		}),
+		probe("principals", func(c *AuthCollectors, in *promxtest.Inputs) {
+			in.Each(in.Names(), func(n string) { c.ObserveIdentityFallback(n, "no_svid") })
 		}),
 	)
 }

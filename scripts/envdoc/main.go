@@ -30,6 +30,7 @@ import (
 	_ "github.com/baditaflorin/go-common/graph"
 	_ "github.com/baditaflorin/go-common/runtimetune"
 	_ "github.com/baditaflorin/go-common/server"
+	_ "github.com/baditaflorin/go-common/spiffeauth"
 )
 
 const outFile = "docs/ENV.md"

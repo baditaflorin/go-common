@@ -63,6 +63,7 @@ selftest 85
 server 80
 shutdown 54
 spiffe 32
+spiffeauth 76
 telemetry 77
 testhelpers/fakeexec 98
 testhelpers/fakegraph 98
