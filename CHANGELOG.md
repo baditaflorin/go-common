@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.113.1] - 2026-11-01
+
+Tests only: the `spiffe` accessors added in 0.113.0 (`Source` as a `jwtbundle.Source`, `X509Identity.SVIDSource` and `BundleSource`, `ValidateSocket`) are covered, which main's coverage ratchet asked for. No code change.
+
+### Changed
+
+- `spiffe`: tests for the 0.113.0 accessors (nil-safe, a source that cannot serve bundles, socket validation).
+
 ## [0.113.0] - 2026-11-01
 
 A service can authenticate callers by SPIFFE identity next to the API key, switched on by environment variables. Nothing changes for a service that sets none of them: no connection to the Workload API, no listener, no metric series. Phase 3 of the ephemeral-credentials program (fleet-state `docs/architecture/ephemeral-credentials`): the shared server side that the graph, fetch-cache and vault-read migrations use.
