@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.114.0] - 2026-11-01
+
+A caller of the fetch cache can present its SPIFFE identity next to its API key, switched on by one environment variable. Nothing changes for a service that does not set it: no connection to the Workload API, no header, no metric series. Phase 3 of the ephemeral-credentials program (fleet-state `docs/architecture/ephemeral-credentials`), the caller side of the fetch-cache chain; the cache side is `spiffeauth` (0.113.0).
+
+### Added
+
+- `fleetfetch`: `FLEET_FETCH_CACHE_SPIFFE=dual` makes `server.New` open the Workload API in the background and add an audience-scoped JWT-SVID (`X-Spiffe-Jwt`, audience `FLEET_FETCH_CACHE_SPIFFE_AUDIENCE`, default the cache's own SPIFFE ID) to every cache call. DUAL MODE: the API key is always sent as before, the JWT-SVID goes next to it, so a cache that does not accept it (an older one, `SPIFFEAUTH_MODE` off, an ID not in its map) decides by the key and nothing is lost; with no Workload API, no SPIRE entry or an expired token the call goes on the key alone, the source is not asked again for 20 s, and a still-valid token is kept through a failed refresh. The header is for the cache hop only, never sent to an origin on the direct fallback. API: `SetDefaultIdentity`, `WithIdentity`, `IdentitySource` (satisfied by `spiffe.Source`), `Event.Identity`. A `-tags gocommon_nospiffe` binary logs one line and sends the key alone.
+- `promx`: `fleet_fetch_identity_total{service,identity}` (`spiffe` = a JWT-SVID went with the call, `unavailable` = the key alone, `other`), present only in a service that set the variable. `unavailable / (spiffe + unavailable)` is the client-side fallback rate of the chain.
+
 ## [0.113.1] - 2026-11-01
 
 Tests only: the `spiffe` accessors added in 0.113.0 (`Source` as a `jwtbundle.Source`, `X509Identity.SVIDSource` and `BundleSource`, `ValidateSocket`) are covered, which main's coverage ratchet asked for. No code change.

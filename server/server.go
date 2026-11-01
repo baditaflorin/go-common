@@ -113,6 +113,9 @@ func New(cfg *config.Config, opts ...Option) *Server {
 	// both direct fleetfetch.Client users and the safehttp→fetch-cache
 	// delegate wired below. Zero per-service code change.
 	fleetfetch.SetDefaultCaller(cfg.AppName)
+	// Optional (FLEET_FETCH_CACHE_SPIFFE=dual, off by default): a JWT-SVID next to
+	// the API key on every call to the cache. See fleetfetchid.go.
+	startFleetfetchIdentity()
 
 	mux := http.NewServeMux()
 	stats := metrics.New()

@@ -14,6 +14,13 @@ import (
 //	fleet_fetch_duration_seconds{service, result}
 //	fleet_fetch_cache_age_seconds{service}
 //	fleet_fetch_truncated_total{service}
+//	fleet_fetch_identity_total{service, identity}
+//
+// fleet_fetch_identity_total exists only in a service that turned the SPIFFE
+// identity path on (FLEET_FETCH_CACHE_SPIFFE=dual): identity="spiffe" counts
+// cache calls that carried a JWT-SVID next to the API key, identity="unavailable"
+// calls that went on the key alone because no JWT-SVID could be had. The share
+// of "unavailable" is the client-side fallback rate of the fetch-cache chain.
 //
 // "host" follows the same bound as the egress collectors: at most 32 hosts
 // get their own value, each only after 64 fetches, and everything else is
@@ -50,6 +57,7 @@ type FleetFetchCollectors struct {
 	cacheAge *prometheus.HistogramVec
 
 	truncated *prometheus.CounterVec
+	identity  *prometheus.CounterVec
 }
 
 // NewFleetFetchCollectors registers the fleetfetch collectors on reg.
@@ -79,8 +87,12 @@ func NewFleetFetchCollectors(reg prometheus.Registerer) *FleetFetchCollectors {
 			Name: "fleet_fetch_truncated_total",
 			Help: "Fleetfetch responses whose body was cut at the client's body limit (Response.Truncated).",
 		}, []string{"service"}),
+		identity: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "fleet_fetch_identity_total",
+			Help: "Fleetfetch cache calls by SPIFFE identity outcome: spiffe (a JWT-SVID went with the request) or unavailable (the key alone was sent). Only present with FLEET_FETCH_CACHE_SPIFFE=dual.",
+		}, []string{"service", "identity"}),
 	}
-	reg.MustRegister(c.total, c.duration, c.cacheAge, c.truncated)
+	reg.MustRegister(c.total, c.duration, c.cacheAge, c.truncated, c.identity)
 	return c
 }
 
@@ -94,5 +106,12 @@ func (c *FleetFetchCollectors) ObserveFleetFetch(ev fleetfetch.Event) {
 	}
 	if ev.Truncated {
 		c.truncated.WithLabelValues(c.service).Inc()
+	}
+	if ev.Identity != "" {
+		id := ev.Identity
+		if id != fleetfetch.IdentitySPIFFE && id != fleetfetch.IdentityUnavailable {
+			id = "other" // fixed vocabulary: never a free-text label
+		}
+		c.identity.WithLabelValues(c.service, id).Inc()
 	}
 }

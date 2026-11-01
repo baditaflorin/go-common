@@ -21,6 +21,8 @@ The variables that go-common packages declare in the `env` registry, with what t
 
 | Variable | Kind | Default | Description |
 | --- | --- | --- | --- |
+| `FLEET_FETCH_CACHE_SPIFFE` | string | `off` | SPIFFE identity for calls to the fetch cache (fleetfetch, wired by server.New): off (default, no change) or dual (every cache call also carries an audience-scoped JWT-SVID in X-Spiffe-Jwt next to the API key, which is always sent; needs SPIFFE_ENDPOINT_SOCKET and a SPIRE entry for the workload; without either the call goes on the key alone). Roll back by unsetting it. |
+| `FLEET_FETCH_CACHE_SPIFFE_AUDIENCE` | string | `spiffe://0exec.com/ns/fleet/sa/infrastructure-fetch-cache` | Audience of the JWT-SVID sent to the fetch cache; must be one of the cache's SPIFFEAUTH_JWT_AUDIENCE. |
 | `FLEET_FETCH_MAX_BODY_BYTES` | int | `33554432` | Response-body limit in bytes for every fleetfetch client that does not set its own with WithMaxBodyBytes or WithUnboundedBody: a longer body is cut there and Response.Truncated is set. 0 removes the limit, which is discouraged: one oversized response can take all of a worker's memory. An unparsable or negative value is ignored. |
 
 ## `graph`
