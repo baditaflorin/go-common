@@ -343,9 +343,11 @@ are 483,160 of that, because `route` is capped per label, not per
 | `ratecoord_fallback_total` | - | 1 | no label |
 | `ratecoord_wait_seconds` | fellback | 24 | 2 x 12 |
 | `fleet_degraded_total` | primitive, suffix | 1,122 | 66 primitives (64, `_other`, `_unknown`) x 17 suffixes (16 and `_other`; an empty one is `_none`) |
-| `apikey_auth_total` | result, source | 30 | 5 results x 6 sources |
+| `apikey_auth_total` | result, source | 40 | 5 results x 8 sources (`spiffe-mtls` and `spiffe-jwt` appear only when `SPIFFEAUTH_MODE` is set) |
 | `apikey_keystore_call_duration_seconds` | result | 70 | 5 x 14 |
 | `apikey_keystore_inner_duration_seconds` | result | 70 | 5 x 14 |
+| `spiffe_verify_failures_total` | source, reason | 27 | 2 sources (`spiffe-mtls`, `spiffe-jwt`) and `other` x 9 fixed reasons (`spiffeauth.Reason*`, anything else is `other`); no series until `SPIFFEAUTH_MODE` is set |
+| `spiffe_apikey_fallback_total` | principal, reason | 5,120 | at most 512 principals (the operator's peer-map values, then `_other`) x 10 reasons; a service has as many principals as callers with a mapping, 354 for the fetch cache; no series until `SPIFFEAUTH_MODE` is set |
 | `apikey_cache_total` | result | 5 | 5 results |
 | `apikey_cache_stale_age_seconds` | - | 13 | one histogram |
 | `apikey_admin_total` | op, result | 25 | 5 ops x 5 results |

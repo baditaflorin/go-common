@@ -53,6 +53,21 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 		}
 	}
 
+	idObs, _ := opts.Observer.(IdentityObserver)
+	// noteFallback counts a request that an API key authenticated although its
+	// principal has a SPIFFE mapping: SPIFFE was expected and not used.
+	noteFallback := func(user, reason string) {
+		if opts.Identity == nil || idObs == nil || user == "" {
+			return
+		}
+		if principal, ok := opts.Identity.ExpectedPrincipal(user); ok {
+			if reason == "" {
+				reason = "no_svid"
+			}
+			idObs.ObserveIdentityFallback(principal, reason)
+		}
+	}
+
 	// admit is the single funnel every trust path (bypass excluded — see
 	// below) routes through before calling next.ServeHTTP. Authentication
 	// alone (which token/path/header got the caller this far) is no
@@ -101,6 +116,39 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				observe(AuthSourceBypass, AuthResultDeny, 0)
 				denyBadPath(w)
 				return
+			}
+
+			// 1b. SPIFFE identity (dual mode, opt-in via opts.Identity). A valid
+			//     SVID or JWT-SVID mapped by the operator authenticates the
+			//     caller as that principal. No SVID presented: nothing here,
+			//     the checks below run as before. A presented identity that is
+			//     not accepted is counted, then either refused (an ID missing
+			//     from the map, by default) or left to the API key path.
+			bearerIsSVID, idFailReason, idFailSource := false, "", AuthSource("")
+			if opts.Identity != nil {
+				d := opts.Identity.AuthenticateIdentity(r)
+				if d.Presented {
+					bearerIsSVID = d.BearerIsSVID
+					if d.Allowed {
+						// The verified identity replaces anything the caller put in the
+						// gateway-owned headers.
+						r.Header.Set(header.AuthUser, d.Principal)
+						r.Header.Set(header.AuthScope, d.Scope)
+						r.Header.Set(header.AuthTier, d.Tier)
+						r = r.WithContext(context.WithValue(r.Context(), spiffeIDKey{}, d.SPIFFEID))
+						admit(w, r, next, d.Source, d.Principal, d.Tier, 0)
+						return
+					}
+					if idObs != nil {
+						idObs.ObserveIdentityFailure(d.Source, d.Reason)
+					}
+					if d.Deny {
+						observe(d.Source, AuthResultDeny, 0)
+						denyIdentity(w, d.Status)
+						return
+					}
+					idFailReason, idFailSource = d.Reason, d.Source
+				}
 			}
 
 			// 2. Gateway already validated? Trust the upstream auth signal only
@@ -170,6 +218,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				if len(opts.TrustedGatewayCIDRs) > 0 && trustedGatewayRemoteAddr(r.RemoteAddr, opts.TrustedGatewayCIDRs) {
 					principal = r.Header.Get(opts.TrustGatewayHeader)
 				}
+				noteFallback(r.Header.Get(opts.TrustGatewayHeader), idFailReason)
 				admit(w, r, next, AuthSourceGateway, principal, r.Header.Get(header.AuthTier), 0)
 				return
 			}
@@ -194,6 +243,16 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			// 3. Extract the raw token from the supported sources: Bearer,
 			//    X-API-Key, or the compatibility query parameter.
 			token := ExtractToken(r)
+			if bearerIsSVID {
+				token = apiKeyWithoutBearer(r)
+			}
+			if token == "" && idFailReason != "" {
+				// A SPIFFE identity was offered, was not accepted, and no API key
+				// came with it: say so, not "missing token".
+				observe(idFailSource, AuthResultDeny, 0)
+				denyIdentity(w, http.StatusUnauthorized)
+				return
+			}
 			if token == "" {
 				observe(AuthSourceMissing, AuthResultDeny, 0)
 				deny(w, "missing token")
@@ -226,6 +285,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 				r.Header.Set(header.AuthUser, res.User)
 				r.Header.Set(header.AuthScope, res.Scope)
 				r.Header.Set(header.AuthTier, res.Tier)
+				noteFallback(res.User, idFailReason)
 				admit(w, r, next, AuthSourceKeystore, res.User, res.Tier, dur)
 				return
 			}

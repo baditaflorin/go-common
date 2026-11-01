@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spiffe/go-spiffe/v2/bundle/jwtbundle"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/svid/jwtsvid"
 	"github.com/spiffe/go-spiffe/v2/workloadapi"
 )
@@ -37,6 +39,24 @@ func New(ctx context.Context, socket string) (*Source, error) {
 		return nil, ErrUnavailable
 	}
 	return &Source{source: source}, nil
+}
+
+// ValidateSocket reports whether socket is a Workload API address this package
+// accepts (a unix:// URL with an absolute path and nothing else).
+func ValidateSocket(socket string) bool { return validUnixSocket(strings.TrimSpace(socket)) }
+
+// GetJWTBundleForTrustDomain makes Source a jwtbundle.Source: the trust
+// bundle's JWT authorities the Workload API delivers, kept current by the
+// source, for verifying a peer's JWT-SVID (package spiffeauth).
+func (s *Source) GetJWTBundleForTrustDomain(td spiffeid.TrustDomain) (*jwtbundle.Bundle, error) {
+	if s == nil {
+		return nil, ErrUnavailable
+	}
+	b, ok := s.source.(jwtbundle.Source)
+	if !ok {
+		return nil, ErrUnavailable
+	}
+	return b.GetJWTBundleForTrustDomain(td)
 }
 
 func validUnixSocket(socket string) bool {

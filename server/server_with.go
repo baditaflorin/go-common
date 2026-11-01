@@ -180,6 +180,7 @@ func WithKeystoreAuth(localTokens ...string) Option {
 			ks.Observer = s.PromAuthCollectors
 		}
 		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
+			Identity:    s.spiffeIdentity(),
 			Verifier:    ks,
 			LocalTokens: commonCrawlStageLocalTokens(localTokens),
 			Observer:    s.PromAuthCollectors,
@@ -215,6 +216,7 @@ func WithKeystoreAuthPublicPrefixes(publicPrefixes []string, localTokens ...stri
 			ks.Observer = s.PromAuthCollectors
 		}
 		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
+			Identity:           s.spiffeIdentity(),
 			Verifier:           ks,
 			LocalTokens:        commonCrawlStageLocalTokens(localTokens),
 			Observer:           s.PromAuthCollectors,
@@ -238,6 +240,7 @@ func WithKeystoreAuthMesh(localTokens ...string) Option {
 			ks.Observer = s.PromAuthCollectors
 		}
 		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
+			Identity:         s.spiffeIdentity(),
 			Verifier:         ks,
 			LocalTokens:      commonCrawlStageLocalTokens(localTokens),
 			Observer:         s.PromAuthCollectors,
@@ -269,6 +272,7 @@ func WithKeystoreAuthTier(requiredTier string, enforce bool, localTokens ...stri
 			ks.Observer = s.PromAuthCollectors
 		}
 		s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
+			Identity:     s.spiffeIdentity(),
 			Verifier:     ks,
 			LocalTokens:  commonCrawlStageLocalTokens(localTokens),
 			Observer:     s.PromAuthCollectors,
@@ -313,6 +317,7 @@ func WithKeystoreAuthTierTrustedProxyNoCache(requiredTier string, enforce bool, 
 
 func withKeystoreAuthTierTrustedProxy(s *Server, verifier apikey.Verifier, requiredTier string, enforce bool, trustedGatewayCIDRs []string, localTokens []string) {
 	s.Middlewares = append(s.Middlewares, middleware.TokenAuthKeystore(middleware.KeystoreOpts{
+		Identity:            s.spiffeIdentity(),
 		Verifier:            verifier,
 		LocalTokens:         commonCrawlStageLocalTokens(localTokens),
 		Observer:            s.PromAuthCollectors,

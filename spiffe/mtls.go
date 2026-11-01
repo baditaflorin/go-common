@@ -9,8 +9,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
+	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 	"github.com/spiffe/go-spiffe/v2/workloadapi"
 )
 
@@ -56,6 +58,23 @@ func (i *X509Identity) ServerTLSConfig(allowedClientIDs []string) (*tls.Config, 
 	config := tlsconfig.MTLSServerConfig(i.source, i.source, tlsconfig.AuthorizeOneOf(ids...))
 	config.MinVersion = tls.VersionTLS12
 	return config, nil
+}
+
+// SVIDSource is the rotating X.509-SVID of this workload (nil on a nil identity).
+func (i *X509Identity) SVIDSource() x509svid.Source {
+	if i == nil || i.source == nil {
+		return nil
+	}
+	return i.source
+}
+
+// BundleSource is the rotating X.509 trust bundle set (nil on a nil identity),
+// for verifying a peer's X.509-SVID.
+func (i *X509Identity) BundleSource() x509bundle.Source {
+	if i == nil || i.source == nil {
+		return nil
+	}
+	return i.source
 }
 
 func (i *X509Identity) Close() error {

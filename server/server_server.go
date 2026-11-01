@@ -198,6 +198,9 @@ func (s *Server) Start() error {
 	finalHandler := s.Handler()
 
 	httpSrv := s.buildHTTPServer(addr, finalHandler)
+	// SPIFFEAUTH_MTLS_ADDR: the TLS listener that verifies client X.509-SVIDs
+	// (nothing when unset). It serves the same handler chain.
+	defer s.startSPIFFEListener(finalHandler)()
 
 	if s.drain != nil {
 		// WithGracefulDrain path: wire the shutdown closure so BeginDrain

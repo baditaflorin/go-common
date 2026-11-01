@@ -182,6 +182,16 @@ type KeystoreOpts struct {
 	// routes registered through the server's own helpers against the prefixes
 	// when Start runs; this field cannot, because it sees no routes.
 	PublicPathPrefixes []string
+
+	// Identity (optional) adds the SPIFFE identity path in DUAL MODE: a request
+	// carrying a valid X.509-SVID (mTLS) or JWT-SVID that the operator's peer
+	// map knows is authenticated as the mapped principal and tier, before the
+	// gateway, local-token and keystore checks; a request with no SPIFFE
+	// identity goes through those checks exactly as when this is nil. Nothing
+	// is ever rejected for lacking a SPIFFE identity. Implemented by
+	// spiffeauth.Authenticator; server.New wires it from SPIFFEAUTH_MODE.
+	// Default nil: no effect on any service that doesn't opt in.
+	Identity IdentityAuthenticator
 }
 
 // ScopeChecker is the abstract interface for out-of-band scope
