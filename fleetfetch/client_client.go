@@ -26,7 +26,10 @@ type Client struct {
 	// apiKeySrc is set when the key came from FLEET_FETCH_CACHE_API_KEY_FILE:
 	// every request then sends the file's current key (package credfile), so
 	// a renewed key is used without a restart.
-	apiKeySrc      *credfile.Source
+	apiKeySrc *credfile.Source
+	// identity, when set, adds a JWT-SVID next to the key (identity.go). Nil:
+	// the process default (SetDefaultIdentity), else nothing.
+	identity       *identity
 	cacheClient    *http.Client // HTTP client used to talk to the cache itself
 	fallback       *http.Client // SSRF-safe client used when cache is down
 	timeout        time.Duration
@@ -187,8 +190,11 @@ func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.
 		return nil, errors.New("fleetfetch: Common Crawl cannot be combined with live render modes")
 	}
 	start := time.Now()
+	// idOutcome is what the identity path did for the last cache request of this
+	// call ("" when it is not enabled), reported as Event.Identity.
+	var idOutcome string
 	defer func() {
-		ev := Event{Host: hostOf(targetURL), Duration: time.Since(start)}
+		ev := Event{Host: hostOf(targetURL), Duration: time.Since(start), Identity: idOutcome}
 		if fetchRes != nil && fetchRes.Truncated {
 			ev.Truncated = true
 			c.truncated.Add(1)
@@ -311,6 +317,15 @@ func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.
 		}
 		if apiKey != "" {
 			req.Header.Set(header.APIKey, apiKey)
+		}
+		// DUAL MODE: a JWT-SVID next to the key, never instead of it (identity.go).
+		if id := c.currentIdentity(); id != nil {
+			if tok := id.jwt(cctx); tok != "" {
+				req.Header.Set(SPIFFEJWTHeader, tok)
+				idOutcome = IdentitySPIFFE
+			} else {
+				idOutcome = IdentityUnavailable
+			}
 		}
 		// Identify the calling service to the cache so it can forward
 		// X-Fleet-Caller to go-js-proxy / go-html-proxy for per-enricher load

@@ -55,6 +55,11 @@ type Event struct {
 	Duration   time.Duration
 	// Truncated is true when the response handed back was cut at the body limit.
 	Truncated bool
+	// Identity is what the SPIFFE identity path did for this call: IdentitySPIFFE
+	// (a JWT-SVID went with the request), IdentityUnavailable (enabled, none could
+	// be had, the key alone was sent), or "" when the path is not enabled
+	// (FLEET_FETCH_CACHE_SPIFFE unset or off, the default).
+	Identity string
 }
 
 var defaultObserver atomic.Pointer[Observer]
