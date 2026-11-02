@@ -125,6 +125,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			//     not accepted is counted, then either refused (an ID missing
 			//     from the map, by default) or left to the API key path.
 			bearerIsSVID, idFailReason, idFailSource := false, "", AuthSource("")
+			idPresentedFailed := false
 			if opts.Identity != nil {
 				d := opts.Identity.AuthenticateIdentity(r)
 				if d.Presented {
@@ -148,6 +149,7 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 						return
 					}
 					idFailReason, idFailSource = d.Reason, d.Source
+					idPresentedFailed = true
 				}
 			}
 
@@ -230,7 +232,10 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			//     gateway path above). Trust it without a token, mirroring the
 			//     fetch cache's container-to-container model. Not spoofable:
 			//     keyed on r.RemoteAddr, never on a header.
-			if opts.TrustPrivateMesh && isPrivateRemoteAddr(r.RemoteAddr) {
+			//     With a strict Identity (StrictIdentity), a request that presented a
+			//     SPIFFE identity that was not accepted is not admitted here: it needs
+			//     a key (step 3) or is refused.
+			if opts.TrustPrivateMesh && !(idPresentedFailed && identityStrict(opts.Identity)) && isPrivateRemoteAddr(r.RemoteAddr) {
 				// callerTier "" by design — a container-to-container call
 				// never verified a tier, so it can't satisfy a tier gate.
 				// If a tiered private-mesh caller is ever needed, that's a

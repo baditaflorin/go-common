@@ -74,6 +74,7 @@ The variables that go-common packages declare in the `env` registry, with what t
 | `SPIFFEAUTH_MTLS_ADDR` | string | unset | Listen address of the extra TLS listener that verifies client X.509-SVIDs, e.g. :8443. Empty: no mTLS listener (JWT-SVIDs still work on the normal port). |
 | `SPIFFEAUTH_PEERS` | string | unset | The same JSON as SPIFFEAUTH_PEERS_FILE, inline. |
 | `SPIFFEAUTH_PEERS_FILE` | string | unset | Path of a JSON file {"peers":[{"id":"spiffe://0exec.com/ns/*/sa/<service>","principal":"<service>","tier":"","scope":""}]} mapping SPIFFE IDs to principals. "*" is allowed only as the ns segment. Wins over SPIFFEAUTH_PEERS. |
+| `SPIFFEAUTH_STRICT_PRESENTED` | bool | `false` | With SPIFFEAUTH_MODE=dual: a request that presents a JWT-SVID/SVID that is not accepted is not admitted by private-mesh trust (TrustPrivateMesh); it needs an API key or gets 401. Off by default; turn it on before any gateway skips its own key check for requests carrying X-Spiffe-Jwt. |
 | `SPIFFEAUTH_TRUST_DOMAINS` | list | `0exec.com` | Trust domains whose SVIDs spiffeauth accepts. |
 | `SPIFFEAUTH_UNMAPPED` | string | `deny` | A presented SVID whose SPIFFE ID is not in the peer map: deny (403, default) or fallback (count it and use the API key path). |
 

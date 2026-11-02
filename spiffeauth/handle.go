@@ -105,6 +105,10 @@ func (h *Handle) ExpectedPrincipal(user string) (string, bool) {
 	return h.peers.expected(user)
 }
 
+// StrictPresented implements middleware.StrictIdentity; like ExpectedPrincipal it
+// needs only the configuration.
+func (h *Handle) StrictPresented() bool { return h != nil && h.cfg.StrictPresented }
+
 // TLSConfig is the tls.Config for the mTLS listener. It asks the current
 // Authenticator for its config on every handshake, so it works once the
 // connection is up and refuses handshakes before.

@@ -75,6 +75,27 @@ type IdentityObserver interface {
 	ObserveIdentityFallback(principal, reason string)
 }
 
+// StrictIdentity is optional: an IdentityAuthenticator that also implements it
+// can ask TokenAuthKeystore to be strict about a request that PRESENTED a SPIFFE
+// identity which was not accepted (a JWT-SVID that does not verify, an unmapped
+// ID with SPIFFEAUTH_UNMAPPED=fallback). When StrictPresented reports true, such a
+// request is not admitted by private-mesh trust (KeystoreOpts.TrustPrivateMesh):
+// it must carry an API key (or a gateway-validated one) or it is refused with 401.
+// Off by default (dual mode lets the private mesh admit it, as before). It is the
+// prerequisite for a gateway that skips its own key check for a request carrying
+// X-Spiffe-Jwt: without it, a forged token arriving from the gateway's private IP
+// would fall through to TrustPrivateMesh.
+type StrictIdentity interface {
+	StrictPresented() bool
+}
+
+// identityStrict reports whether id asks for the strict treatment of a presented,
+// unaccepted identity.
+func identityStrict(id IdentityAuthenticator) bool {
+	s, ok := id.(StrictIdentity)
+	return ok && s.StrictPresented()
+}
+
 type spiffeIDKey struct{}
 
 // SPIFFEIDFromContext returns the verified SPIFFE ID of a request that

@@ -16,16 +16,17 @@ import (
 // Environment variable names. SPIFFE_ENDPOINT_SOCKET (the Workload API address)
 // is the standard variable and is declared by package graph.
 const (
-	EnvMode          = "SPIFFEAUTH_MODE"
-	EnvPeersFile     = "SPIFFEAUTH_PEERS_FILE"
-	EnvPeers         = "SPIFFEAUTH_PEERS"
-	EnvTrustDomains  = "SPIFFEAUTH_TRUST_DOMAINS"
-	EnvJWTAudience   = "SPIFFEAUTH_JWT_AUDIENCE"
-	EnvJWTMaxTTL     = "SPIFFEAUTH_JWT_MAX_TTL"
-	EnvMTLSAddr      = "SPIFFEAUTH_MTLS_ADDR"
-	EnvUnmapped      = "SPIFFEAUTH_UNMAPPED"
-	EnvSocket        = "SPIFFE_ENDPOINT_SOCKET"
-	DefaultTrustZone = "0exec.com"
+	EnvMode            = "SPIFFEAUTH_MODE"
+	EnvPeersFile       = "SPIFFEAUTH_PEERS_FILE"
+	EnvPeers           = "SPIFFEAUTH_PEERS"
+	EnvTrustDomains    = "SPIFFEAUTH_TRUST_DOMAINS"
+	EnvJWTAudience     = "SPIFFEAUTH_JWT_AUDIENCE"
+	EnvJWTMaxTTL       = "SPIFFEAUTH_JWT_MAX_TTL"
+	EnvMTLSAddr        = "SPIFFEAUTH_MTLS_ADDR"
+	EnvUnmapped        = "SPIFFEAUTH_UNMAPPED"
+	EnvStrictPresented = "SPIFFEAUTH_STRICT_PRESENTED"
+	EnvSocket          = "SPIFFE_ENDPOINT_SOCKET"
+	DefaultTrustZone   = "0exec.com"
 
 	// DefaultJWTMaxTTL is the longest remaining lifetime of a JWT-SVID accepted
 	// when SPIFFEAUTH_JWT_MAX_TTL is unset. SPIRE issues 5-minute JWT-SVIDs here;
@@ -78,6 +79,9 @@ type Config struct {
 	// MTLSAddr is the listen address of the extra TLS listener (":8443"); empty = none.
 	MTLSAddr string
 	Unmapped UnmappedPolicy
+	// StrictPresented: a request that presented an SVID which was not accepted is
+	// not admitted by private-mesh trust (middleware.StrictIdentity). Default false.
+	StrictPresented bool
 	// ConnectTimeout bounds one wait for the first SVID in New (default 30 s).
 	ConnectTimeout time.Duration
 	// Observer receives failures that happen below the HTTP layer (a TLS
@@ -110,6 +114,8 @@ var (
 		Doc: "Longest remaining lifetime of an accepted JWT-SVID (SPIRE issues 5 m), at most 10m."})
 	_ = env.Declare(env.Var{Name: EnvMTLSAddr, Kind: env.KindString,
 		Doc: "Listen address of the extra TLS listener that verifies client X.509-SVIDs, e.g. :8443. Empty: no mTLS listener (JWT-SVIDs still work on the normal port)."})
+	_ = env.Declare(env.Var{Name: EnvStrictPresented, Kind: env.KindBool, Default: "false",
+		Doc: "With SPIFFEAUTH_MODE=dual: a request that presents a JWT-SVID/SVID that is not accepted is not admitted by private-mesh trust (TrustPrivateMesh); it needs an API key or gets 401. Off by default; turn it on before any gateway skips its own key check for requests carrying X-Spiffe-Jwt."})
 	_ = env.Declare(env.Var{Name: EnvUnmapped, Kind: env.KindString, Default: "deny",
 		Doc: "A presented SVID whose SPIFFE ID is not in the peer map: deny (403, default) or fallback (count it and use the API key path).",
 		Check: func(v string) error {
@@ -158,6 +164,10 @@ func configFrom(get func(string) string) (Config, error) {
 	cfg := Config{Mode: mode, Socket: strings.TrimSpace(get(EnvSocket)), MTLSAddr: strings.TrimSpace(get(EnvMTLSAddr))}
 	if cfg.Unmapped, err = parseUnmapped(get(EnvUnmapped)); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", EnvUnmapped, err)
+	}
+	switch strings.ToLower(strings.TrimSpace(get(EnvStrictPresented))) {
+	case "1", "true", "yes", "on":
+		cfg.StrictPresented = true
 	}
 	cfg.TrustDomains = splitList(get(EnvTrustDomains))
 	cfg.JWTAudience = splitList(get(EnvJWTAudience))
