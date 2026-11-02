@@ -171,3 +171,21 @@ func TestNewRefusesADisabledOrBrokenConfig(t *testing.T) {
 	}
 	var _ middleware.IdentityAuthenticator = (*Handle)(nil)
 }
+
+func TestConfigStrictPresentedFromEnv(t *testing.T) {
+	base := map[string]string{EnvMode: "dual", EnvSocket: "unix:///run/spire/agent.sock",
+		EnvPeers: `{"peers":[{"id":"spiffe://0exec.com/ns/fleet/sa/a-b","principal":"a-b"}]}`}
+	cfg, err := configFrom(envMap(base))
+	if err != nil || cfg.StrictPresented {
+		t.Fatalf("default must be off: cfg=%+v err=%v", cfg, err)
+	}
+	base[EnvStrictPresented] = "true"
+	cfg, err = configFrom(envMap(base))
+	if err != nil || !cfg.StrictPresented {
+		t.Fatalf("SPIFFEAUTH_STRICT_PRESENTED=true must turn it on: cfg=%+v err=%v", cfg, err)
+	}
+	var h *Handle
+	if h.StrictPresented() {
+		t.Fatal("a nil Handle is never strict")
+	}
+}

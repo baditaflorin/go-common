@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.115.2] - 2026-11-02
+
+Inert by default; prerequisite for a gateway that skips its own key check for requests carrying `X-Spiffe-Jwt` (Phase 3 of the ephemeral-credentials program, dual mode).
+
+### Added
+
+- `middleware`: optional `StrictIdentity` (an `IdentityAuthenticator` that also implements `StrictPresented() bool`). When it reports true, a request that PRESENTED a SPIFFE identity that was not accepted (a JWT-SVID that does not verify, an unmapped ID under `SPIFFEAUTH_UNMAPPED=fallback`) is not admitted by `TrustPrivateMesh`: it needs an API key or gets 401. Without it a forged `X-Spiffe-Jwt` arriving from the gateway's private address would fall through to private-mesh trust.
+- `spiffeauth`: `SPIFFEAUTH_STRICT_PRESENTED` (default false) turns it on; `Config.StrictPresented`, `Handle`/`Authenticator.StrictPresented`. Nothing changes for a request that presents no identity, one with a valid key, or a service that does not set the variable.
+
 ## [0.115.1] - 2026-11-01
 
 ### Fixed

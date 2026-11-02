@@ -154,6 +154,9 @@ func (a *Authenticator) ExpectedPrincipal(user string) (string, bool) {
 	return a.peers.expected(user)
 }
 
+// StrictPresented implements middleware.StrictIdentity.
+func (a *Authenticator) StrictPresented() bool { return a != nil && a.cfg.StrictPresented }
+
 func (a *Authenticator) observeFailure(source middleware.AuthSource, reason string) {
 	if a.cfg.Observer != nil {
 		a.cfg.Observer.ObserveIdentityFailure(source, reason)
