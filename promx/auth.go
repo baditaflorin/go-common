@@ -33,6 +33,7 @@ import (
 //	apikey_keystore_inner_duration_seconds{service, result}
 //	spiffe_verify_failures_total{service, source, reason}
 //	spiffe_apikey_fallback_total{service, principal, reason}
+//	xauth_untrusted_total{service, mode, src, caller, credential}
 //
 // The last two are the SPIFFE dual-mode counters (package spiffeauth); they
 // have no series until a service sets SPIFFEAUTH_MODE. "source" on
@@ -59,6 +60,9 @@ type AuthCollectors struct {
 
 	spiffeFailures *prometheus.CounterVec
 	spiffeFallback *prometheus.CounterVec
+	xauthUntrusted *prometheus.CounterVec
+	xauthSrc       *BoundedLabel
+	xauthCaller    *BoundedLabel
 
 	// A pointer, so AuthCollectors stays comparable (a mutex and a map in it would change its API).
 	principals *principalSet
@@ -125,7 +129,14 @@ func NewAuthCollectors(reg prometheus.Registerer) *AuthCollectors {
 		Name: "spiffe_apikey_fallback_total",
 		Help: "Requests authenticated with an API key although the principal has a SPIFFE mapping (SPIFFE expected, not used), by reason (no_svid or the failure reason).",
 	}, []string{"service", "principal", "reason"})
+	c.xauthUntrusted = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "xauth_untrusted_total",
+		Help: "Requests carrying X-Auth-User from a TCP peer outside XAUTH_TRUSTED_CIDRS (XAUTH_TRUST_MODE shadow or enforce), by mode, peer, caller and the credential the request also carried (none|key|jwt|key+jwt). none = vouched for by the forgeable header alone: admitted in shadow, 401 in enforce.",
+	}, []string{"service", "mode", "src", "caller", "credential"})
+	c.xauthSrc = NewBoundedLabel(64)
+	c.xauthCaller = NewBoundedLabel(256)
 	reg.MustRegister(
+		c.xauthUntrusted,
 		c.spiffeFailures,
 		c.spiffeFallback,
 		c.authTotal,
@@ -191,6 +202,20 @@ func principalLabel(s string) bool {
 		}
 	}
 	return true
+}
+
+// ObserveXAuthUntrusted satisfies middleware.XAuthObserver. src and caller are bounded (64 and 256 values,
+// the rest counts under _other), mode and credential are closed sets.
+func (c *AuthCollectors) ObserveXAuthUntrusted(mode, src, caller, credential string) {
+	if mode != middleware.XAuthModeShadow && mode != middleware.XAuthModeEnforce {
+		mode = "other"
+	}
+	switch credential {
+	case "none", "key", "jwt", "key+jwt":
+	default:
+		credential = "other"
+	}
+	c.xauthUntrusted.WithLabelValues(c.service, mode, c.xauthSrc.Value(src), c.xauthCaller.Value(caller), credential).Inc()
 }
 
 // ObserveCache satisfies apikey.CacheObserver.

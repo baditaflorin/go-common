@@ -158,3 +158,42 @@ func TestCacheObserverStale(t *testing.T) {
 		t.Errorf("cache_total{stale} = %v, want 1", got)
 	}
 }
+
+func TestAuthCollectors_ObserveXAuthUntrusted(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	c := NewAuthCollectors(reg)
+	c.ObserveXAuthUntrusted("shadow", "10.10.10.77", "probe", "none")
+	c.ObserveXAuthUntrusted("shadow", "10.10.10.77", "probe", "none")
+	c.ObserveXAuthUntrusted("enforce", "10.10.10.78", "", "key+jwt")
+	c.ObserveXAuthUntrusted("bogus", "10.10.10.79", "x", "bogus")
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]float64{}
+	for _, mf := range mfs {
+		if mf.GetName() != "xauth_untrusted_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			l := map[string]string{}
+			for _, p := range m.GetLabel() {
+				l[p.GetName()] = p.GetValue()
+			}
+			got[l["mode"]+"|"+l["src"]+"|"+l["caller"]+"|"+l["credential"]] = m.GetCounter().GetValue()
+		}
+	}
+	want := map[string]float64{
+		"shadow|10.10.10.77|probe|none":        2,
+		"enforce|10.10.10.78|_unknown|key+jwt": 1,
+		"other|10.10.10.79|x|other":            1,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("series = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("series %q = %v, want %v (all: %v)", k, got[k], v, got)
+		}
+	}
+}

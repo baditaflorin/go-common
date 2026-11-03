@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.116.0] - 2026-11-04
+
+Inert by default: nothing changes for a service that does not set `XAUTH_TRUST_MODE`. Phase 3 of the ephemeral-credentials program (stream `xauth`): the fleet-wide version of the switch infrastructure-fetch-cache got in 0.3.62.
+
+### Added
+
+- `middleware`: `XAUTH_TRUST_MODE` (off by default) and `XAUTH_TRUSTED_CIDRS` (default `10.10.10.10/32`, the CT10 gateway) for every service that mounts `TokenAuthKeystore` (all `server.WithKeystoreAuth*` options except the trusted-proxy ones). Without a trusted list the middleware trusts `X-Auth-User` from ANY TCP peer, so whoever can reach the container port directly can use the service without a key. `shadow` keeps that behavior and counts (`xauth_untrusted_total{service,mode,src,caller,credential}`, optional `middleware.XAuthObserver`, implemented by `promx.AuthCollectors`) and logs (one line per peer, caller and credential per minute, `xauth_untrusted`) every request that carries `X-Auth-User` from a peer outside the list; `enforce` trusts the header only from the list, so any other peer needs a valid API key or JWT-SVID (else 401, the forged headers are dropped). An unknown mode is `off`; a trusted list that parses to nothing falls back to the gateway address, never to "trust everyone". An explicit `KeystoreOpts.TrustedGatewayCIDRs` (`WithKeystoreAuthTierTrustedProxy`) wins and the variables are ignored. `credential` is none|key|jwt|key+jwt: only `none` depends on the forgeable header alone (hub alert `XAuthUntrustedNoCredential`).
+- `promx`: `xauth_untrusted_total` (no series until a service sets `XAUTH_TRUST_MODE` to shadow or enforce).
+
 ## [0.115.2] - 2026-11-02
 
 Inert by default; prerequisite for a gateway that skips its own key check for requests carrying `X-Spiffe-Jwt` (Phase 3 of the ephemeral-credentials program, dual mode).
