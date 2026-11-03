@@ -46,6 +46,13 @@ The variables that go-common packages declare in the `env` registry, with what t
 | `GRAPH_TRUSTED_CALLER_IPS` | list | unset | Comma-separated literal IP addresses of gateways trusted to stamp X-Auth-User. Entries that are not literal IPs are ignored. |
 | `SPIFFE_ENDPOINT_SOCKET` | string | unset | SPIFFE Workload API socket (unix:///run/spire/sockets/agent.sock), set by the fleet's Compose SPIFFE overlay. graph reads it only for GRAPH_SPIFFE_COLLECTOR_URL. |
 
+## `middleware`
+
+| Variable | Kind | Default | Description |
+| --- | --- | --- | --- |
+| `XAUTH_TRUSTED_CIDRS` | list | `10.10.10.10/32` | TCP peers (CIDRs or addresses, comma separated) whose X-Auth-User/Tier/Scope is trusted when XAUTH_TRUST_MODE is shadow or enforce. Default: the CT10 gateway. |
+| `XAUTH_TRUST_MODE` | string | `off` | Who may vouch for a request with X-Auth-User/Tier/Scope (middleware.TokenAuthKeystore): off (default; the header is trusted from every TCP peer, as before), shadow (same behavior, but requests with X-Auth-User from a peer outside XAUTH_TRUSTED_CIDRS are counted in xauth_untrusted_total and logged), or enforce (the header is trusted only from XAUTH_TRUSTED_CIDRS; any other peer must present an API key or JWT-SVID, else 401). Ignored when the service sets its own trusted-proxy list. Roll back by unsetting it. |
+
 ## `runtimetune`
 
 | Variable | Kind | Default | Description |

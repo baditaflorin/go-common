@@ -47,6 +47,11 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 		}
 	}
 
+	// X-Auth-* trust switch (XAUTH_TRUST_MODE, auth_xauth.go): off unless the environment says otherwise.
+	// In enforce mode this fills opts.TrustedGatewayCIDRs; an explicit list of the service wins.
+	xauth := configureXAuth(&opts, logf)
+	xauthObs, _ := opts.Observer.(XAuthObserver)
+
 	observe := func(src AuthSource, res AuthResult, d time.Duration) {
 		if opts.Observer != nil {
 			opts.Observer.ObserveAuth(AuthEvent{Source: src, Result: res, Duration: d})
@@ -160,6 +165,10 @@ func TokenAuthKeystore(opts KeystoreOpts) Middleware {
 			//    nginx's auth_request_set captures X-Auth-User from the
 			//    keystore's /verify response. Presence ≈ keystore said yes.
 			gatewayHeaderPresent := opts.TrustGatewayHeader != "" && r.Header.Get(opts.TrustGatewayHeader) != ""
+			if gatewayHeaderPresent && xauth.active() && !trustedGatewayRemoteAddr(r.RemoteAddr, xauth.cidrs) {
+				// Shadow and enforce: a request vouched for by the header alone from a peer outside the trusted list.
+				xauth.note(r, xauthObs, logf)
+			}
 			gatewayTrusted := gatewayHeaderPresent && trustedGatewayRemoteAddr(r.RemoteAddr, opts.TrustedGatewayCIDRs)
 			if gatewayHeaderPresent && !gatewayTrusted {
 				r.Header.Del(header.AuthUser)
