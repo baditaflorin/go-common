@@ -73,10 +73,17 @@ func TestNoProxy_EmptyMeansEverythingProxied(t *testing.T) {
 	s := proxysupplier.NewFromConfig(cfg)
 	client := proxysupplier.HTTPClient(s, 2*time.Second)
 	tr := clientProxyResolver(t, client)
-	req, _ := http.NewRequest(http.MethodGet, "http://localhost:8080/", nil)
+	req, _ := http.NewRequest(http.MethodGet, "http://example.com:8080/", nil)
 	got, _ := tr.Proxy(req)
 	if got == nil {
 		t.Fatal("empty NO_PROXY: expected proxy, got direct")
+	}
+	// Names that can only be internal never reach the proxy, whatever NO_PROXY says.
+	for _, host := range []string{"localhost", "go_wps-app-1", "go-fleet-graph"} {
+		req, _ := http.NewRequest(http.MethodGet, "http://"+host+":8080/", nil)
+		if got, _ := tr.Proxy(req); got != nil {
+			t.Fatalf("empty NO_PROXY: %s went to proxy %s, want direct", host, got)
+		}
 	}
 }
 

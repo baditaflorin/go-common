@@ -3,6 +3,8 @@ package proxysupplier
 import (
 	"net"
 	"strings"
+
+	"github.com/baditaflorin/go-common/internal/privatehost"
 )
 
 // noProxyRules holds parsed NO_PROXY match rules.
@@ -74,7 +76,14 @@ func parseNoProxy(s string) *noProxyRules {
 // host may be an IP literal or a DNS name. CIDR matching first attempts to
 // parse host as an IP literal; we deliberately do NOT resolve DNS here
 // (would add ~50ms per request and reverse-DNS isn't trustworthy).
+//
+// Names that can only be internal (container names, single-label hosts,
+// .internal/.local ...) always match, even with no rules configured: an
+// external proxy cannot resolve them. See internal/privatehost.
 func (r *noProxyRules) Match(host string) bool {
+	if privatehost.Name(host) {
+		return true
+	}
 	if r == nil {
 		return false
 	}

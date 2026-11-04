@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.116.1] - 2026-11-05
+
+### Fixed
+
+- `safehttp`, `proxysupplier`: container names, single-label hostnames and reserved internal suffixes (`.internal`, `.local`, `.localhost`, `.lan`, `.home.arpa`, `.docker`, `.svc`) never go through the egress proxy, whatever `NO_PROXY` says and whether or not the name resolves from this container. Before, `safehttp`'s private-address skip only worked when the lookup succeeded, so a compose name that did not resolve from the caller (a stale `go_<id>-app-1`, a service that is down, a different network) fell through to the Webshare proxy on every request, which cannot resolve it either: billed traffic, a held connection and `X-Webshare-Reason: target_connect_resolve_failed` each time. `proxysupplier`'s `Bypass` also returned false when `NO_PROXY` was empty; internal names now bypass even then. Shared rule in `internal/privatehost`. Plain `http.Client`s with the default transport are not covered (they use `http.ProxyFromEnvironment`, which only knows NO_PROXY entries): give those a transport with `Proxy: nil` for mesh calls.
+
 ## [0.116.0] - 2026-11-04
 
 Inert by default: nothing changes for a service that does not set `XAUTH_TRUST_MODE`. Phase 3 of the ephemeral-credentials program (stream `xauth`): the fleet-wide version of the switch infrastructure-fetch-cache got in 0.3.62.

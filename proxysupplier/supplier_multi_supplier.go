@@ -16,9 +16,6 @@ type multiSupplier struct {
 func (m *multiSupplier) KeepAliveEnabled() bool { return m.keepAlive }
 
 func (m *multiSupplier) Bypass(host string) bool {
-	if m.rules == nil {
-		return false
-	}
 	return m.rules.Match(host)
 }
 

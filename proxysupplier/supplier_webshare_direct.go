@@ -169,9 +169,6 @@ func (s *webshareDirectSupplier) Close() {
 func (s *webshareDirectSupplier) Name() string { return "webshare_direct" }
 
 func (s *webshareDirectSupplier) Bypass(host string) bool {
-	if s.rules == nil {
-		return false
-	}
 	return s.rules.Match(host)
 }
 
