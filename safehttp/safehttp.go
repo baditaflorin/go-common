@@ -13,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/baditaflorin/go-common/internal/privatehost"
 )
 
 // isTLSInternalAlert matches the TLS alert 80 ("internal error") that
@@ -513,6 +515,13 @@ var (
 // traffic through the external Webshare proxy, which cannot resolve those
 // names → target_connect_resolve_failed.
 func proxySkippingPrivate(req *http.Request) (*url.URL, error) {
+	return proxySkippingPrivateWith(req, http.ProxyFromEnvironment)
+}
+
+// proxySkippingPrivateWith is proxySkippingPrivate with the proxy lookup
+// injected: http.ProxyFromEnvironment reads the environment once per process,
+// which tests cannot vary.
+func proxySkippingPrivateWith(req *http.Request, viaProxy func(*http.Request) (*url.URL, error)) (*url.URL, error) {
 	host := req.URL.Hostname()
 
 	// IP literal fast-path.
@@ -520,11 +529,20 @@ func proxySkippingPrivate(req *http.Request) (*url.URL, error) {
 		if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
 			return nil, nil
 		}
-		return http.ProxyFromEnvironment(req)
+		return viaProxy(req)
 	}
 
 	// Well-known Docker-internal names that may not resolve on Linux.
 	if strings.EqualFold(host, "host.docker.internal") || strings.EqualFold(host, "localhost") {
+		return nil, nil
+	}
+
+	// Container names, single-label hosts and reserved internal suffixes can
+	// never be public: go direct without a lookup. Before this check a name that
+	// did not resolve from this container (a stale or not-yet-started compose
+	// name) fell through to the external proxy on every request, which cannot
+	// resolve it either and bills the attempt as target_connect_resolve_failed.
+	if privatehost.Name(host) {
 		return nil, nil
 	}
 
@@ -536,7 +554,7 @@ func proxySkippingPrivate(req *http.Request) (*url.URL, error) {
 		if skip {
 			return nil, nil
 		}
-		return http.ProxyFromEnvironment(req)
+		return viaProxy(req)
 	}
 
 	// Resolve and check whether all addresses are private.
@@ -558,7 +576,7 @@ func proxySkippingPrivate(req *http.Request) (*url.URL, error) {
 	if skip {
 		return nil, nil
 	}
-	return http.ProxyFromEnvironment(req)
+	return viaProxy(req)
 }
 
 // newBaseTransport builds the primary guarded *http.Transport that
