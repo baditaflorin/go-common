@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.132.1] - 2026-11-06
+
+### Fixed
+
+- HTTP transport decorators forward optional CloseIdleConnections, including both TLS fallback pools, the graph observer and tracing adapter. meshclient exposes matching cleanup. Socket regressions verify pooled connections close and clients remain reusable; bases without the optional method remain supported.
+- Credential hygiene fixtures explicitly close their CONNECT socket owner before the response body, bound the ignored HTTP probe separately, and quiesce proxies before inspecting redacted output.
+
 ## [0.132.0] - 2026-11-06
 
 ### Fixed

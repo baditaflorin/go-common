@@ -114,3 +114,10 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+// CloseIdleConnections preserves the wrapped transport's optional pool cleanup.
+func (t *observingTransport) CloseIdleConnections() {
+	if closer, ok := t.next.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}

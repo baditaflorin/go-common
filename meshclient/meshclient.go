@@ -333,3 +333,7 @@ func classify(ctx context.Context, err error) (class string, unavailable bool) {
 	}
 	return "", false
 }
+
+// CloseIdleConnections closes pooled idle connections without interrupting active
+// requests. The client remains usable for future calls.
+func (c *Client) CloseIdleConnections() { c.hc.CloseIdleConnections() }

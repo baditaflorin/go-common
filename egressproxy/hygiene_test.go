@@ -35,15 +35,23 @@ func TestCredentialsNeverAppearInLogsOrMetrics(t *testing.T) {
 		p := startProxy(t, func(c *Config) {
 			c.Supplier = newSupplier(raw, raw)
 			c.DialTimeout = 400 * time.Millisecond // keeps the hanging cases short
-			c.IdleTimeout = 500 * time.Millisecond
+			// Use the default idle budget: this fixture checks credential hygiene,
+			// while limits_test.go exercises deliberate short idle deadlines.
 		})
-		_, resp, _ := connectVia(t, p.Addr(), echo.addr())
+		conn, resp, _ := connectVia(t, p.Addr(), echo.addr())
+		// A successful CONNECT body is the tunnel itself. Close its owner
+		// before closing the body, which otherwise drains until idle expiry.
+		_ = conn.Close()
 		resp.Body.Close()
 		client := proxyClient(t, p.Proxy)
+		// Bound the ignored plain-HTTP hanging-upstream probe independently of
+		// the proxy idle watchdog, then quiesce it before inspecting output.
+		client.Timeout = time.Second
 		if r, err := client.Get("http://origin.invalid/"); err == nil {
 			r.Body.Close()
 		}
 
+		_ = p.Close()
 		out := p.logs.String()
 		assertNoSecret(t, "logs", out, user, secret)
 		families, _ := p.reg.Gather()
@@ -57,8 +65,10 @@ func TestCredentialsNeverAppearInLogsOrMetrics(t *testing.T) {
 	// The log is not empty by accident: a failing upstream is reported by
 	// host:port and result.
 	p := startProxy(t, func(c *Config) { c.Supplier = newSupplier(fmt.Sprintf("http://%s:%s@%s", user, secret, deadAddr)) })
-	_, resp, _ := connectVia(t, p.Addr(), echo.addr())
+	conn, resp, _ := connectVia(t, p.Addr(), echo.addr())
+	_ = conn.Close()
 	resp.Body.Close()
+	_ = p.Close()
 	out := p.logs.String()
 	if !strings.Contains(out, deadAddr) || !strings.Contains(out, "dial_error") {
 		t.Fatalf("log does not name the failing upstream and result:\n%s", out)
