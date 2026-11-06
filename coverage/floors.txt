@@ -31,6 +31,7 @@ errors 76
 fleetfetch 79
 graph 87
 internal/graphidentity 86
+internal/privatehost 98
 internal/strictjson 73
 jsbundle 87
 ledger 81
