@@ -2,7 +2,7 @@ package promx
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -145,11 +145,8 @@ func TestCacheObserverStale(t *testing.T) {
 	// Wait past FreshTTL, then flip upstream to unavailable.
 	time.Sleep(20 * time.Millisecond)
 	stub.res = nil
-	stub.err = errors.New("upstream boom: " + apikey.ErrKeystoreUnavailable.Error())
-	// Wrap so errors.Is(err, ErrKeystoreUnavailable) is false but the
-	// Cache treats anything-not-ErrInvalidKey as "transient" anyway.
-	// To exercise the stale path we need an error that ISN'T
-	// ErrInvalidKey — any wrapped error works.
+	// A wrapped outage remains eligible for stale fallback.
+	stub.err = fmt.Errorf("upstream boom: %w", apikey.ErrKeystoreUnavailable)
 
 	if _, err := c.Verify(context.Background(), "k"); err != nil {
 		t.Fatalf("stale-path verify returned err: %v", err)

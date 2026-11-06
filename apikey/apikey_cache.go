@@ -68,8 +68,12 @@ func (c *Cache) Verify(ctx context.Context, key string) (*VerifyResult, error) {
 		c.observe(CacheEvent{Result: CacheResultInnerInvalid, Duration: dur})
 		return nil, err
 	}
-	// Upstream unavailable — see if we have a stale-but-tolerable cache.
-	if hadEntry && now.Sub(entry.verified) < c.StaleTTL {
+	// Only an explicit keystore outage permits stale authentication. A caller
+	// cancellation or unrelated verifier failure must remain an error, even
+	// when joined with the outage sentinel.
+	if errors.Is(err, ErrKeystoreUnavailable) && ctx.Err() == nil &&
+		!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) &&
+		hadEntry && now.Sub(entry.verified) < c.StaleTTL {
 		r := entry.result
 		c.observe(CacheEvent{Result: CacheResultStale, Age: now.Sub(entry.verified), Duration: dur})
 		return &r, nil
