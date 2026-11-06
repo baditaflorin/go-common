@@ -84,6 +84,9 @@ func (p *Policy) Name() string { return p.name }
 // safe to repeat; build the request inside it.
 func (p *Policy) Do(ctx context.Context, fn func(ctx context.Context) error) error {
 	p.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.shed != nil {
 		release, ok := p.shed.TryAcquire()
@@ -97,6 +100,14 @@ func (p *Policy) Do(ctx context.Context, fn func(ctx context.Context) error) err
 
 	var err error
 	for attempt := 1; ; attempt++ {
+		if canceled := ctx.Err(); canceled != nil {
+			// Preserve the last attempted failure, as with cancellation during
+			// backoff, but never start work or reserve a breaker probe after it.
+			if err != nil {
+				return err
+			}
+			return canceled
+		}
 		var cancelProbe func()
 		if p.breaker != nil {
 			var berr error

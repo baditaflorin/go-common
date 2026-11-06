@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.122.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** Resilience policies reject already-cancelled calls before invoking work or consulting admission state, and check cancellation before each subsequent attempt. Cancelled work no longer succeeds or replenishes retry budgets.
+  - summary: Resilience policies execute no callback for an already-cancelled context and start no further attempts after cancellation.
+
 ## [0.121.1] - 2026-11-06
 
 ### Fixed
