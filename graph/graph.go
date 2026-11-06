@@ -332,7 +332,11 @@ func observing() bool {
 		}
 		return false
 	}
-	return s.cfg.eventEmissionEnabled()
+	// Observation is fire-and-forget. File-backed credentials are checked by
+	// the sender before each batch, never by an HTTP request. Retain bounded
+	// observations through a missing/rotating key instead of doing file I/O
+	// for every call or forwarding a stale credential.
+	return s.cfg.eventEmissionConfigured()
 }
 
 // Shutdown stops the background sender and makes a final best-effort flush.

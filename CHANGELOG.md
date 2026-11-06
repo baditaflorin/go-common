@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.127.3] - 2026-11-06
+
+### Fixed
+
+- **BEHAVIOURAL (patch-safe):** Graph request instrumentation queues bounded observations while a configured credential file is temporarily unavailable, matching Record behavior, instead of reading and requiring the key on every observation. Sending still reloads the current key and fails closed without it; public Enabled remains file-aware.
+  - summary: Graph instrumentation queues bounded events during key-file rotation; only sending reads and requires the current key.
+  - reason: Aligns instrumentation with Record configured-state semantics while preserving fail-closed sender authentication.
+
 ## [0.127.2] - 2026-11-06
 
 ### Fixed
