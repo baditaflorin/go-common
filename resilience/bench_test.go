@@ -34,3 +34,14 @@ func BenchmarkPolicyDoSuccessWithBreakerAndShed(b *testing.B) {
 		_ = p.Do(ctx, fn)
 	}
 }
+
+func BenchmarkPolicyDoSuccessWithBreakerOnly(b *testing.B) {
+	p := resilience.New("bench", resilience.WithBreaker(circuitbreaker.New(circuitbreaker.Options{Upstream: "bench"})))
+	ctx := context.Background()
+	fn := func(context.Context) error { return nil }
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		_ = p.Do(ctx, fn)
+	}
+}

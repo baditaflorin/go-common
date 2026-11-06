@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.117.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** Half-open circuit breakers reject competing callers while their single recovery probe is unresolved. Ownership-bound neutral release prevents cancelled resilience probes from stranding half-open state or releasing later probes, without counting upstream failures; successful probes can close the breaker.
+  - summary: Half-open breakers admit one recovery probe; cancelled resilience probes release admission neutrally instead of stranding recovery.
+
 ## [0.116.7] - 2026-11-06
 
 ### Fixed

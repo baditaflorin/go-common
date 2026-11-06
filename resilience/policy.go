@@ -97,8 +97,11 @@ func (p *Policy) Do(ctx context.Context, fn func(ctx context.Context) error) err
 
 	var err error
 	for attempt := 1; ; attempt++ {
+		var cancelProbe func()
 		if p.breaker != nil {
-			if berr := p.breaker.Allow(); berr != nil {
+			var berr error
+			cancelProbe, berr = p.breaker.AllowWithCancel()
+			if berr != nil {
 				p.circuitOpen.Add(1)
 				if err != nil {
 					// An earlier attempt of this call opened the breaker: the
@@ -110,12 +113,16 @@ func (p *Policy) Do(ctx context.Context, fn func(ctx context.Context) error) err
 		}
 
 		p.attempts.Add(1)
-		err = fn(ctx)
-		p.record(ctx, err)
+		if cancelProbe == nil {
+			err = fn(ctx)
+			p.record(ctx, err)
+		} else {
+			err = p.probeAttempt(ctx, fn, cancelProbe)
+		}
 		if err == nil {
 			return nil
 		}
-		if ctx.Err() != nil || attempt >= p.maxAttempts || !p.retryIf(err) {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || attempt >= p.maxAttempts || !p.retryIf(err) {
 			return err
 		}
 		if !p.budget.TryWithdraw() {
@@ -136,6 +143,16 @@ func (p *Policy) Do(ctx context.Context, fn func(ctx context.Context) error) err
 	}
 }
 
+// probeAttempt releases only the probe owned by this admission. Completed
+// success/failure records make cancellation a no-op; cancellation and panics
+// cannot strand the breaker half-open. The common closed-state path avoids it.
+func (p *Policy) probeAttempt(ctx context.Context, fn func(context.Context) error, cancelProbe func()) error {
+	defer cancelProbe()
+	err := fn(ctx)
+	p.record(ctx, err)
+	return err
+}
+
 // record tells the breaker how the attempt went. Only failures that look like
 // upstream trouble count against it; an answer such as 404 shows it is healthy,
 // and a caller's own cancellation or expired deadline says nothing reliable.
@@ -146,7 +163,7 @@ func (p *Policy) record(ctx context.Context, err error) {
 	switch {
 	case err == nil:
 		p.breaker.Success()
-	case ctx.Err() != nil:
+	case ctx.Err() != nil || errors.Is(err, context.Canceled):
 		// The caller gave up or ran out of time: not reliable evidence either way.
 	case Retryable(err):
 		p.breaker.Failure()
