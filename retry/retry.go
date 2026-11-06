@@ -53,9 +53,7 @@ type Option func(*Options)
 // call). Must be ≥ 1; values < 1 are treated as 1 (no retries).
 func WithMaxAttempts(n int) Option {
 	return func(o *Options) {
-		if n >= 1 {
-			o.MaxAttempts = n
-		}
+		o.MaxAttempts = max(1, n)
 	}
 }
 
