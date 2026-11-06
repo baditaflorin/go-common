@@ -3,6 +3,13 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.131.0",
+      "date": "2026-11-06",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "Positive authentication caches default to 4,096 entries; configure MaxEntries and TTLs before the first verification."
+    },
+    {
       "version": "v0.130.0",
       "date": "2026-11-06",
       "class": "breaking",

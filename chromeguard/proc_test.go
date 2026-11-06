@@ -244,7 +244,10 @@ func TestRealProcSmoke(t *testing.T) {
 	if child == nil || child.PPID != os.Getpid() || filepath.Base(child.Exe) != "sleep" || child.Type != TypeOther {
 		t.Fatalf("child = %+v", child)
 	}
-	if rss, err := TreeRSS(os.Getpid()); err != nil || rss < self.RSSBytes {
+	// TreeRSS reads /proc again: the Go runtime or kernel can release pages
+	// between samples, so a later tree total need not exceed the earlier self
+	// sample. Exact tree aggregation is checked against fixed proc fixtures.
+	if rss, err := TreeRSS(os.Getpid()); err != nil || rss == 0 {
 		t.Fatalf("TreeRSS = %d, %v", rss, err)
 	}
 }

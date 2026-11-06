@@ -68,6 +68,5 @@ func NewCache(inner Verifier) *Cache {
 		Inner:    inner,
 		FreshTTL: 60 * time.Second,
 		StaleTTL: 15 * time.Minute,
-		entries:  map[string]cacheEntry{},
 	}
 }
