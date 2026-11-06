@@ -138,6 +138,7 @@ steps:
     environment:
       CGO_ENABLED: "0"
     commands:
+      - scripts/vuln-check-selftest.sh
       - scripts/vuln-check.sh
     when:
       - event: pull_request
