@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.128.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** JSON metrics admit at most 1,000 distinct valid UTF-8 paths of at most 256 bytes, with excess or overlong paths counted as _other. Admission owns cloned string backing and uses a cold-path lock so simultaneous new paths cannot exceed the cap; warm counters remain lock-free.
+  - summary: JSON metrics fold invalid, overlong and excess paths into _other; admitted path keys have bounded owned backing storage.
+
 ## [0.127.3] - 2026-11-06
 
 ### Fixed

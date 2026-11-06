@@ -3,6 +3,13 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.128.0",
+      "date": "2026-11-06",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "JSON metrics fold invalid, overlong and excess paths into _other; admitted path keys have bounded owned backing storage."
+    },
+    {
       "version": "v0.127.3",
       "date": "2026-11-06",
       "class": "behavioural",
