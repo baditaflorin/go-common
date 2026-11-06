@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.125.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** MCP tool replays buffer at most 4 MiB of response body by default and return an MCP error on overflow or caller cancellation. WithMCPResponseLimit explicitly raises the positive limit for services with larger results; byte writes and string writes share the bound.
+  - summary: MCP responses default to a 4 MiB body limit; use WithMCPResponseLimit to explicitly support larger buffered tool results.
+
 ## [0.124.0] - 2026-11-06
 
 ### Fixed
