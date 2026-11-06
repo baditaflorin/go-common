@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.120.1] - 2026-11-06
+
+### Fixed
+
+- Outbound tracing clones request headers once through Request.Clone instead of cloning the copied headers again. Header-isolation tests preserve caller immutability and a populated-header transport benchmark measures the allocation reduction.
+
 ## [0.120.0] - 2026-11-06
 
 ### Fixed
