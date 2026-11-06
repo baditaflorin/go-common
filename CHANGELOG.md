@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.126.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** Credential lease and task clients reuse the strict JSON decoder to reject duplicate object keys at any depth. Malformed responses retain best-effort cleanup only for unambiguous identity metadata; duplicate IDs or proofs are never used to revoke a lease or task. Raw secret buffers remain cleared.
+  - summary: Credential broker responses with duplicate JSON keys fail closed; ambiguous duplicate IDs or proofs are not used for cleanup.
+
 ## [0.125.3] - 2026-11-06
 
 ### Fixed

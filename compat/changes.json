@@ -3,6 +3,13 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.126.0",
+      "date": "2026-11-06",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "Credential broker responses with duplicate JSON keys fail closed; ambiguous duplicate IDs or proofs are not used for cleanup."
+    },
+    {
       "version": "v0.125.0",
       "date": "2026-11-06",
       "class": "breaking",
