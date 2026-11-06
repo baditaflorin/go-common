@@ -34,6 +34,10 @@ type Client struct {
 	// List / Purge call. promx.NewAdminCollectors returns an
 	// implementation that records fleet-canonical Prometheus metrics.
 	AdminObs AdminObserver
+
+	// Owned by this client rather than a process-wide map. A copied client
+	// initializes a separate cache before consulting any stored authorization.
+	scopeCache *scopeCache
 }
 
 // Verify checks the key against the keystore. Returns ErrInvalidKey for
