@@ -4,9 +4,11 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 // MaxLatencySamples is the ring-buffer cap for raw latency samples
@@ -18,6 +20,9 @@ const MaxLatencySamples = 10_000
 // (same cardinality hazard fixed for the promx route label). Distinct
 // paths beyond the cap are counted under the "_other" key.
 const maxTrackedPaths = 1000
+
+// Bound both the number and owned bytes of request-controlled path keys.
+const maxTrackedPathBytes = 256
 
 // Stats is the request-metrics accumulator. Its exported fields carry the
 // JSON shape served at /stats; on a live accumulator (from New) they stay
@@ -83,6 +88,7 @@ type live struct {
 
 	pathStats sync.Map // string -> *atomic.Int64
 	pathLen   atomic.Int64
+	pathMu    sync.Mutex // admission only; existing-path increments stay lock-free
 }
 
 func New() *Stats {
@@ -134,6 +140,17 @@ func (s *Stats) Record(statusCode int, duration time.Duration, path string) {
 // maxTrackedPaths (overflow folds to "_other") so the map can't grow without
 // limit under parameterised paths or scanner traffic.
 func (l *live) recordPath(path string) {
+	if len(path) > maxTrackedPathBytes || !utf8.ValidString(path) {
+		path = "_other"
+	}
+	if v, ok := l.pathStats.Load(path); ok {
+		v.(*atomic.Int64).Add(1)
+		return
+	}
+	// A count check outside the insertion lock lets concurrent first sightings
+	// all pass the cap. Only admission takes the lock; warm paths return above.
+	l.pathMu.Lock()
+	defer l.pathMu.Unlock()
 	if v, ok := l.pathStats.Load(path); ok {
 		v.(*atomic.Int64).Add(1)
 		return
@@ -147,9 +164,10 @@ func (l *live) recordPath(path string) {
 	}
 	ctr := new(atomic.Int64)
 	ctr.Add(1)
-	if actual, loaded := l.pathStats.LoadOrStore(path, ctr); loaded {
-		actual.(*atomic.Int64).Add(1)
-	} else {
+	// A short parsed path may alias a much larger RequestURI buffer. Own the
+	// key so the byte cap also bounds retained backing storage.
+	l.pathStats.Store(strings.Clone(path), ctr)
+	if path != "_other" {
 		l.pathLen.Add(1)
 	}
 }
