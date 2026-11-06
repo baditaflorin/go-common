@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.124.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** Graph batches are bounded by their actual encoded JSON size, including escaping and invalid UTF-8 expansion. Oversized batches split iteratively in FIFO order; an oversized single event is dropped and counted without blocking later events.
+  - summary: Graph sends no JSON body above its batch byte limit; individually oversized events are dropped and counted.
+
 ## [0.123.0] - 2026-11-06
 
 ### Fixed
