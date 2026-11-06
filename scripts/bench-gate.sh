@@ -5,7 +5,8 @@
 #
 # Runs every benchmark at the base (see scripts/lib/base-ref.sh) and at HEAD with
 # a fixed iteration count, and fails when a benchmark's allocs/op grew by more
-# than 10% AND by at least 2. ns/op and B/op are printed for information only.
+# than 10% AND by at least 2, or B/op grew by more than 10% AND by at least 64
+# bytes. Both limits absorb small measurement noise. ns/op is advisory only.
 #
 # Why allocations and not time: for a fixed iteration count the number of
 # allocations per operation is deterministic, so a regression is a fact. Time on
@@ -14,7 +15,8 @@
 # benchstat on a quiet machine when it matters.
 #
 # BENCHTIME overrides the iteration count (default 2000x). A benchmark that
-# exists only at HEAD is new and passes; one that disappears is reported.
+# exists only at HEAD is new and passes; one that disappears fails, so removing
+# a benchmark cannot hide a regression.
 #
 # CPU-heavy (it compiles and runs every benchmark twice): run it in CI or on a
 # build host, not on a laptop.
@@ -86,26 +88,29 @@ awk -v base_file="$tmp/base.txt" '
       next
     }
     status = "ok"
-    if (a > ba[key] * 1.10 && a - ba[key] >= 2) { status = "REGRESSION"; bad++ }
+    if ((a > ba[key] * 1.10 && a - ba[key] >= 2) ||
+        (b > bb[key] * 1.10 && b - bb[key] >= 64)) { status = "REGRESSION"; bad++ }
     printf "%-11s %-52s %4d -> %-4d allocs/op   %7d -> %-7d B/op   %9.0f -> %-9.0f ns/op\n", status, short, ba[key], a, bb[key], b, bn[key], ns
   }
   END {
     for (key in ba) if (!(key in seen)) {
       short = key; sub(/^.*go-common\//, "", short)
-      printf "GONE        %s (present at the base, missing at HEAD)\n", short
+      printf "MISSING     %s (present at the base, missing at HEAD)\n", short
+      bad++
     }
     exit bad > 0 ? 1 : 0
   }' "$tmp/head.txt" | tee "$tmp/report.txt" || true # the verdict is read from the report below
 
-if grep -q '^REGRESSION' "$tmp/report.txt"; then
+if grep -Eq '^(REGRESSION|MISSING)' "$tmp/report.txt"; then
   cat >&2 <<'MSG'
 
-bench-gate: FAIL. allocs/op grew by more than 10% (and at least 2) on a hot path
-listed above. Every service pays these costs on every request, so find the new
+bench-gate: FAIL. A benchmark disappeared, allocs/op grew by more than 10% (and
+at least 2), or B/op grew by more than 10% (and at least 64 bytes) on a hot path
+listed above. Restore missing benchmarks; for allocation growth, find the new
 allocation (`go test -bench NAME -benchmem -memprofile mem.out`), or, if the
 extra work is the point of the change, say so in the PR and CHANGELOG.md and
 re-baseline by merging.
 MSG
   exit 1
 fi
-echo "bench-gate: no allocation regressions"
+echo "bench-gate: no allocation regressions or missing benchmarks"

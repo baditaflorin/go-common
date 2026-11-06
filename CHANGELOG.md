@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.116.5] - 2026-11-06
+
+### Changed
+
+- Benchmark CI now rejects allocated-byte regressions and removed baseline benchmarks, with fixture tests for threshold boundaries and failed benchmark runs. CPU timing remains advisory on shared runners.
+- The proxy authentication retry regression invokes one refresh synchronously, removing a startup-timer race that produced spurious failures under CI load.
+
 ## [0.116.4] - 2026-11-06
 
 ### Fixed

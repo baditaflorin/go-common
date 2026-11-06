@@ -371,20 +371,27 @@ func TestRetryablePageError(t *testing.T) {
 	}
 }
 
-// A bad API key (401) is not hammered: one request per refresh, then the loop backoff takes over.
+// A bad API key (401) is not retried within one refresh. Exercise that
+// operation directly so a valid later refresh cannot race a startup assertion.
 func TestWebshareDirect_AuthErrorIsNotRetriedWithinARefresh(t *testing.T) {
-	fastRetries(t, 50*time.Millisecond, 100*time.Millisecond)
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		http.Error(w, "bad token", http.StatusUnauthorized)
 	}))
 	defer srv.Close()
-	withWebshareDirectBaseURL(t, srv.URL)
-	s := newTestSupplier(t)
-	time.Sleep(20 * time.Millisecond) // the first refresh has failed once; the next retry is at least 25 ms away
-	if n := calls.Load(); n != 1 {
-		t.Fatalf("API saw %d requests right after start, want exactly 1 for a 401", n)
+	s := &webshareDirectSupplier{
+		apiKey: "test-key", baseURL: srv.URL + "/", httpClient: srv.Client(),
+		retryBase: time.Millisecond, retryMax: 2 * time.Millisecond,
 	}
-	_ = s
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	err := s.refresh(ctx)
+	var apiErr *webshareAPIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnauthorized {
+		t.Fatalf("refresh error = %v, want unauthorized API error", err)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("API saw %d requests within one refresh, want exactly 1 for a 401", n)
+	}
 }
