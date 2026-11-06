@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.123.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** WithMaxAttempts values below one now select one total attempt, matching their documented contract, rather than silently leaving the default of three attempts.
+  - summary: WithMaxAttempts(0) and negative values now perform one attempt, preventing undocumented repeated upstream calls.
+
 ## [0.122.0] - 2026-11-06
 
 ### Fixed
