@@ -3,6 +3,13 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.122.0",
+      "date": "2026-11-06",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "Resilience policies execute no callback for an already-cancelled context and start no further attempts after cancellation."
+    },
+    {
       "version": "v0.121.0",
       "date": "2026-11-06",
       "class": "breaking",
