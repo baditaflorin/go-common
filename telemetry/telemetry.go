@@ -590,7 +590,6 @@ func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	)
 	defer span.End()
 	clone := req.Clone(ctx)
-	clone.Header = req.Header.Clone()
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(clone.Header))
 	resp, err := rt.base.RoundTrip(clone)
 	if err != nil {
