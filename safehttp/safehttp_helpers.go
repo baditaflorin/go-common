@@ -143,6 +143,7 @@ func NewClientE(opts ...Option) (*http.Client, error) {
 		inner:                rt,
 		traceURL:             o.traceURL,
 		backoffURL:           o.backoffURL,
+		persistHostState:     o.breakerState != nil,
 		degradedSink:         o.degradedSink,
 		observer:             o.observer,
 		proxyFn:              proxyFn,

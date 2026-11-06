@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.130.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** HTTP clients without backoff or persistence consumers no longer retain failed-host state. Active tracking and loaded persistence snapshots retain at most 8,192 hosts, prune expired entries opportunistically and omit expired entries from snapshots.
+  - summary: Failed-host tracking is inactive when unused; active and persisted tracking have an 8,192-host cap with expiry.
+
 ## [0.129.0] - 2026-11-06
 
 ### Fixed
