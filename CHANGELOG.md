@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.131.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** Positive authentication caches use bounded LRU and TTL storage, initialized on first successful verification, with a default capacity of 4,096 entries. MaxEntries configures capacity before first use; expiry covers both fresh and stale windows and snapshots omit expired entries.
+  - summary: Positive authentication caches default to 4,096 entries; configure MaxEntries and TTLs before the first verification.
+- The real-process memory smoke test validates positive samples without assuming RSS cannot decrease between independent reads; exact aggregation remains covered by deterministic fixtures.
+
 ## [0.130.0] - 2026-11-06
 
 ### Fixed

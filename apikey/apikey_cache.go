@@ -5,7 +5,13 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/baditaflorin/go-common/cache"
+	"github.com/baditaflorin/go-common/clock"
 )
+
+// DefaultCacheMaxEntries bounds the positive cache when MaxEntries is unset.
+const DefaultCacheMaxEntries = 4096
 
 // Cache wraps a Verifier with a positive-result-only cache for graceful
 // degradation when the keystore goes down. Negative results (ErrInvalidKey)
@@ -17,6 +23,8 @@ import (
 // Rationale: a brief keystore blip shouldn't disconnect every authenticated
 // caller. But cached results are short-lived enough that revoked keys
 // don't keep working forever.
+//
+// Configuration fields must be set before the first Verify call.
 type Cache struct {
 	Inner    Verifier
 	FreshTTL time.Duration // how long a cached hit counts as "fresh" (no upstream call)
@@ -28,8 +36,12 @@ type Cache struct {
 	// rate during outages, upstream call latency).
 	Observer CacheObserver
 
-	mu      sync.RWMutex
-	entries map[string]cacheEntry
+	// MaxEntries bounds cached positive results. Zero uses DefaultCacheMaxEntries.
+	MaxEntries int
+
+	mu      sync.Mutex
+	entries *cache.Cache[string, cacheEntry]
+	clk     clock.Clock
 }
 
 // Verify implements the Verifier interface with cache logic:
@@ -40,10 +52,14 @@ type Cache struct {
 //   - upstream ErrKeystoreUnavailable: if cache hit < StaleTTL, return
 //     cached + log; otherwise propagate ErrKeystoreUnavailable.
 func (c *Cache) Verify(ctx context.Context, key string) (*VerifyResult, error) {
-	now := time.Now()
-	c.mu.RLock()
-	entry, hadEntry := c.entries[key]
-	c.mu.RUnlock()
+	now := c.now()
+	c.mu.Lock()
+	var entry cacheEntry
+	var hadEntry bool
+	if c.entries != nil {
+		entry, hadEntry = c.entries.Get(key)
+	}
+	c.mu.Unlock()
 	if hadEntry && now.Sub(entry.verified) < c.FreshTTL {
 		r := entry.result
 		c.observe(CacheEvent{Result: CacheResultFresh, Age: now.Sub(entry.verified)})
@@ -55,7 +71,7 @@ func (c *Cache) Verify(ctx context.Context, key string) (*VerifyResult, error) {
 	dur := time.Since(start)
 	if err == nil {
 		c.mu.Lock()
-		c.entries[key] = cacheEntry{result: *res, verified: now}
+		c.storeLocked(key, cacheEntry{result: *res, verified: now})
 		c.mu.Unlock()
 		c.observe(CacheEvent{Result: CacheResultInnerOK, Duration: dur})
 		return res, nil
@@ -63,7 +79,9 @@ func (c *Cache) Verify(ctx context.Context, key string) (*VerifyResult, error) {
 	if errors.Is(err, ErrInvalidKey) {
 		// Definitive rejection — drop any cached entry for this key.
 		c.mu.Lock()
-		delete(c.entries, key)
+		if c.entries != nil {
+			c.entries.Delete(key)
+		}
 		c.mu.Unlock()
 		c.observe(CacheEvent{Result: CacheResultInnerInvalid, Duration: dur})
 		return nil, err
@@ -91,11 +109,42 @@ func (c *Cache) observe(ev CacheEvent) {
 // Snapshot returns a copy of the current cache for observability /
 // metrics endpoints. Don't use for auth decisions.
 func (c *Cache) Snapshot() map[string]time.Time {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	out := make(map[string]time.Time, len(c.entries))
-	for k, e := range c.entries {
-		out[k] = e.verified
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[string]time.Time{}
+	if c.entries != nil {
+		for key, entry := range c.entries.Snapshot() {
+			out[key] = entry.Value.verified
+		}
 	}
 	return out
+}
+
+func (c *Cache) now() time.Time {
+	if c.clk != nil {
+		return c.clk.Now()
+	}
+	return time.Now()
+}
+
+// storeLocked reuses the shared LRU/TTL primitive and allocates storage only
+// after the first successful verification. Retain entries long enough for both
+// configured windows, including configurations with FreshTTL greater than StaleTTL.
+func (c *Cache) storeLocked(key string, entry cacheEntry) {
+	if c.entries == nil {
+		ttl := max(c.FreshTTL, c.StaleTTL)
+		if ttl <= 0 {
+			return
+		}
+		capacity := c.MaxEntries
+		if capacity <= 0 {
+			capacity = DefaultCacheMaxEntries
+		}
+		clk := c.clk
+		if clk == nil {
+			clk = clock.Real()
+		}
+		c.entries = cache.New[string, cacheEntry](capacity, ttl, cache.WithClock[string, cacheEntry](clk))
+	}
+	c.entries.Set(key, entry)
 }

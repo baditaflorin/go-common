@@ -179,6 +179,29 @@ func (c *Cache[K, V]) Len() int {
 	return c.lru.Len()
 }
 
+// Snapshot returns a shallow copy of live entries, including entries within
+// the configured stale window. It removes expired entries without refreshing
+// their LRU position. Mutating the returned map does not change the cache;
+// pointer-valued V values still refer to the same underlying objects.
+func (c *Cache[K, V]) Snapshot() map[K]Entry[V] {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.clk.Now()
+	out := make(map[K]Entry[V], len(c.items))
+	for el := c.lru.Front(); el != nil; {
+		next := el.Next()
+		it := el.Value.(*item[K, V])
+		stale := !now.Before(it.expires)
+		if stale && (c.staleWindow <= 0 || !now.Before(it.expires.Add(c.staleWindow))) {
+			c.evict(el)
+		} else {
+			out[it.key] = Entry[V]{Value: it.value, Stale: stale, Expires: it.expires}
+		}
+		el = next
+	}
+	return out
+}
+
 // Purge removes all entries.
 func (c *Cache[K, V]) Purge() {
 	c.mu.Lock()
