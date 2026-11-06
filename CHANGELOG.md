@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.119.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** Cached successful authentication is served stale only for ErrKeystoreUnavailable while the caller context remains live. Unexpected verifier failures, cancellation and deadlines propagate instead of becoming successful authentication. Wrapped outage errors remain supported.
+  - summary: Stale authentication is limited to genuine keystore outages; unrelated errors and cancellation now propagate.
+
 ## [0.118.0] - 2026-11-06
 
 ### Fixed
