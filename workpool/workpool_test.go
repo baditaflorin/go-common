@@ -69,16 +69,30 @@ func TestSubmitCtxCancel(t *testing.T) {
 func TestObserverFires(t *testing.T) {
 	phases := map[Phase]int{}
 	var mu sync.Mutex
+	finished := make(chan struct{})
 	SetDefaultObserver(observerFunc(func(ev Event) {
+		if ev.Pool != "obs" {
+			return // Other tests' finishing callbacks may outlive their Wait.
+		}
 		mu.Lock()
 		phases[ev.Phase]++
 		mu.Unlock()
+		if ev.Phase == PhaseFinished {
+			close(finished)
+		}
 	}))
 	defer SetDefaultObserver(nil)
 
 	p := New("obs", 1)
 	_ = p.Submit(func() {})
 	p.Wait()
+	// Wait observes task completion, not observer completion. The production
+	// callback runs after wg.Done so an observer can re-enter Wait or Close.
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("finished observer callback did not run")
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if phases[PhaseStarted] != 1 || phases[PhaseFinished] != 1 {
