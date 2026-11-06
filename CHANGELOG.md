@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.116.6] - 2026-11-06
+
+### Fixed
+
+- Graph reporting that is not configured no longer allocates its event ring, random source or sender goroutine. Subprocess regression tests hold disabled startup heap and goroutine costs near zero while preserving configured credential rotation.
+
 ## [0.116.5] - 2026-11-06
 
 ### Changed

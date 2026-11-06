@@ -142,17 +142,23 @@ func ensureInit() *pkgState {
 func bootstrap(serviceID, version string, identified bool) *pkgState {
 	cfg := loadConfig()
 	counters := &atomicCounters{}
-	r := newRing(cfg.bufferSize)
 	s := &pkgState{
 		cfg:        cfg,
 		serviceID:  serviceID,
 		identified: identified,
 		version:    version,
-		ring:       r,
 		counters:   counters,
-		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
-	s.sender = newSender(cfg, serviceID, version, r, counters)
+	// Configuration is fixed at bootstrap. A disabled or incomplete writer
+	// still exposes identity and zero counters, but needs neither a buffer nor
+	// a timer goroutine. A configured key file counts even while unavailable:
+	// its sender must remain able to notice a later credential rotation.
+	if !cfg.eventEmissionConfigured() {
+		return s
+	}
+	s.ring = newRing(cfg.bufferSize)
+	s.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+	s.sender = newSender(cfg, serviceID, version, s.ring, counters)
 	go s.sender.run()
 	return s
 }
