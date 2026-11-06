@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.118.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** Worker-pool shutdown wakes blocked submitters and atomically prevents new task registration; cancelled submissions are rejected before admission. Close waits for all accepted work and observer callbacks remain outside the admission lock.
+  - summary: Pool Close rejects and wakes pending submissions, waits for admitted work, and prevents tasks from starting after it returns.
+
 ## [0.117.0] - 2026-11-06
 
 ### Fixed

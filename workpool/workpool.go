@@ -36,6 +36,7 @@ type Pool struct {
 
 	closedMu sync.Mutex
 	closed   bool
+	done     chan struct{}
 
 	inFlight   atomic.Int64
 	queueDepth atomic.Int64 // callers parked in Submit waiting for a slot
@@ -57,6 +58,7 @@ func New(name string, size int) *Pool {
 	return &Pool{
 		name: name,
 		sem:  make(chan struct{}, size),
+		done: make(chan struct{}),
 	}
 }
 
@@ -85,6 +87,9 @@ func (p *Pool) SubmitCtx(ctx context.Context, task func()) error {
 	if task == nil {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if p.isClosed() {
 		return ErrClosed
 	}
@@ -92,17 +97,33 @@ func (p *Pool) SubmitCtx(ctx context.Context, task func()) error {
 	emit(Event{Pool: p.name, Phase: PhaseQueued, InFlight: p.inFlight.Load(), QueueDepth: p.queueDepth.Load()})
 	select {
 	case p.sem <- struct{}{}:
+	case <-p.done:
+		p.queueDepth.Add(-1)
+		emit(Event{Pool: p.name, Phase: PhaseCanceled, InFlight: p.inFlight.Load(), QueueDepth: p.queueDepth.Load()})
+		return ErrClosed
 	case <-ctx.Done():
 		p.queueDepth.Add(-1)
 		emit(Event{Pool: p.name, Phase: PhaseCanceled, InFlight: p.inFlight.Load(), QueueDepth: p.queueDepth.Load()})
 		return ctx.Err()
 	}
 	p.queueDepth.Add(-1)
-	if p.isClosed() {
+	// Registration and Close's state change share one lock: Close cannot
+	// observe an empty WaitGroup while an admitted task is about to add to it.
+	p.closedMu.Lock()
+	if p.closed {
+		p.closedMu.Unlock()
 		<-p.sem
+		emit(Event{Pool: p.name, Phase: PhaseCanceled, InFlight: p.inFlight.Load(), QueueDepth: p.queueDepth.Load()})
 		return ErrClosed
 	}
+	if err := ctx.Err(); err != nil {
+		p.closedMu.Unlock()
+		<-p.sem
+		emit(Event{Pool: p.name, Phase: PhaseCanceled, InFlight: p.inFlight.Load(), QueueDepth: p.queueDepth.Load()})
+		return err
+	}
 	p.wg.Add(1)
+	p.closedMu.Unlock()
 	p.inFlight.Add(1)
 	emit(Event{Pool: p.name, Phase: PhaseStarted, InFlight: p.inFlight.Load(), QueueDepth: p.queueDepth.Load()})
 	go func() {
@@ -120,16 +141,23 @@ func (p *Pool) SubmitCtx(ctx context.Context, task func()) error {
 // TrySubmit starts task only if a slot is immediately available.
 // Returns true on success, false if the pool is full or closed.
 func (p *Pool) TrySubmit(task func()) bool {
-	if task == nil || p.isClosed() {
+	if task == nil {
+		return false
+	}
+	p.closedMu.Lock()
+	if p.closed {
+		p.closedMu.Unlock()
 		return false
 	}
 	select {
 	case p.sem <- struct{}{}:
 	default:
+		p.closedMu.Unlock()
 		emit(Event{Pool: p.name, Phase: PhaseShed, InFlight: p.inFlight.Load(), QueueDepth: p.queueDepth.Load()})
 		return false
 	}
 	p.wg.Add(1)
+	p.closedMu.Unlock()
 	p.inFlight.Add(1)
 	emit(Event{Pool: p.name, Phase: PhaseStarted, InFlight: p.inFlight.Load(), QueueDepth: p.queueDepth.Load()})
 	go func() {
@@ -154,7 +182,10 @@ func (p *Pool) Wait() {
 // finish. Safe to call multiple times.
 func (p *Pool) Close() {
 	p.closedMu.Lock()
-	p.closed = true
+	if !p.closed {
+		p.closed = true
+		close(p.done)
+	}
 	p.closedMu.Unlock()
 	p.wg.Wait()
 }
@@ -172,7 +203,7 @@ const (
 	PhaseQueued   Phase = "queued"   // a Submit caller is waiting for a slot
 	PhaseStarted  Phase = "started"  // a task obtained a slot and began running
 	PhaseFinished Phase = "finished" // a task returned and released its slot
-	PhaseCanceled Phase = "canceled" // a Submit caller's ctx fired before getting a slot
+	PhaseCanceled Phase = "canceled" // a queued task was not admitted because its context or pool closed
 	PhaseShed     Phase = "shed"     // TrySubmit refused because no slot was free
 )
 
