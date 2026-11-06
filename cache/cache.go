@@ -85,9 +85,11 @@ func New[K comparable, V any](maxSize int, ttl time.Duration, opts ...Option[K, 
 	c := &Cache[K, V]{
 		maxSize: maxSize,
 		ttl:     ttl,
-		items:   make(map[K]*list.Element, maxSize),
-		lru:     list.New(),
-		clk:     clock.Real(),
+		// maxSize is a bound, not expected occupancy. Quiet services should
+		// not reserve the full cache before their first insertion.
+		items: make(map[K]*list.Element),
+		lru:   list.New(),
+		clk:   clock.Real(),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -181,7 +183,7 @@ func (c *Cache[K, V]) Len() int {
 func (c *Cache[K, V]) Purge() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.items = make(map[K]*list.Element, c.maxSize)
+	c.items = make(map[K]*list.Element)
 	c.lru.Init()
 }
 
