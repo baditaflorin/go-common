@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,6 +47,53 @@ import (
 // rather than silently serving an empty tool list.
 func WithMCP() Option {
 	return func(s *Server) { s.mcpEnabled = true }
+}
+
+// DefaultMaxMCPResponseBytes bounds a tool's buffered HTTP response to 4 MiB.
+const DefaultMaxMCPResponseBytes int64 = 4 << 20
+
+// WithMCPResponseLimit sets the maximum bytes buffered for a tool result.
+// Exceeding the limit returns an MCP error instead of a truncated success.
+// The limit must be positive; applications serving larger tool results can
+// explicitly raise it.
+func WithMCPResponseLimit(maxBytes int64) Option {
+	if maxBytes <= 0 {
+		panic("server: MCP response limit must be positive")
+	}
+	return func(s *Server) { s.mcpResponseLimit = maxBytes }
+}
+
+var errMCPResponseLimit = errors.New("MCP tool response exceeds configured byte limit")
+
+type mcpResponseRecorder struct {
+	*httptest.ResponseRecorder
+	ctx      context.Context
+	limit    int64
+	exceeded bool
+}
+
+func (w *mcpResponseRecorder) Write(p []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if w.exceeded || int64(len(p)) > w.limit-int64(w.Body.Len()) {
+		w.exceeded = true
+		return 0, errMCPResponseLimit
+	}
+	return w.ResponseRecorder.Write(p)
+}
+
+// WriteString must also use the bounded path: embedding ResponseRecorder
+// would otherwise promote its unbounded io.StringWriter implementation.
+func (w *mcpResponseRecorder) WriteString(s string) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if w.exceeded || int64(len(s)) > w.limit-int64(w.Body.Len()) {
+		w.exceeded = true
+		return 0, errMCPResponseLimit
+	}
+	return w.ResponseRecorder.WriteString(s)
 }
 
 // mountMCP builds one MCP tool per agent.Tool in s.AgentContract and
@@ -106,6 +154,9 @@ func mcpToolHandler(s *Server, t agent.Tool) sdkmcp.ToolHandler {
 	}
 
 	return func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		if err := ctx.Err(); err != nil {
+			return mcpErrorResult(err.Error()), nil
+		}
 		var args map[string]any
 		if len(req.Params.Arguments) > 0 {
 			if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
@@ -119,8 +170,18 @@ func mcpToolHandler(s *Server, t agent.Tool) sdkmcp.ToolHandler {
 		}
 		copyRequestContext(req, httpReq)
 
-		rec := httptest.NewRecorder()
+		limit := s.mcpResponseLimit
+		if limit <= 0 {
+			limit = DefaultMaxMCPResponseBytes
+		}
+		rec := &mcpResponseRecorder{ResponseRecorder: httptest.NewRecorder(), ctx: ctx, limit: limit}
 		s.Mux.ServeHTTP(rec, httpReq)
+		if err := ctx.Err(); err != nil {
+			return mcpErrorResult(err.Error()), nil
+		}
+		if rec.exceeded {
+			return mcpErrorResult(errMCPResponseLimit.Error()), nil
+		}
 
 		body, _ := io.ReadAll(rec.Result().Body)
 		result := &sdkmcp.CallToolResult{

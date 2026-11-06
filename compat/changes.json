@@ -3,6 +3,13 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.125.0",
+      "date": "2026-11-06",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "MCP responses default to a 4 MiB body limit; use WithMCPResponseLimit to explicitly support larger buffered tool results."
+    },
+    {
       "version": "v0.124.0",
       "date": "2026-11-06",
       "class": "breaking",

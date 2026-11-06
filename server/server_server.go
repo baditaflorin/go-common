@@ -119,6 +119,9 @@ type Server struct {
 	// after every option has run, so WithAgent/WithAgentFromEmbed and
 	// WithMCP can be passed in either order.
 	mcpEnabled bool
+	// mcpResponseLimit bounds the in-process tool result buffer. Zero uses
+	// DefaultMaxMCPResponseBytes.
+	mcpResponseLimit int64
 
 	// routes are the patterns registered through Handle, HandleFunc,
 	// HandlePublic and the server's own mounts, and publicPrefixes are the
