@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -121,6 +122,10 @@ var (
 	// to inspect Retry-After without parsing an error string.
 	ErrRenderBusy = errors.New("fleetfetch: renderer at capacity")
 
+	// ErrArchiveUnavailable means an archive-only fetch returned a cache-side 503.
+	// It is distinct from an archive miss and never triggers a live fallback.
+	ErrArchiveUnavailable = errors.New("fleetfetch: Common Crawl cache unavailable")
+
 	// ErrProxyConnectForbidden means the fallback HTTP proxy rejected the
 	// CONNECT tunnel with a target-policy 403. This is not a fetch-cache
 	// failure, even when a preceding cache 502 is also present in the chain.
@@ -158,6 +163,30 @@ func (e *CacheAuthError) Error() string {
 // the status and whether the error came from the open circuit.
 func (e *CacheAuthError) Unwrap() error { return ErrCacheAuth }
 
+// ArchiveUnavailableError retains Retry-After on an archive-only cache-side
+// 503, whether caused by admission pressure or archive unavailability. It
+// does not identify which condition occurred and does not schedule a retry.
+type ArchiveUnavailableError struct {
+	StatusCode int
+	RetryAfter string
+}
+
+func (e *ArchiveUnavailableError) Error() string {
+	if e == nil {
+		return ErrArchiveUnavailable.Error()
+	}
+	return fmt.Sprintf("fleetfetch: Common Crawl cache status %d", e.StatusCode)
+}
+func (e *ArchiveUnavailableError) Unwrap() error { return ErrArchiveUnavailable }
+
+// RetryDelay converts Retry-After into a delay without performing a retry.
+func (e *ArchiveUnavailableError) RetryDelay(now time.Time) (time.Duration, bool) {
+	if e == nil {
+		return 0, false
+	}
+	return retryAfterDelay(e.RetryAfter, now)
+}
+
 // RenderBusyError preserves the structured load-shed response returned by
 // the fetch cache. RetryAfter is the exact wire value (seconds or HTTP-date)
 // so a coordinator can propagate it without losing information.
@@ -188,13 +217,23 @@ func (e *RenderBusyError) Unwrap() error { return ErrRenderBusy }
 // RetryDelay converts Retry-After into a non-negative delay. Both forms
 // allowed by RFC 9110 are accepted: integer seconds and an HTTP date.
 func (e *RenderBusyError) RetryDelay(now time.Time) (time.Duration, bool) {
-	if e == nil || strings.TrimSpace(e.RetryAfter) == "" {
+	if e == nil {
 		return 0, false
 	}
-	value := strings.TrimSpace(e.RetryAfter)
+	return retryAfterDelay(e.RetryAfter, now)
+}
+
+func retryAfterDelay(raw string, now time.Time) (time.Duration, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, false
+	}
 	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
 		if seconds < 0 {
 			seconds = 0
+		}
+		if seconds > math.MaxInt64/int64(time.Second) {
+			return 0, false
 		}
 		return time.Duration(seconds) * time.Second, true
 	}

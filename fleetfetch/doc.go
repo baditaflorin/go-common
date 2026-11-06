@@ -63,6 +63,10 @@
 // one unshared direct origin request per waiting service and prevents raw
 // HTML from being mistaken for post-JS evidence.
 //
+// Archive-only cache-side 503 responses return ErrArchiveUnavailable and
+// *ArchiveUnavailableError with Retry-After intact. They never fall back to a
+// live origin, and the client does not automatically retry.
+//
 // A *slow* cache is treated differently from a *dead* one. When the
 // request to the cache exceeds the client timeout — typically a cold
 // miss while the cache fetches a slow origin — the default is NOT to

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.116.4] - 2026-11-06
+
+### Fixed
+
+- Preserve Retry-After in a typed error for archive-only cache 503 responses, without automatic retries or live fallback.
+
 ## [0.116.3] - 2026-11-06
 
 ### Security
