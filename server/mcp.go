@@ -26,7 +26,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -183,9 +182,8 @@ func mcpToolHandler(s *Server, t agent.Tool) sdkmcp.ToolHandler {
 			return mcpErrorResult(errMCPResponseLimit.Error()), nil
 		}
 
-		body, _ := io.ReadAll(rec.Result().Body)
 		result := &sdkmcp.CallToolResult{
-			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: string(body)}},
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: rec.Body.String()}},
 		}
 		if rec.Code >= 400 {
 			result.IsError = true
