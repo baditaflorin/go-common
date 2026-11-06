@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.121.1] - 2026-11-06
+
+### Fixed
+
+- Empty generic caches no longer reserve map storage for their configured maximum capacity, and Purge releases occupied storage instead of immediately reserving it again. Constructor and purge allocation regressions are covered alongside hit and churn benchmarks.
+
 ## [0.121.0] - 2026-11-06
 
 ### Fixed
