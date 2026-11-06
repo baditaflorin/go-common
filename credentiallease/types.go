@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -121,7 +122,9 @@ func (l *Lease) ExpiresAt() time.Time {
 // Do sends one authenticated request to the target origin fixed by the lease
 // request. It clones req, applies the credential privately, bounds the request
 // by both the lease context and req.Context(), and disables redirects so a
-// custom credential header cannot be forwarded elsewhere.
+// custom credential header cannot be forwarded elsewhere. The caller must close
+// the response body; request cancellation remains active until it is closed or
+// reaches EOF.
 func (l *Lease) Do(client *http.Client, req *http.Request) (*http.Response, error) {
 	if l == nil || client == nil || req == nil || req.URL == nil || l.state == nil {
 		return nil, ErrLeaseClosed
@@ -153,26 +156,32 @@ func (l *Lease) Do(client *http.Client, req *http.Request) (*http.Response, erro
 	}
 
 	l.state.credentialMu.RLock()
-	defer l.state.credentialMu.RUnlock()
 	if l.state.closed.Load() || len(l.state.credential) == 0 || !validHeaderValue(l.state.credential) {
+		l.state.credentialMu.RUnlock()
 		return nil, ErrLeaseClosed
 	}
 	callCtx, cancel := context.WithCancel(l.ctx)
 	stop := context.AfterFunc(req.Context(), cancel)
-	defer func() {
-		stop()
-		cancel()
-	}()
 	outbound := req.Clone(callCtx)
 	if outbound.Header == nil {
 		outbound.Header = make(http.Header)
 	}
 	outbound.Header.Set(name, valuePrefix+string(l.state.credential))
+	l.state.credentialMu.RUnlock()
+	cleanup := func() {
+		stop()
+		cancel()
+		outbound.Header.Del(name)
+	}
 	clientCopy := *client
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	started := time.Now()
 	resp, err := clientCopy.Do(outbound)
-	outbound.Header.Del(name)
+	if err != nil || resp == nil || resp.Body == nil || resp.Body == http.NoBody {
+		cleanup()
+	} else {
+		resp.Body = &leaseResponseBody{ReadCloser: resp.Body, cleanup: cleanup}
+	}
 	result, status := "http_error", 0
 	if err != nil {
 		result = "transport_error"
@@ -184,6 +193,32 @@ func (l *Lease) Do(client *http.Client, req *http.Request) (*http.Response, erro
 	}
 	observeEvent(l.observer, "use", result, status, time.Since(started))
 	return resp, err
+}
+
+// leaseResponseBody keeps the request context alive for streaming reads. Close
+// the underlying body before clearing the cloned request's credential: transports
+// are permitted to read request fields until the response body is closed.
+type leaseResponseBody struct {
+	io.ReadCloser
+	cleanup  func()
+	once     sync.Once
+	closeErr error
+}
+
+func (b *leaseResponseBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		_ = b.Close()
+	}
+	return n, err
+}
+
+func (b *leaseResponseBody) Close() error {
+	b.once.Do(func() {
+		b.closeErr = b.ReadCloser.Close()
+		b.cleanup()
+	})
+	return b.closeErr
 }
 
 func methodAllowed(methods []string, method string) bool {
