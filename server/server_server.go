@@ -177,11 +177,9 @@ func (s *Server) buildHTTPServer(addr string, h http.Handler) *http.Server {
 //	    log.Fatal(err)
 //	}
 //
-// Exception: with WithGracefulDrain a listen failure is not returned. Start
-// logs it and exits the process with status 1 (log.Fatalf), without running
-// its deferred cleanup. Run and RunTier log any error Start returns and exit
-// with status 1 too, so only a service that calls Start itself and ignores its
-// result can still end with status 0 after a listen failure.
+// Listen failures are returned with or without WithGracefulDrain, after deferred
+// cleanup runs. Run and RunTier log any error Start returns and exit with status
+// 1, so callers that use Start directly must handle its result too.
 //
 // Before it listens, Start checks the routes registered through Handle,
 // HandleFunc and the server's own mounts against the prefixes declared with
@@ -215,7 +213,7 @@ func (s *Server) Start() error {
 
 		err := httpSrv.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("server: ListenAndServe error: %v", err)
+			return fmt.Errorf("server: listen error: %w", err)
 		}
 		// Block until the drain goroutine finishes.
 		<-s.drain.shutdownDone

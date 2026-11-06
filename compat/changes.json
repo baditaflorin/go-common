@@ -3,6 +3,13 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.127.0",
+      "date": "2026-11-06",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "Graceful Server.Start returns listen errors; callers must handle them. Run and RunTier keep their exit-1 behavior."
+    },
+    {
       "version": "v0.126.0",
       "date": "2026-11-06",
       "class": "breaking",

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.127.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** Server.Start with graceful drain returns a wrapped listen error instead of calling log.Fatalf, allowing profiling, signal, listener and caller cleanup to unwind. Run and RunTier still terminate with exit status 1 on startup failure.
+  - summary: Graceful Server.Start returns listen errors; callers must handle them. Run and RunTier keep their exit-1 behavior.
+
+- Stabilize the worker observer regression by explicitly awaiting its finished callback instead of assuming task Wait also waits for observer delivery. Production completion ordering is unchanged.
+
 ## [0.126.0] - 2026-11-06
 
 ### Fixed
