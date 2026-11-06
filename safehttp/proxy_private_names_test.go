@@ -30,9 +30,7 @@ func TestProxySkippingPrivate_UnresolvableInternalNamesGoDirect(t *testing.T) {
 
 func TestProxySkippingPrivate_PublicNameStillProxied(t *testing.T) {
 	u, _ := url.Parse("https://public-name.example.com/")
-	proxySkipCacheMu.Lock()
-	proxySkipCache[u.Hostname()] = false
-	proxySkipCacheMu.Unlock()
+	proxySkipCache.Set(normHost(u.Hostname()), false)
 	got, err := proxySkippingPrivateWith(&http.Request{URL: u}, viaFakeProxy)
 	if err != nil || got != fakeProxy {
 		t.Fatalf("public name: proxy = %v, err = %v; want the configured proxy", got, err)

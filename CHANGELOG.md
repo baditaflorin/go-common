@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.129.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** Proxy bypass DNS decisions use the shared bounded cache with at most 8,192 hosts and a 30-second TTL. Transient lookup failures are not retained, expired decisions re-resolve, and existing private-address and SSRF checks remain intact.
+  - summary: Proxy DNS routing decisions expire after 30 seconds and retain at most 8,192 hosts instead of growing permanently.
+
 ## [0.128.1] - 2026-11-06
 
 ### Fixed

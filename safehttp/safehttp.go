@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/baditaflorin/go-common/cache"
 	"github.com/baditaflorin/go-common/internal/privatehost"
 )
 
@@ -517,12 +518,14 @@ func fleetRequireProxyEnv() bool {
 	return v == "1" || v == "true" || v == "yes"
 }
 
-// proxySkipCache remembers which hostnames resolve to private addresses so
-// the DNS lookup only happens once per unique host across all clients.
-var (
-	proxySkipCacheMu sync.RWMutex
-	proxySkipCache   = map[string]bool{}
+// Proxy decisions are short-lived optimizations, not SSRF authorization. The
+// guarded dialer still validates the connected IP after DNS and redirects.
+const (
+	proxySkipCacheTTL = 30 * time.Second
+	proxySkipCacheCap = 8192
 )
+
+var proxySkipCache = cache.New[string, bool](proxySkipCacheCap, proxySkipCacheTTL)
 
 // proxySkippingPrivate wraps http.ProxyFromEnvironment and returns nil (direct)
 // when the target host resolves entirely to private / loopback addresses.
@@ -540,6 +543,10 @@ func proxySkippingPrivate(req *http.Request) (*url.URL, error) {
 // injected: http.ProxyFromEnvironment reads the environment once per process,
 // which tests cannot vary.
 func proxySkippingPrivateWith(req *http.Request, viaProxy func(*http.Request) (*url.URL, error)) (*url.URL, error) {
+	return proxySkippingPrivateWithLookup(req, viaProxy, net.DefaultResolver.LookupHost, proxySkipCache)
+}
+
+func proxySkippingPrivateWithLookup(req *http.Request, viaProxy func(*http.Request) (*url.URL, error), lookup func(context.Context, string) ([]string, error), decisions *cache.Cache[string, bool]) (*url.URL, error) {
 	host := req.URL.Hostname()
 
 	// IP literal fast-path.
@@ -565,9 +572,7 @@ func proxySkippingPrivateWith(req *http.Request, viaProxy func(*http.Request) (*
 	}
 
 	// Cache lookup.
-	proxySkipCacheMu.RLock()
-	skip, cached := proxySkipCache[host]
-	proxySkipCacheMu.RUnlock()
+	skip, cached := decisions.Get(normHost(host))
 	if cached {
 		if skip {
 			return nil, nil
@@ -576,7 +581,7 @@ func proxySkippingPrivateWith(req *http.Request, viaProxy func(*http.Request) (*
 	}
 
 	// Resolve and check whether all addresses are private.
-	addrs, err := net.DefaultResolver.LookupHost(req.Context(), host)
+	addrs, err := lookup(req.Context(), host)
 	if err == nil && len(addrs) > 0 {
 		skip = true
 		for _, addr := range addrs {
@@ -586,9 +591,7 @@ func proxySkippingPrivateWith(req *http.Request, viaProxy func(*http.Request) (*
 				break
 			}
 		}
-		proxySkipCacheMu.Lock()
-		proxySkipCache[host] = skip
-		proxySkipCacheMu.Unlock()
+		decisions.Set(normHost(host), skip)
 	}
 
 	if skip {

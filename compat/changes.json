@@ -3,6 +3,13 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.129.0",
+      "date": "2026-11-06",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "Proxy DNS routing decisions expire after 30 seconds and retain at most 8,192 hosts instead of growing permanently."
+    },
+    {
       "version": "v0.128.0",
       "date": "2026-11-06",
       "class": "breaking",
