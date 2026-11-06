@@ -55,7 +55,7 @@ func NewGraphCollectors(reg prometheus.Registerer, serviceID string) *GraphColle
 		{"fleet_graph_events_dropped_total", "Fleet Graph events evicted from the full send ring before being sent.", func(s graph.Counters) int64 { return s.EventsDropped }},
 		{"fleet_graph_batches_sent_total", "Fleet Graph batches the collector accepted.", func(s graph.Counters) int64 { return s.BatchesSent }},
 		{"fleet_graph_batches_failed_total", "Fleet Graph batches that were not delivered (includes rejected batches).", func(s graph.Counters) int64 { return s.BatchesFailed }},
-		{"fleet_graph_batches_rejected_total", "Fleet Graph batches the collector refused for their content and that were dropped, so their events are lost.", func(s graph.Counters) int64 { return s.BatchesRejected }},
+		{"fleet_graph_batches_rejected_total", "Fleet Graph batches dropped after collector content rejection or because one encoded event exceeds the local byte limit.", func(s graph.Counters) int64 { return s.BatchesRejected }},
 		{"fleet_graph_events_dropped_invalid_identity_total", "Fleet Graph events dropped because GRAPH_SERVICE_ID is set but is not a valid service ID, so Graph emission is off for the process.", func(s graph.Counters) int64 { return s.EventsDroppedInvalidIdentity }},
 		{"fleet_graph_events_dropped_oversized_total", "Fleet Graph events dropped because their string fields exceed the retention budget.", func(s graph.Counters) int64 { return s.EventsDroppedOversized }},
 		{"fleet_graph_batches_sent_spiffe_total", "Fleet Graph batches the collector accepted over the SPIFFE mTLS path (a subset of batches_sent).", func(s graph.Counters) int64 { return s.BatchesSentSPIFFE }},

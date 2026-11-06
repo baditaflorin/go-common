@@ -35,6 +35,10 @@ const (
 	// sendRejected: the collector refused this exact batch and will refuse it
 	// again, so keeping it would block every later batch behind it.
 	sendRejected
+	// sendTooLarge is local: no request was made. flush splits the batch or
+	// drops one event that cannot fit alone, so a long observation cannot
+	// force an oversized POST or block every later observation.
+	sendTooLarge
 )
 
 // rejectedStatus reports whether an HTTP status means the collector refused
@@ -192,6 +196,20 @@ func (s *sender) flush(contexts ...context.Context) {
 			// leave the next batch for the next tick like any other failure.
 			s.pending = nil
 			return
+		case sendTooLarge:
+			s.pending = nil
+			if len(events) == 1 {
+				atomic.AddInt64(&s.counters.BatchesFailed, 1)
+				atomic.AddInt64(&s.counters.BatchesRejected, 1)
+				continue
+			}
+			// Every retry contains at most half as many events. This is an
+			// iterative split, preserving FIFO and failure retention without
+			// recursion or replaying a prefix the collector already accepted.
+			mid := len(events) / 2
+			s.pending = events[:mid]
+			s.tail = append(events[mid:], s.tail...)
+			continue
 		default:
 			// One failed batch must not turn into a burst that drains the
 			// remainder of the ring. Preserve the failed batch separately
@@ -237,6 +255,11 @@ func (s *sender) send(parent context.Context, events []Event) sendResult {
 	if err != nil {
 		atomic.AddInt64(&s.counters.BatchesFailed, 1)
 		return sendRetain
+	}
+	// eventBytes is only a cheap packing estimate: JSON escaping can expand
+	// strings up to sixfold. Enforce the real wire bound before either path.
+	if len(body) > maxBatchBytes {
+		return sendTooLarge
 	}
 	if mtls != nil {
 		code, err := s.post(parent, mtls, s.cfg.spiffeCollectorURL, body, "", serviceID, version)

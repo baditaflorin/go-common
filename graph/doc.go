@@ -73,6 +73,9 @@
 // fleet_graph_events_dropped_oversized_total. It never truncates an identity or
 // interrupts the HTTP request being observed. The ring's count limit therefore
 // also bounds the total queued string payload lengths during a collector outage.
+// The sender checks the actual JSON size before a POST. Oversized batches
+// split into smaller FIFO batches; an event that exceeds the encoded limit
+// alone is dropped locally and counted in BatchesFailed and BatchesRejected.
 //
 // Configuration is env-driven, read once at first use:
 //

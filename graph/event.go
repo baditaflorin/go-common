@@ -55,8 +55,9 @@ type Counters struct {
 	BatchesSent    int64 `json:"batches_sent"`
 	BatchesFailed  int64 `json:"batches_failed"`
 	// BatchesRejected is the subset of BatchesFailed the collector refused
-	// for the batch's own content (403, 400, 413, 415, 422). Those batches are
-	// dropped, not retried, so a nonzero value means events were lost.
+	// for content (403, 400, 413, 415, 422), plus single events that cannot fit
+	// the local encoded batch limit. They are dropped, not retried, so a
+	// nonzero value means events were lost.
 	BatchesRejected int64 `json:"batches_rejected"`
 	// EventsDroppedInvalidIdentity counts events that would have been recorded
 	// (Graph emission is configured) but were dropped because GRAPH_SERVICE_ID
