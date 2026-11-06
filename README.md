@@ -85,6 +85,15 @@ laptop. `scripts/fuzz.sh 2m` is the long version of the fuzz smoke, meant for a
 nightly job; a crashing input it finds must be fixed and then committed under
 `testdata/fuzz/` so plain `go test` replays it forever.
 
+The HTTP benchmarks keep incoming-ID and generated-ID requests separate:
+`BenchmarkRequestID`, `BenchmarkChainRequestIDLoggingMetrics` and
+`BenchmarkServerRequest` retain the incoming-ID baseline. The `GeneratedID`
+benchmarks clear the inbound header each iteration, since the middleware stamps
+it. Server benchmarks also cover normal access logging and parallel requests;
+each worker owns its request. Run them with `-run '^$'` so package tests do not
+pre-initialize the process-wide log skip list. Every server cohort uses the same
+`LOG_SKIP_PATHS=/bench` and discards log output while retaining JSON encoding.
+
 Every release needs a `CHANGELOG.md` entry. A change that removes or alters
 exported API, or changes a default or an environment variable, leads that entry
 with **BREAKING:**; see [docs/api-policy.md](docs/api-policy.md). A new package

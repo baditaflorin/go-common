@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.125.2] - 2026-11-06
+
+### Fixed
+
+- HTTP middleware benchmarks explicitly seed their existing incoming-request-ID baseline and add separate generated-ID, normal access-log and parallel-request cohorts. Fresh-ID cases clear each request header per iteration, exposing costs the reused fixture previously bypassed.
+
 ## [0.125.1] - 2026-11-06
 
 ### Fixed
