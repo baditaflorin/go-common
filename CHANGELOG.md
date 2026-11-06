@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.116.2] - 2026-11-06
+
+### Added
+
+- `proxysupplier.HTTPClientFailClosed` refuses requests while the selected supplier has no eligible proxy, preventing unintended direct egress during pool startup or exhaustion. Explicit bypass rules and the existing `HTTPClient` behavior are unchanged.
+
 ## [0.116.1] - 2026-11-05
 
 ### Fixed
