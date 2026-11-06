@@ -66,6 +66,9 @@ type scopeCacheEntry struct {
 // VerifyScope holds it only for cache lookup / update, never across
 // the network call.
 type scopeCache struct {
+	// owner is local to the client/cache object graph, never a global root.
+	// It prevents a copied Client from trusting another client's positives.
+	owner   *Client
 	mu      sync.Mutex
 	entries map[scopeCacheKey]*scopeCacheEntry
 	lru     *list.List // front = most recently used; values are scopeCacheKey
@@ -135,22 +138,20 @@ func (c *scopeCache) len() int {
 
 // ─── Client.VerifyScope ────────────────────────────────────────────────
 
-// scopeCache field is added to Client via accessor below to keep the
-// public Client struct stable. Lazy-init on first use under mu.
-var (
-	clientScopeCachesMu sync.Mutex
-	clientScopeCaches   = map[*Client]*scopeCache{}
-)
+// A shared initialization lock keeps Client copyable without retaining clients
+// in a global registry. Cache contents have their own mutex; no network call runs
+// under this lock. Copies always initialize independent caches, including when
+// the original had already verified scopes against a different keystore.
+var scopeCacheInitMu sync.Mutex
 
 func (c *Client) getScopeCache() *scopeCache {
-	clientScopeCachesMu.Lock()
-	defer clientScopeCachesMu.Unlock()
-	if sc, ok := clientScopeCaches[c]; ok {
-		return sc
+	scopeCacheInitMu.Lock()
+	defer scopeCacheInitMu.Unlock()
+	if c.scopeCache == nil || c.scopeCache.owner != c {
+		c.scopeCache = newScopeCache(scopeCacheMaxEntries, scopeCacheTTL)
+		c.scopeCache.owner = c
 	}
-	sc := newScopeCache(scopeCacheMaxEntries, scopeCacheTTL)
-	clientScopeCaches[c] = sc
-	return sc
+	return c.scopeCache
 }
 
 // VerifyScope checks that the principal identified by `key` is actually

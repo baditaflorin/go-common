@@ -3,6 +3,12 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.131.1",
+      "date": "2026-11-06",
+      "class": "breaking",
+      "summary": "Client has private owned scope-cache state; use keyed literals or NewClient. Copied clients verify scopes independently."
+    },
+    {
       "version": "v0.131.0",
       "date": "2026-11-06",
       "class": "breaking",

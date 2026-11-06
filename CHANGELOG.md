@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.131.1] - 2026-11-06
+
+### Fixed
+
+- **BREAKING:** Client now owns its scope cache privately instead of being retained by a process-global registry. External unkeyed Client literals must use keyed fields or NewClient. Copies initialize independent owner-bound caches so changing a copied client to another keystore cannot reuse prior grants.
+  - summary: Client has private owned scope-cache state; use keyed literals or NewClient. Copied clients verify scopes independently.
+
 ## [0.131.0] - 2026-11-06
 
 ### Fixed
