@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.116.3] - 2026-11-06
+
+### Security
+
+- Reject ambiguous numeric IPv4 forms before resolving or forwarding, avoiding differing address interpretations between resolvers and proxies.
+
 ## [0.116.2] - 2026-11-06
 
 ### Added
