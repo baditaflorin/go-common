@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.121.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** Graph Record drops events with more than 4 KiB of aggregate string fields and counts oversized drops. Accepted dynamic strings are copied to owned storage so short substrings cannot retain arbitrarily large input buffers; stable identities, directions and common methods are reused.
+  - summary: Graph events over 4 KiB of string fields are dropped and counted; retained event strings own bounded backing storage.
+
 ## [0.120.1] - 2026-11-06
 
 ### Fixed

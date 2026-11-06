@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log"
 	"math/rand"
+	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -203,12 +205,81 @@ func Record(e Event) {
 	if e.Direction == "in" && e.Target == "" {
 		e.Target = serviceID
 	}
+	if !eventFitsRetentionBudget(e) {
+		atomic.AddInt64(&s.counters.EventsDroppedOversized, 1)
+		return
+	}
+	// Request parsers and direct callers can pass a short substring backed by
+	// an arbitrarily large request/header buffer. Own dynamic strings before
+	// retaining them, while reusing process identity and standard constants.
+	e = ownEventStrings(e, serviceID)
 	_, dropped := s.ring.push(e)
 	atomic.AddInt64(&s.counters.EventsRecorded, 1)
 	atomic.AddInt64(&s.counters.EventsSampled, 1)
 	if dropped {
 		atomic.AddInt64(&s.counters.EventsDropped, 1)
 	}
+}
+
+func eventFitsRetentionBudget(e Event) bool {
+	remaining := MaxEventStringBytes
+	for _, field := range [...]string{e.Direction, e.Caller, e.Target, e.Path, e.Method} {
+		if len(field) > remaining {
+			return false
+		}
+		remaining -= len(field)
+	}
+	return true
+}
+
+func ownEventStrings(e Event, serviceID string) Event {
+	identity := func(v string) string {
+		switch v {
+		case "":
+			return ""
+		case serviceID:
+			return serviceID
+		case "unknown":
+			return "unknown"
+		case "external:unknown":
+			return "external:unknown"
+		default:
+			return strings.Clone(v)
+		}
+	}
+	e.Caller, e.Target = identity(e.Caller), identity(e.Target)
+	e.Path = strings.Clone(e.Path)
+	switch e.Direction {
+	case "in":
+		e.Direction = "in"
+	case "out":
+		e.Direction = "out"
+	default:
+		e.Direction = strings.Clone(e.Direction)
+	}
+	switch e.Method {
+	case http.MethodGet:
+		e.Method = http.MethodGet
+	case http.MethodHead:
+		e.Method = http.MethodHead
+	case http.MethodPost:
+		e.Method = http.MethodPost
+	case http.MethodPut:
+		e.Method = http.MethodPut
+	case http.MethodPatch:
+		e.Method = http.MethodPatch
+	case http.MethodDelete:
+		e.Method = http.MethodDelete
+	case http.MethodOptions:
+		e.Method = http.MethodOptions
+	case http.MethodConnect:
+		e.Method = http.MethodConnect
+	case http.MethodTrace:
+		e.Method = http.MethodTrace
+	default:
+		e.Method = strings.Clone(e.Method)
+	}
+	return e
 }
 
 // Stats returns a snapshot of the package counters. Suitable for

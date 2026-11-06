@@ -4,6 +4,12 @@ package graph
 // Collector accepts current and N+1; bump when adding optional fields.
 const SchemaVersion = 1
 
+// MaxEventStringBytes bounds the sum of the string field lengths Record admits
+// into the send ring. Oversized observations are dropped, never HTTP requests.
+// Together with GRAPH_BUFFER_SIZE this bounds queued telemetry payload bytes
+// during a collector outage; fields are not silently truncated into new identities.
+const MaxEventStringBytes = 4 << 10
+
 // Event is one emitted fleet HTTP observation. An instrumented caller can
 // record an outbound Event and an instrumented target can record an inbound
 // Event for the same end-to-end request. The collector aggregates emitted
@@ -58,6 +64,9 @@ type Counters struct {
 	// closed. A nonzero, rising value means the service emits nothing until
 	// the variable is fixed or unset.
 	EventsDroppedInvalidIdentity int64 `json:"events_dropped_invalid_identity"`
+	// EventsDroppedOversized counts observations whose string fields exceed
+	// MaxEventStringBytes before admission to the send ring.
+	EventsDroppedOversized int64 `json:"events_dropped_oversized"`
 	// BatchesSentSPIFFE is the subset of BatchesSent delivered over the SPIFFE
 	// mTLS path (GRAPH_SPIFFE_COLLECTOR_URL), without the writer key.
 	BatchesSentSPIFFE int64 `json:"batches_sent_spiffe"`
