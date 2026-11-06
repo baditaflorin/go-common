@@ -2,7 +2,7 @@ package metrics
 
 import (
 	"runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -214,7 +214,9 @@ func (s *Stats) Snapshot() Stats {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 
-	p50, p95, p99 := computePercentiles(rawCopy)
+	// rawCopy is already a private snapshot. Sorting it in place avoids
+	// allocating and copying the full latency window a second time.
+	p50, p95, p99 := computePercentilesInPlace(rawCopy)
 
 	var lastReq time.Time
 	if ns := l.lastReqNanos.Load(); ns > 0 {
@@ -247,15 +249,19 @@ func (s *Stats) Snapshot() Stats {
 // computePercentiles returns the p50, p95, and p99 latency strings
 // from a slice of raw samples. Returns "n/a" when no samples exist.
 func computePercentiles(samples []time.Duration) (p50, p95, p99 string) {
+	return computePercentilesInPlace(slices.Clone(samples))
+}
+
+// computePercentilesInPlace consumes a private sample slice. Callers that
+// retain their input use computePercentiles instead.
+func computePercentilesInPlace(samples []time.Duration) (p50, p95, p99 string) {
 	if len(samples) == 0 {
 		return "n/a", "n/a", "n/a"
 	}
-	sorted := make([]time.Duration, len(samples))
-	copy(sorted, samples)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-	return sorted[percentileIdx(len(sorted), 50)].String(),
-		sorted[percentileIdx(len(sorted), 95)].String(),
-		sorted[percentileIdx(len(sorted), 99)].String()
+	slices.Sort(samples)
+	return samples[percentileIdx(len(samples), 50)].String(),
+		samples[percentileIdx(len(samples), 95)].String(),
+		samples[percentileIdx(len(samples), 99)].String()
 }
 
 // percentileIdx returns the 0-based index for the given percentile p

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.127.2] - 2026-11-06
+
+### Fixed
+
+- Metrics snapshots sort their already-private latency sample copy in place with typed slices.Sort, avoiding a second full-window copy and reflective sorting. The pure percentile helper retains input-preserving behavior and concurrent recording tests remain valid.
+
 ## [0.127.1] - 2026-11-06
 
 ### Fixed
