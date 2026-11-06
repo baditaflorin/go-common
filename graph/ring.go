@@ -55,6 +55,9 @@ func (r *ring) drain(max int) []Event {
 	out := make([]Event, max)
 	for i := 0; i < max; i++ {
 		out[i] = r.buf[r.tail]
+		// The drained copy owns these strings now. An empty slot must not
+		// retain paths and identities until the ring wraps around again.
+		r.buf[r.tail] = Event{}
 		r.tail = (r.tail + 1) % r.cap
 	}
 	r.size -= max

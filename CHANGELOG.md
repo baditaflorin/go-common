@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.116.7] - 2026-11-06
+
+### Fixed
+
+- Drained graph ring slots are cleared immediately so already-sent event strings can be reclaimed before the ring wraps. A partial-drain and wraparound regression preserves FIFO order and queued events.
+
 ## [0.116.6] - 2026-11-06
 
 ### Fixed
