@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/baditaflorin/go-common/internal/strictjson"
 	"github.com/baditaflorin/go-common/spiffe"
 )
 
@@ -264,12 +265,13 @@ func (m *TaskManager) BeginTask(ctx context.Context) (*Task, error) {
 		Proof     string    `json:"proof"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	decodeErr := dec.Decode(&out)
-	var trailing any
-	trailingErr := dec.Decode(&trailing)
-	if resp.StatusCode != http.StatusCreated || decodeErr != nil || trailingErr != io.EOF || !validLeaseID(out.TaskID) || !validBearerToken(out.Proof) || out.ExpiresAt.IsZero() || !out.ExpiresAt.After(time.Now()) || out.ExpiresAt.After(time.Now().Add(m.taskTTL)) {
+	decodeErr := strictjson.Decode(raw, &out)
+	if resp.StatusCode != http.StatusCreated || decodeErr != nil || !validLeaseID(out.TaskID) || !validBearerToken(out.Proof) || out.ExpiresAt.IsZero() || !out.ExpiresAt.After(time.Now()) || out.ExpiresAt.After(time.Now().Add(m.taskTTL)) {
+		if decodeErr != nil {
+			cleanup := responseCleanupStrings(raw, "task_id", "proof")
+			out.TaskID, out.Proof = cleanup[0], cleanup[1]
+			clear(cleanup)
+		}
 		m.discardTask(ctx, out.TaskID, out.Proof)
 		out.Proof = ""
 		return nil, ErrTaskCreateFailed

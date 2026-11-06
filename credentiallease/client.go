@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baditaflorin/go-common/internal/strictjson"
 	"github.com/baditaflorin/go-common/spiffe"
 )
 
@@ -363,16 +364,11 @@ func (c *Client) acquire(ctx context.Context, identityToken string, request Requ
 		return leaseResponse{}, resp.StatusCode, ErrInvalidLease
 	}
 	defer zero(raw)
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&out); err != nil {
-		c.cleanupMalformedResponse(ctx, identityToken, out.LeaseID)
-		out.Credential = ""
-		return leaseResponse{}, resp.StatusCode, ErrInvalidLease
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		c.cleanupMalformedResponse(ctx, identityToken, out.LeaseID)
+	if err := strictjson.Decode(raw, &out); err != nil {
+		// Duplicate rejection runs before decoding, so recover only an
+		// unambiguous cleanup ID rather than trusting a last-value-wins decode.
+		cleanup := responseCleanupStrings(raw, "lease_id")
+		c.cleanupMalformedResponse(ctx, identityToken, cleanup[0])
 		out.Credential = ""
 		return leaseResponse{}, resp.StatusCode, ErrInvalidLease
 	}
