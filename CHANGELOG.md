@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.125.1] - 2026-11-06
+
+### Fixed
+
+- MCP response text is read directly from its existing response buffer, avoiding a second io.ReadAll buffer and temporary http.Response. Multi-write body and error-status regressions preserve tool semantics, with 1 KiB and 1 MiB replay benchmarks.
+
 ## [0.125.0] - 2026-11-06
 
 ### Fixed
