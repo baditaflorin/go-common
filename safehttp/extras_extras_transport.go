@@ -115,6 +115,7 @@ type extrasTransport struct {
 
 	// trace-emit failure log rate-limiter (unix seconds)
 	lastTraceErrLog atomic.Int64
+	traceEmitter    *legacyTraceEmitter // nil uses the bounded process-wide sender
 
 	// fetch-cache debug log rate-limiter (unix seconds). Only used when
 	// SAFEHTTP_FETCHCACHE_DEBUG is set — see fetchCacheDebug.
@@ -343,7 +344,7 @@ func (t *extrasTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			errStr = err.Error()
 		}
-		go t.emitTrace(traceFields{
+		t.queueTrace(traceFields{
 			Caller:     t.caller,
 			Host:       host,
 			Method:     method,
@@ -521,7 +522,7 @@ func (t *extrasTransport) consultBackoff(parentCtx context.Context, host string,
 	}
 }
 
-func (t *extrasTransport) emitTrace(s traceFields) {
+func (t *extrasTransport) emitTrace(parent context.Context, s traceFields) {
 	defer func() {
 		// Belt-and-braces: a panicking trace emit must never
 		// crash the calling service.
@@ -554,7 +555,7 @@ func (t *extrasTransport) emitTrace(s traceFields) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), coordinatorConnectTimeout+coordinatorReadTimeout)
+	ctx, cancel := context.WithTimeout(parent, coordinatorConnectTimeout+coordinatorReadTimeout)
 	defer cancel()
 
 	cli := coordinatorClient

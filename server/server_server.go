@@ -253,6 +253,11 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) shutdownTelemetry() {
+	traceCtx, traceCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	if err := safehttp.ShutdownTraceEmission(traceCtx); err != nil {
+		log.Printf("server: legacy trace shutdown error: %v", err)
+	}
+	traceCancel()
 	graphCtx, graphCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := graph.Shutdown(graphCtx); err != nil {
 		log.Printf("server: fleet graph shutdown error: %v", err)

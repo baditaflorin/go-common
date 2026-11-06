@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.132.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** Legacy asynchronous tracing admits at most 32 process-wide emissions and counts excess drops instead of starting an unbounded number of goroutines. ShutdownTraceEmission cancels and drains in-flight emission within the caller deadline; server shutdown invokes this final process-wide cleanup automatically.
+  - summary: Legacy trace emission is capped at 32 concurrent operations, counts drops, and is cancelled and drained during server shutdown.
+
 ## [0.131.1] - 2026-11-06
 
 ### Fixed
