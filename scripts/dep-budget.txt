@@ -66,32 +66,17 @@ shutdown
 middleware golang.org/x/sync
 middleware golang.org/x/time
 
-# safehttp imports telemetry (the OpenTelemetry SDK, the OTLP/HTTP exporter and,
-# through the exporter's protobuf definitions, gRPC) and graph, so every package that
-# imports safehttp inherits all of this. This is where the ratchet starts, not an
-# endorsement; the way to shrink it is for safehttp to stop importing telemetry.
-safehttp github.com/cenkalti/backoff/v5
+# Outbound tracing depends on the OTel API through internal/tracehttp, not the
+# configured SDK/exporter in telemetry. Keep the client-only dependency set small.
 safehttp github.com/cespare/xxhash/v2
-safehttp github.com/felixge/httpsnoop
 safehttp github.com/go-logr/logr
 safehttp github.com/go-logr/stdr
-safehttp github.com/google/uuid
-safehttp github.com/grpc-ecosystem/grpc-gateway/v2
 safehttp go.opentelemetry.io/auto/sdk
 safehttp go.opentelemetry.io/otel
-safehttp go.opentelemetry.io/otel/exporters/otlp/otlptrace
-safehttp go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp
 safehttp go.opentelemetry.io/otel/metric
-safehttp go.opentelemetry.io/otel/sdk
 safehttp go.opentelemetry.io/otel/trace
-safehttp go.opentelemetry.io/proto/otlp
-safehttp golang.org/x/net
-safehttp golang.org/x/sys
-safehttp golang.org/x/text
-safehttp google.golang.org/genproto/googleapis/api
-safehttp google.golang.org/genproto/googleapis/rpc
-safehttp google.golang.org/grpc
-safehttp google.golang.org/protobuf
 
 # selftest imports safehttp.
 selftest @safehttp
+# The mesh client's default transport uses the same lightweight observer stack.
+meshclient @safehttp

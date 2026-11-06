@@ -33,6 +33,7 @@ graph 87
 internal/graphidentity 86
 internal/privatehost 98
 internal/strictjson 73
+internal/tracehttp 98
 jsbundle 87
 ledger 81
 loadshed 95

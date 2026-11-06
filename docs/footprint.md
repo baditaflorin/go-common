@@ -91,3 +91,36 @@ prints the sizes. A new opt-out is one tag, one pair of files and one line in `s
   either is a few lines (the scratch builds above are that), but it saves nothing for the services that use it.
 - **Numbers are for this binary on this host.** They move a little with the Go patch release and the CPU; the
   ratios between the rows are what to trust.
+
+## Client-only tracing dependency split (2026-11-06)
+
+`safehttp` and `meshclient` now use `internal/tracehttp`, which imports the OpenTelemetry
+API without the configured SDK and OTLP exporter. `telemetry.NewTransport` remains a
+compatible forwarding wrapper. Application startup still configures tracing through
+`telemetry.Init`; trace scope, propagation, status attributes and privacy rules are unchanged.
+
+Measured with Go 1.26.5, linux/amd64, `CGO_ENABLED=0`, `-trimpath -ldflags='-s -w'`,
+comparing the pre-split commit `76184a8` against the split. Each fixture only constructs
+one client and prints its timeout or value, so these are executable sizes, not RSS:
+
+| Standalone client fixture | Before (bytes) | After (bytes) | Reduction |
+| --- | ---: | ---: | ---: |
+| `safehttp.NewClient` | 13,185,186 | 6,271,138 | 6,914,048 (52.4%) |
+| `meshclient.New` with its default transport | 13,131,938 | 5,779,618 | 7,352,320 (56.0%) |
+
+Both client packages reach 7 third-party modules instead of 22; the exporter, configured
+SDK, gRPC and protobuf no longer travel through these clients. The API itself still
+uses the separately named `go.opentelemetry.io/auto/sdk` module. `scripts/dep-budget.txt`
+holds the smaller set for both clients and `selftest`.
+
+These savings apply to tools that do not otherwise import the exporter or another gRPC
+user. A `server.New` service still initializes the tracing exporter itself, so this
+split does not promise the same size reduction for those services. Per-request work is
+the same as the existing instrumented transport; this change removes an import edge.
+
+A separate `safehttp`-only idle fixture was run in a network-disabled local Linux/arm64
+container, after forced GC and one second idle (medians of three fresh processes).
+RSS fell from 11,152 to 5,880 KiB; live Go heap fell from 302,064 to 120,328 bytes.
+Most of the RSS difference was executable pages: `Private_Clean` fell from 9,316 to
+4,604 KiB. These are local fixture measurements, not a fleet RAM forecast, and the
+approximately 182 KB live-heap reduction must not be described as a 5 MB heap saving.

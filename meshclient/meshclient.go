@@ -16,8 +16,8 @@ import (
 
 	"github.com/baditaflorin/go-common/degraded"
 	"github.com/baditaflorin/go-common/graph"
+	"github.com/baditaflorin/go-common/internal/tracehttp"
 	"github.com/baditaflorin/go-common/resilience"
-	"github.com/baditaflorin/go-common/telemetry"
 )
 
 // Mode says what a caller does when the sibling is unavailable. It has no default
@@ -144,7 +144,7 @@ func defaultTransport() http.RoundTripper {
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	}
-	return telemetry.NewTransport(graph.RoundTripper(t))
+	return tracehttp.NewTransport(graph.RoundTripper(t))
 }
 
 // Name returns the sibling's slug.
