@@ -411,6 +411,9 @@ func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.
 	if resp.StatusCode >= 500 && fetchedAt == "" {
 		if archiveOnly {
 			c.errs.Add(1)
+			if resp.StatusCode == http.StatusServiceUnavailable {
+				return nil, &ArchiveUnavailableError{StatusCode: resp.StatusCode, RetryAfter: resp.Header.Get("Retry-After")}
+			}
 			return nil, fmt.Errorf("fleetfetch: Common Crawl cache status %d", resp.StatusCode)
 		}
 		if message, shed := loadshed.DecodeShed(resp.StatusCode, body); shed {
@@ -423,10 +426,6 @@ func (c *Client) fetchSource(ctx context.Context, targetURL string, maxAge time.
 			// direct request. Rendered modes cannot: doing so silently replaces
 			// post-JS evidence with raw HTML and creates unshared origin work.
 			if render != RenderDefault {
-				c.errs.Add(1)
-				return nil, busyErr
-			}
-			if archiveOnly {
 				c.errs.Add(1)
 				return nil, busyErr
 			}
