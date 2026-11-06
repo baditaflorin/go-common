@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.127.1] - 2026-11-06
+
+### Fixed
+
+- HTTP telemetry preserves incoming extraction and outgoing propagation while bypassing response capture for non-recording spans. Unsampled-context and original-writer regressions preserve propagation and sampled span attributes.
+- Stabilize endpoint regressions under loaded and forward-compatible runtimes: sequential failover tests disable incidental hedging, and hedge tests synchronize with actual response completion instead of sleeping.
+
 ## [0.127.0] - 2026-11-06
 
 ### Fixed

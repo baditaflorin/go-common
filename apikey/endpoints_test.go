@@ -3,6 +3,7 @@ package apikey
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -149,10 +150,10 @@ func TestVerify_401IsDefinitiveAndNotRetried(t *testing.T) {
 	local := newNode(t, 401, 0, "")
 	peer := newNode(t, 200, 0, "should-not-be-asked")
 	c := meshClient(local.srv.URL, peer.srv.URL)
+	c.HedgeDelay = time.Hour // This checks definitive failover, not a racing hedge.
 	if _, err := c.Verify(context.Background(), "ak_bad"); !errors.Is(err, ErrInvalidKey) {
 		t.Fatalf("got %v", err)
 	}
-	time.Sleep(100 * time.Millisecond) // past the hedge delay
 	if peer.hits.Load() != 0 {
 		t.Fatalf("a 401 must not be re-asked elsewhere (peer saw %d requests)", peer.hits.Load())
 	}
@@ -163,6 +164,7 @@ func TestVerify_5xxMovesOn(t *testing.T) {
 	sick := newNode(t, 503, 0, "")
 	peer := newNode(t, 200, 0, "bob")
 	c := meshClient(sick.srv.URL, peer.srv.URL)
+	c.HedgeDelay = time.Hour // Observe the 5xx before testing sequential failover.
 	if res, err := c.Verify(context.Background(), "ak_x"); err != nil || res.User != "bob" {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -195,6 +197,7 @@ func TestBreakerMovesAFailingNodeToTheBack(t *testing.T) {
 	sick := newNode(t, 503, 0, "")
 	peer := newNode(t, 200, 0, "bob")
 	c := meshClient(sick.srv.URL, peer.srv.URL)
+	c.HedgeDelay = time.Hour // Each threshold attempt must record its actual 503.
 	for i := 0; i < breakerThreshold; i++ {
 		if _, err := c.Verify(context.Background(), "ak_x"); err != nil {
 			t.Fatal(err)
@@ -370,11 +373,49 @@ func hedgeAware(t *testing.T, user string) (*httptest.Server, *[]string, *sync.M
 	return srv, &seen, &mu
 }
 
+type endpointRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f endpointRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type notifyingResponseBody struct {
+	io.ReadCloser
+	notify func()
+}
+
+func (b *notifyingResponseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.notify()
+	return err
+}
+
 func TestVerify_HedgeIsMarkedFailoverIsNot(t *testing.T) {
 	resetBreakers()
-	slow := newNode(t, 200, 700*time.Millisecond, "first")
+	hedgeFinished := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hedgeFinished:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set(header.AuthUser, "first")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(slow.Close)
+	var signalOnce sync.Once
 	peer, seen, mu := hedgeAware(t, "peer")
-	c := meshClient(slow.srv.URL, peer.URL)
+	c := meshClient(slow.URL, peer.URL)
+	// Wait for the actual hedged response to be processed, not a wall-clock
+	// delay. Body.Close is deferred until verifyOnce has updated its breaker,
+	// so resetting the test's global breaker map below cannot race that update.
+	c.HTTPClient.Transport = endpointRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		resp, err := http.DefaultTransport.RoundTrip(r)
+		if err == nil && r.URL.Host == peer.Listener.Addr().String() {
+			resp.Body = &notifyingResponseBody{ReadCloser: resp.Body, notify: func() {
+				signalOnce.Do(func() { close(hedgeFinished) })
+			}}
+		}
+		return resp, err
+	})
 	res, err := c.Verify(context.Background(), "ak_limited")
 	if err != nil || res.User != "first" {
 		t.Fatalf("a hedge answered 409 must leave the decision to the first node: %+v %v", res, err)
@@ -390,6 +431,7 @@ func TestVerify_HedgeIsMarkedFailoverIsNot(t *testing.T) {
 	sick := newNode(t, 503, 0, "")
 	peer2, seen2, mu2 := hedgeAware(t, "peer")
 	c = meshClient(sick.srv.URL, peer2.URL)
+	c.HedgeDelay = time.Hour // Only a completed 5xx may trigger this failover.
 	if res, err := c.Verify(context.Background(), "ak_limited"); err != nil || res.User != "peer" {
 		t.Fatalf("a failover after a 5xx claims normally: %+v %v", res, err)
 	}
