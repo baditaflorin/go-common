@@ -3,6 +3,13 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.121.0",
+      "date": "2026-11-06",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "Graph events over 4 KiB of string fields are dropped and counted; retained event strings own bounded backing storage."
+    },
+    {
       "version": "v0.120.0",
       "date": "2026-11-06",
       "class": "breaking",

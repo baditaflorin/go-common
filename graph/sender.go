@@ -419,6 +419,7 @@ type atomicCounters struct {
 	// EventsDroppedInvalidIdentity counts events dropped because an invalid
 	// GRAPH_SERVICE_ID makes the identity fail closed.
 	EventsDroppedInvalidIdentity int64
+	EventsDroppedOversized       int64
 	// BatchesSentSPIFFE is the subset of BatchesSent delivered over the SPIFFE
 	// path; BatchesSPIFFEFallback counts batches sent with the writer key
 	// after the SPIFFE path failed for them.
@@ -435,6 +436,7 @@ func (c *atomicCounters) snapshot() Counters {
 		BatchesFailed:                atomic.LoadInt64(&c.BatchesFailed),
 		BatchesRejected:              atomic.LoadInt64(&c.BatchesRejected),
 		EventsDroppedInvalidIdentity: atomic.LoadInt64(&c.EventsDroppedInvalidIdentity),
+		EventsDroppedOversized:       atomic.LoadInt64(&c.EventsDroppedOversized),
 		BatchesSentSPIFFE:            atomic.LoadInt64(&c.BatchesSentSPIFFE),
 		BatchesSPIFFEFallback:        atomic.LoadInt64(&c.BatchesSPIFFEFallback),
 	}

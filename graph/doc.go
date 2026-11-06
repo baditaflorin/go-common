@@ -68,6 +68,11 @@
 // A batch the collector refuses for its content (403, 400, 413, 415, 422) is
 // dropped and counted in Counters.BatchesRejected instead of being retried
 // forever; 401, 408, 429 and 5xx keep the batch for a later flush.
+// Record drops an observation whose string field lengths total more than
+// MaxEventStringBytes (4 KiB), counted in EventsDroppedOversized and
+// fleet_graph_events_dropped_oversized_total. It never truncates an identity or
+// interrupts the HTTP request being observed. The ring's count limit therefore
+// also bounds the total queued string payload lengths during a collector outage.
 //
 // Configuration is env-driven, read once at first use:
 //
