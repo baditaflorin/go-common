@@ -179,7 +179,7 @@ steps:
       - event: push
         branch: main
 
-  # A hot-path benchmark must not start allocating more: allocs/op is compared
+  # A hot-path benchmark must not disappear or start allocating more: allocs/op and B/op are compared
   # with the merge base (see scripts/bench-gate.sh for why not ns/op).
   bench:
     image: golang:1.26
@@ -187,6 +187,7 @@ steps:
       CGO_ENABLED: "0"
     commands:
       - git config --global --add safe.directory '*'
+      - scripts/bench-gate-selftest.sh
       - scripts/bench-gate.sh
     depends_on: [refs]
     when:

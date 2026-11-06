@@ -68,7 +68,7 @@ Every change to the module has to pass, in CI (Woodpecker, `.woodpecker.yml`):
 | `scripts/vuln-check.sh` (`govulncheck`) | A reachable known vulnerability that is not in the reviewed, expiring allowlist `scripts/govulncheck-allow.txt` |
 | `scripts/forward-compat.sh` | A behaviour change Go makes for a newer `go` line (GODEBUG defaults): vet and the tests are run on a copy with the line raised, see [docs/releasing.md](docs/releasing.md) |
 | `scripts/apidiff-check.sh` | An incompatible API change that the changelog does not call BREAKING |
-| `scripts/bench-gate.sh` | A hot-path benchmark that started allocating more (allocs/op, against the merge base) |
+| `scripts/bench-gate.sh` | A hot-path benchmark that disappeared or started allocating more (allocs/op or B/op, against the merge base) |
 | `scripts/release-check.sh` | A CHANGELOG version that is malformed, already tagged, or not the next free one |
 | `scripts/fuzz-changed.sh` (short smoke of the packages the change touches; a push to main runs `scripts/fuzz.sh`, every target) | Panics and hangs on hostile input in the parsers |
 | `scripts/coverage-ratchet.sh` (pushes to main only; run it by hand on a pull request) | A package whose statement coverage fell below its floor in [coverage/floors.txt](coverage/README.md), or a tested package with no floor |
