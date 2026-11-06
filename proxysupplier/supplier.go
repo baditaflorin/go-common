@@ -40,6 +40,7 @@
 package proxysupplier
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -51,6 +52,10 @@ import (
 
 	"github.com/baditaflorin/go-common/graph"
 )
+
+// ErrProxyUnavailable means a required proxy supplier has no eligible proxy.
+// Callers may retry when the supplier's pool has loaded or recovered.
+var ErrProxyUnavailable = errors.New("proxysupplier: no eligible proxy available")
 
 // Supplier resolves the upstream proxy URL for a single outbound request.
 // ProxyURL returns "" for a direct (no-proxy) connection.
@@ -276,6 +281,17 @@ func firstNonEmpty(values ...string) string {
 //	    client = safehttp.NewClient(...)
 //	}
 func HTTPClient(s Supplier, timeout time.Duration) *http.Client {
+	return httpClient(s, timeout, false)
+}
+
+// HTTPClientFailClosed is like HTTPClient, but refuses an outbound request
+// when its supplier has no eligible proxy. Explicit bypass rules are retained.
+// It returns nil for a nil or "none" supplier just like HTTPClient.
+func HTTPClientFailClosed(s Supplier, timeout time.Duration) *http.Client {
+	return httpClient(s, timeout, true)
+}
+
+func httpClient(s Supplier, timeout time.Duration, failClosed bool) *http.Client {
 	// Some suppliers, such as webshare_direct, populate their proxy pool
 	// asynchronously. Checking ProxyURL at construction time would return nil
 	// during that startup window and leave callers with a permanently nil
@@ -325,6 +341,9 @@ func HTTPClient(s Supplier, timeout time.Duration) *http.Client {
 				raw = s.ProxyURL()
 			}
 			if raw == "" {
+				if failClosed {
+					return nil, ErrProxyUnavailable
+				}
 				return nil, nil
 			}
 			return url.Parse(raw)
