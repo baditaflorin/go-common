@@ -3,6 +3,13 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.130.0",
+      "date": "2026-11-06",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "Failed-host tracking is inactive when unused; active and persisted tracking have an 8,192-host cap with expiry."
+    },
+    {
       "version": "v0.129.0",
       "date": "2026-11-06",
       "class": "breaking",

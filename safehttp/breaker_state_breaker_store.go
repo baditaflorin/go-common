@@ -113,7 +113,7 @@ func (s *breakerStore) loadFromDisk() {
 	s.tr.hostMu.Lock()
 	defer s.tr.hostMu.Unlock()
 	if s.tr.hostState == nil {
-		s.tr.hostState = make(map[string]hostFailure, len(st.Endpoints))
+		s.tr.hostState = make(map[string]hostFailure, min(len(st.Endpoints), hostFailureCap))
 	}
 	for _, e := range st.Endpoints {
 		if e.Host == "" {
@@ -125,11 +125,11 @@ func (s *breakerStore) loadFromDisk() {
 		if !e.TS.IsZero() && time.Since(e.TS) > hostFailureTTL {
 			continue
 		}
-		s.tr.hostState[e.Host] = hostFailure{
+		s.tr.storeFailureLocked(e.Host, hostFailure{
 			status:            e.Status,
 			retryAfterSeconds: e.RetryAfterSeconds,
 			ts:                e.TS,
-		}
+		})
 	}
 }
 
@@ -197,6 +197,7 @@ func (s *breakerStore) snapshotEndpoints() []persistedEndpoint {
 		// hostFailureTTL — they'll be dropped on the next
 		// recentFailure call anyway.
 		if now.Sub(f.ts) > hostFailureTTL {
+			delete(s.tr.hostState, host)
 			continue
 		}
 		out = append(out, persistedEndpoint{

@@ -107,8 +107,11 @@ type extrasTransport struct {
 	// hostState tracks the last bad response per host so the
 	// coordinator only gets consulted for follow-up calls (its
 	// purpose is to coordinate retries, not gate every request).
-	hostMu    sync.Mutex
-	hostState map[string]hostFailure
+	hostMu           sync.Mutex
+	hostState        map[string]hostFailure
+	persistHostState bool
+	nextHostPrune    time.Time
+	hostNow          func() time.Time
 
 	// trace-emit failure log rate-limiter (unix seconds)
 	lastTraceErrLog atomic.Int64
@@ -384,19 +387,18 @@ func (t *extrasTransport) appendDegraded(host string) {
 }
 
 func (t *extrasTransport) recordFailure(host string, status, retryAfter int) {
-	if host == "" {
+	if host == "" || (t.backoffURL == "" && !t.persistHostState) {
 		return
 	}
+	now := t.failureNow()
 	t.hostMu.Lock()
 	defer t.hostMu.Unlock()
-	if t.hostState == nil {
-		t.hostState = make(map[string]hostFailure)
-	}
-	t.hostState[host] = hostFailure{
+	t.pruneFailuresLocked(now)
+	t.storeFailureLocked(host, hostFailure{
 		status:            status,
 		retryAfterSeconds: retryAfter,
-		ts:                time.Now(),
-	}
+		ts:                now,
+	})
 }
 
 func (t *extrasTransport) clearFailure(host string) {
@@ -417,11 +419,44 @@ func (t *extrasTransport) recentFailure(host string) (hostFailure, bool) {
 	if !ok {
 		return hostFailure{}, false
 	}
-	if time.Since(f.ts) > hostFailureTTL {
+	if t.failureNow().Sub(f.ts) > hostFailureTTL {
 		delete(t.hostState, host)
 		return hostFailure{}, false
 	}
 	return f, true
+}
+
+// A full cache may be dropped: host state only avoids redundant coordinator
+// consults and is not an authorization or circuit-breaking boundary.
+const hostFailureCap = 8192
+
+func (t *extrasTransport) failureNow() time.Time {
+	if t.hostNow != nil {
+		return t.hostNow()
+	}
+	return time.Now()
+}
+
+func (t *extrasTransport) pruneFailuresLocked(now time.Time) {
+	if now.Before(t.nextHostPrune) {
+		return
+	}
+	for host, failure := range t.hostState {
+		if now.Sub(failure.ts) > hostFailureTTL {
+			delete(t.hostState, host)
+		}
+	}
+	t.nextHostPrune = now.Add(hostFailureTTL)
+}
+
+func (t *extrasTransport) storeFailureLocked(host string, failure hostFailure) {
+	if _, exists := t.hostState[host]; !exists && len(t.hostState) >= hostFailureCap {
+		t.hostState = nil
+	}
+	if t.hostState == nil {
+		t.hostState = make(map[string]hostFailure)
+	}
+	t.hostState[host] = failure
 }
 
 // consultBackoff POSTs the coordinator and sleeps up to wait_ms
