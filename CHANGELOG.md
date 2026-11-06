@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.120.0] - 2026-11-06
+
+### Fixed
+
+- **BREAKING (behavioural):** Lease.Do keeps request cancellation and credential cleanup attached to the response body until EOF or Close, rather than cancelling immediately after headers. Explicit caller/lease cancellation still terminates the request, and repeated Close is safe.
+  - summary: Lease.Do streaming bodies remain readable after headers; callers must close response bodies as required by net/http.
+
 ## [0.119.0] - 2026-11-06
 
 ### Fixed

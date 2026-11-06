@@ -3,6 +3,13 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.120.0",
+      "date": "2026-11-06",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "Lease.Do streaming bodies remain readable after headers; callers must close response bodies as required by net/http."
+    },
+    {
       "version": "v0.119.0",
       "date": "2026-11-06",
       "class": "breaking",
