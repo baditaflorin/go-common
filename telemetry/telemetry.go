@@ -560,6 +560,13 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(attribute.String("http.request.method", r.Method)),
 		)
+		if !span.IsRecording() {
+			// Context propagation still runs for disabled/unsampled tracing,
+			// but status capture cannot add data to a nonrecording span.
+			next.ServeHTTP(w, r.WithContext(ctx))
+			span.End()
+			return
+		}
 		metrics := httpsnoop.CaptureMetrics(next, w, r.WithContext(ctx))
 		if metrics.Code > 0 {
 			span.SetAttributes(attribute.Int("http.response.status_code", metrics.Code))
