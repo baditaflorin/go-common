@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -273,6 +274,17 @@ func IsBlockedForHost(host string, ip net.IP) bool {
 	return IsBlocked(ip)
 }
 
+// Legacy numeric IPv4 spellings are interpreted differently by system DNS,
+// browsers, and proxies (for example 0177.0.0.1 may mean 177.0.0.1 or
+// loopback). Refuse these before resolving or handing the host to another
+// parser. Canonical IP literals continue through the ordinary IP policy.
+var ambiguousNumericIPv4 = regexp.MustCompile(`(?i)^(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+)){0,3}\.?$`)
+
+func isAmbiguousNumericIPv4(host string) bool {
+	host = strings.TrimSuffix(strings.TrimSpace(host), ".")
+	return net.ParseIP(host) == nil && ambiguousNumericIPv4.MatchString(host)
+}
+
 // GuardHost resolves host and returns ErrBlocked if any returned IP is in a
 // blocked range. Accepts a bare IP literal as well as a hostname. DNS is
 // revalidated with a 3-second timeout (DNS-rebind safe when combined with
@@ -288,6 +300,9 @@ func IsBlockedForHost(host string, ip net.IP) bool {
 func GuardHost(ctx context.Context, host string) error {
 	if host == "" {
 		return ErrMissingHost
+	}
+	if isAmbiguousNumericIPv4(host) {
+		return ErrBlocked
 	}
 	if RequiredFetchCacheFromContext(ctx) {
 		// Archive lookups never connect to the target host, so DNS is not a
@@ -335,6 +350,9 @@ func guardArchiveHost(host string) error {
 	}
 	if IsDomainDenied(host) {
 		return ErrDomainDenied
+	}
+	if isAmbiguousNumericIPv4(host) {
+		return ErrBlocked
 	}
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") ||
 		strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") ||
