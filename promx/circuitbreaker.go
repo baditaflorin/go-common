@@ -12,13 +12,14 @@ import (
 //
 //	fleet_circuit_state{service, upstream}        // 0=closed 1=open 2=half_open
 //	fleet_circuit_transitions_total{service, upstream, from, to, reason}
-//	fleet_circuit_trips_total{service, upstream}  // shortcut: transitions to open
+//	fleet_circuit_trips_total{service, upstream}  // transitions to open except neutral probe cancellation
 //
 // fleet_circuit_state is the visual signal — one line per
 // (service, upstream); a 1-line on a graph is a tripped breaker.
 // transitions_total captures the full state machine for forensic
 // drill-down; trips_total is the common "did this breaker trip?"
-// alert target.
+// alert target. Caller-cancelled probes retain their state/transition observations
+// but do not increment trips: they provide no evidence of an upstream failure.
 type CircuitCollectors struct {
 	service string
 
@@ -46,7 +47,7 @@ func NewCircuitCollectors(reg prometheus.Registerer) *CircuitCollectors {
 		}, []string{"service", "upstream", "from", "to", "reason"}),
 		trips: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "fleet_circuit_trips_total",
-			Help: "Total times a circuit-breaker transitioned to open.",
+			Help: "Total circuit-breaker transitions to open, excluding neutral probe cancellation.",
 		}, []string{"service", "upstream"}),
 	}
 	reg.MustRegister(c.state, c.transitions, c.trips)
@@ -57,7 +58,7 @@ func NewCircuitCollectors(reg prometheus.Registerer) *CircuitCollectors {
 func (c *CircuitCollectors) ObserveCircuit(ev circuitbreaker.Event) {
 	c.state.WithLabelValues(c.service, ev.Upstream).Set(float64(ev.To))
 	c.transitions.WithLabelValues(c.service, ev.Upstream, ev.From.String(), ev.To.String(), ev.Reason).Inc()
-	if ev.To == circuitbreaker.StateOpen && ev.From != circuitbreaker.StateOpen {
+	if ev.To == circuitbreaker.StateOpen && ev.From != circuitbreaker.StateOpen && ev.Reason != "probe_canceled" {
 		c.trips.WithLabelValues(c.service, ev.Upstream).Inc()
 	}
 }

@@ -82,6 +82,7 @@ type Breaker struct {
 	state           State
 	consecutiveFail int
 	openedAt        time.Time
+	probeGeneration uint64
 }
 
 // New constructs a breaker. Defaults: 5 consecutive failures to trip,
@@ -117,23 +118,60 @@ func (b *Breaker) State() State {
 // Allow returns nil if a request is allowed through, ErrOpen if the
 // breaker is open. When called in the open state and the open window
 // has elapsed, Allow transitions to half-open and returns nil
-// (allowing exactly one probe).
+// (allowing exactly one probe). Calls made while that probe is in flight are
+// rejected until Success or Failure records its result.
+//
+// Allow/Success/Failure do not carry request identities. A late result from a
+// previously admitted closed-state call cannot be distinguished from a probe
+// result after the open window elapses; callers must account for that limitation
+// when allowing calls that can outlive OpenFor.
 func (b *Breaker) Allow() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.allowLocked()
+}
+
+// AllowWithCancel admits a call like Allow, additionally returning a callback
+// that neutrally abandons this call's recovery probe. Closed-state admissions
+// return a nil callback and do not allocate. Callers must still report outcomes
+// through Success or Failure; calling cancel afterwards is harmless.
+//
+// An abandoned probe makes the next recovery attempt eligible immediately,
+// without recording an upstream failure or extending the cooldown. The callback
+// is idempotent and cannot release a later probe or one owned by another call.
+func (b *Breaker) AllowWithCancel() (cancel func(), err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := b.allowLocked(); err != nil {
+		return nil, err
+	}
+	if b.state != StateHalfOpen {
+		return nil, nil
+	}
+	generation := b.probeGeneration
+	return func() { b.cancelProbe(generation) }, nil
+}
+
+func (b *Breaker) cancelProbe(generation uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.state == StateHalfOpen && b.probeGeneration == generation {
+		// openedAt already predates the elapsed open window: retaining it
+		// permits a replacement probe without penalizing caller cancellation.
+		b.transitionLocked(StateOpen, "probe_canceled")
+	}
+}
+
+func (b *Breaker) allowLocked() error {
 	switch b.state {
 	case StateClosed:
 		return nil
 	case StateHalfOpen:
-		// The first caller to land here while half-open is the probe.
-		// Subsequent concurrent callers are blocked until the probe
-		// resolves and either resets to closed or trips back to open.
-		// Implementation: flip to open until the probe finishes.
-		b.transitionLocked(StateOpen, "probe_in_flight")
-		b.openedAt = time.Now()
-		return nil
+		// The caller that transitioned from open already owns the probe.
+		return ErrOpen
 	default: // StateOpen
 		if time.Since(b.openedAt) >= b.openFor {
+			b.probeGeneration++
 			b.transitionLocked(StateHalfOpen, "open_window_elapsed")
 			return nil
 		}
