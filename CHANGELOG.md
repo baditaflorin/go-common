@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.128.1] - 2026-11-06
+
+### Fixed
+
+- Outbound HTTP instrumentation now lives in an internal trace-API adapter. safehttp and meshclient import it directly while telemetry.NewTransport remains a compatible forwarding wrapper. Their dependency budgets shrink from 22 to 7 third-party modules; server.New still imports exporter initialization intentionally. Dependency, coverage and propagation regressions guard the boundary. The tracing privacy regression uses the supported OpenTelemetry value formatter.
+
 ## [0.128.0] - 2026-11-06
 
 ### Fixed

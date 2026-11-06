@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/baditaflorin/go-common/credfile"
+	"github.com/baditaflorin/go-common/internal/tracehttp"
 	"github.com/baditaflorin/go-common/secrets"
 	"github.com/felixge/httpsnoop"
 	"go.opentelemetry.io/otel"
@@ -582,35 +583,8 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 // It records only method, response status, and transport-error type; the URL,
 // query string, request/response headers, and bodies are intentionally omitted.
 func NewTransport(base http.RoundTripper) http.RoundTripper {
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	return &roundTripper{base: base}
-}
+	return tracehttp.NewTransport(base)
 
-type roundTripper struct{ base http.RoundTripper }
-
-func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	ctx, span := Tracer(instrumentationScope).Start(req.Context(), "HTTP "+req.Method,
-		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(attribute.String("http.request.method", req.Method)),
-	)
-	defer span.End()
-	clone := req.Clone(ctx)
-	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(clone.Header))
-	resp, err := rt.base.RoundTrip(clone)
-	if err != nil {
-		span.SetStatus(codes.Error, "transport error")
-		span.SetAttributes(attribute.String("error.type", fmt.Sprintf("%T", err)))
-		return resp, err
-	}
-	if resp != nil {
-		span.SetAttributes(attribute.Int("http.response.status_code", resp.StatusCode))
-		if resp.StatusCode >= http.StatusInternalServerError {
-			span.SetStatus(codes.Error, "server error")
-		}
-	}
-	return resp, nil
 }
 
 func isProbe(path string) bool {

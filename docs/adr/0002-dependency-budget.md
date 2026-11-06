@@ -150,3 +150,14 @@ What each would take out of go-common's module graph, by itself:
   it costs least before anything depends on it.
 * The `telemetry` split above is done. The sets of `safehttp` and its dependents then drop,
   and the budget lines should follow them down.
+
+## Follow-up: lightweight outbound transport (2026-11-06)
+
+The outbound portion of decision 3 is implemented in `internal/tracehttp`.
+`safehttp` and `meshclient` import this API-only transport; the exported
+`telemetry.NewTransport` delegates to it for compatibility. Exporter initialization
+and server middleware remain in `telemetry`, where applications already configure them.
+The measured client dependency set is 7 modules rather than 22, and the `safehttp`,
+`meshclient` and `selftest` budgets now hold that smaller set. See
+[the footprint measurements](../footprint.md#client-only-tracing-dependency-split-2026-11-06)
+for client-only binary sizes and the limit on extrapolating them to server binaries.

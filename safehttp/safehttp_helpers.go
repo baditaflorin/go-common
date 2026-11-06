@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/baditaflorin/go-common/graph"
-	"github.com/baditaflorin/go-common/telemetry"
+	"github.com/baditaflorin/go-common/internal/tracehttp"
 	"net/http"
 	"net/url"
 	"os"
@@ -94,7 +94,7 @@ func NewClientE(opts ...Option) (*http.Client, error) {
 	// Keeping it inside extrasTransport preserves the transport's public
 	// wrapping contract while propagating context on real network/cache-client
 	// requests. Cache hits do not create a network span.
-	rt = telemetry.NewTransport(rt)
+	rt = tracehttp.NewTransport(rt)
 
 	// If any of the auto-trace / auto-backoff / degraded-sink opt-ins
 	// were set, wrap the transport once more so those hooks run on
