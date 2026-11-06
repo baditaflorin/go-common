@@ -38,6 +38,12 @@ fi
 
 # "Vulnerability #N: GO-YYYY-NNNN" appears only for reachable vulnerabilities.
 found="$(grep -oE '^Vulnerability #[0-9]+: GO-[0-9]+-[0-9]+' "$out" | grep -oE 'GO-[0-9]+-[0-9]+' | sort -u || true)"
+# Exit 3 is the tool's authoritative finding signal. If its human-readable
+# output changes, an empty parse must never turn that signal into a clean scan.
+if [ "$rc" -eq 3 ] && [ -z "$found" ]; then
+  echo "vuln-check: govulncheck reported vulnerabilities (exit 3), but no vulnerability IDs could be parsed; refusing a clean verdict" >&2
+  exit 1
+fi
 
 declare -A expires=()
 if [ -f "$allow_file" ]; then

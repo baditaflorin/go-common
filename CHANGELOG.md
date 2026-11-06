@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.125.3] - 2026-11-06
+
+### Fixed
+
+- The vulnerability gate rejects govulncheck exit code 3 when no finding IDs can be parsed, instead of reporting a clean scan. Fake-scanner regression fixtures cover changed or empty findings output, mixed allowlists, expiry, clean scans and execution failures.
+
 ## [0.125.2] - 2026-11-06
 
 ### Fixed
