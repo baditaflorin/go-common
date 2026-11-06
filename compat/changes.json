@@ -3,6 +3,14 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.127.3",
+      "date": "2026-11-06",
+      "class": "behavioural",
+      "qualifier": "patch-safe",
+      "summary": "Graph instrumentation queues bounded events during key-file rotation; only sending reads and requires the current key.",
+      "reason": "Aligns instrumentation with Record configured-state semantics while preserving fail-closed sender authentication."
+    },
+    {
       "version": "v0.127.0",
       "date": "2026-11-06",
       "class": "breaking",
