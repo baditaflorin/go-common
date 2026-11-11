@@ -3,6 +3,14 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.116.5",
+      "date": "2026-11-12",
+      "class": "behavioural",
+      "qualifier": "patch-safe",
+      "summary": "Proxy clients bound TCP dialing to 30 seconds and TLS handshakes to 10 seconds.",
+      "reason": "An urgent production resource leak warrants these standard Go timeout bounds on the pinned release line."
+    },
+    {
       "version": "v0.112.0",
       "date": "2026-10-31",
       "class": "breaking",

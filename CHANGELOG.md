@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.116.5] - 2026-11-12
+
+### Fixed
+
+- **BEHAVIOURAL (patch-safe):** Bound proxy TCP dialing to 30 seconds and TLS handshakes to 10 seconds to prevent abandoned connection setup from holding sockets indefinitely. Connections that exceed these limits now fail.
+  - summary: Proxy clients bound TCP dialing to 30 seconds and TLS handshakes to 10 seconds.
+  - reason: An urgent production resource leak warrants these standard Go timeout bounds on the pinned release line.
+
 ## [0.116.4] - 2026-11-06
 
 ### Fixed
