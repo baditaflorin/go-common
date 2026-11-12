@@ -316,6 +316,14 @@ func httpClient(s Supplier, timeout time.Duration, failClosed bool) *http.Client
 		disableKeepAlives = false
 	}
 	transport := &http.Transport{
+		// net/http may continue establishing a connection after a caller's
+		// request context expires. Bound both TCP setup and TLS negotiation so
+		// an abandoned proxy tunnel cannot remain open indefinitely.
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
 		// Proxy is called per-request; single-URL suppliers always return
 		// the same URL, multi-proxy suppliers pick a weighted-random one.
 		// NO_PROXY-style bypass: if the supplier's bypass rules match

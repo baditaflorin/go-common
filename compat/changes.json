@@ -3,6 +3,13 @@
   "note": "Generated from CHANGELOG.md by `go run ./scripts/whatchanged -gen`; do not edit by hand. The grammar is in docs/releasing.md.",
   "changes": [
     {
+      "version": "v0.133.0",
+      "date": "2026-11-12",
+      "class": "breaking",
+      "qualifier": "behavioural",
+      "summary": "Proxy-supplier clients bound TCP dialing to 30 seconds and TLS handshakes to 10 seconds."
+    },
+    {
       "version": "v0.132.0",
       "date": "2026-11-06",
       "class": "breaking",

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.133.0] - 2026-11-12
+
+### Fixed
+
+- **BREAKING (behavioural):** Proxy-supplier HTTP clients now bound TCP dialing to 30 seconds and TLS handshakes to 10 seconds, preventing abandoned connection setup from leaving proxy sockets open indefinitely. Very slow connections can now fail at these bounds.
+  - summary: Proxy-supplier clients bound TCP dialing to 30 seconds and TLS handshakes to 10 seconds.
+
 ## [0.132.1] - 2026-11-06
 
 ### Fixed
