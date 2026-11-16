@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -96,6 +98,60 @@ func TestDefaultFetchDelegate_RoutesGet(t *testing.T) {
 	}
 	if len(d.seenURLs) != 1 || !strings.Contains(d.seenURLs[0], "does-not-resolve.invalid") {
 		t.Fatalf("delegate did not see the request URL: %v", d.seenURLs)
+	}
+}
+
+func TestWithProxyURLPinsProxySkipsDefaultFetchCacheAndBlocksPrivateOrigin(t *testing.T) {
+	SetAllowedPrivateIPs([]net.IP{net.ParseIP("127.0.0.1")})
+	t.Cleanup(func() { SetAllowedPrivateIPs(nil) })
+	var selectedHits, envHits atomic.Int64
+	selectedProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		selectedHits.Add(1)
+		if !r.URL.IsAbs() || r.URL.Host != "192.0.2.10" || r.URL.Path != "/resource" {
+			t.Errorf("selected proxy received request URI %q", r.RequestURI)
+		}
+		_, _ = io.WriteString(w, "selected-proxy")
+	}))
+	defer selectedProxy.Close()
+	envProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envHits.Add(1)
+		_, _ = io.WriteString(w, "environment-proxy")
+	}))
+	defer envProxy.Close()
+	t.Setenv("HTTP_PROXY", envProxy.URL)
+	t.Setenv("http_proxy", "")
+	t.Setenv("HTTPS_PROXY", envProxy.URL)
+	t.Setenv("https_proxy", "")
+
+	delegate := &stubDelegate{status: http.StatusOK, body: "fetch-cache"}
+	SetDefaultFetchDelegate(delegate)
+	t.Cleanup(func() { SetDefaultFetchDelegate(nil) })
+	client, err := NewClientE(WithProxyURL(selectedProxy.URL))
+	if err != nil {
+		t.Fatal("NewClientE with explicit proxy:", err)
+	}
+	resp, err := client.Get("http://192.0.2.10/resource")
+	if err != nil {
+		t.Fatal("explicit proxy request:", err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	client.CloseIdleConnections()
+	if readErr != nil {
+		t.Fatal("read explicit proxy response:", readErr)
+	}
+	if string(body) != "selected-proxy" || selectedHits.Load() != 1 || envHits.Load() != 0 {
+		t.Fatalf("body=%q selected_proxy_hits=%d env_proxy_hits=%d; explicit proxy was not honored", body, selectedHits.Load(), envHits.Load())
+	}
+	if len(delegate.seenURLs) != 0 {
+		t.Fatalf("explicit proxy request was intercepted by default fetch delegate: %v", delegate.seenURLs)
+	}
+
+	if _, err := client.Get("http://127.0.0.2:8080/private"); err == nil || !strings.Contains(strings.ToLower(err.Error()), "blocked") {
+		t.Fatalf("private-origin request error = %v, want a blocked-address error", err)
+	}
+	if selectedHits.Load() != 1 || envHits.Load() != 0 {
+		t.Fatalf("private origin reached a proxy: selected=%d env=%d", selectedHits.Load(), envHits.Load())
 	}
 }
 

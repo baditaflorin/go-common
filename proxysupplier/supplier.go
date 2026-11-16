@@ -196,6 +196,7 @@ type WebsharePoolInfo struct {
 	PoolID     string
 	AccountID  string
 	Class      PoolClass
+	Default    bool // true when WEBSHARE_DEFAULT_POOL_ID pins this DC pool
 	Total      int
 	Eligible   int
 	InCooldown int
@@ -209,6 +210,13 @@ type WebsharePoolSelector interface {
 	SelectPoolID(poolID string) (WebshareSelection, error)
 	MarkSelectionResult(selection WebshareSelection, ok bool)
 	Pools() []WebsharePoolInfo
+}
+
+// WebshareDefaultSelector is the additive optional capability used by
+// process-level egress adapters. It does not change WebsharePoolSelector's
+// existing interface contract for consumers and test doubles.
+type WebshareDefaultSelector interface {
+	SelectDefaultPool() (WebshareSelection, error)
 }
 
 // WebsharePoolStateProvider is implemented by suppliers that expose bounded,
@@ -328,6 +336,11 @@ type Config struct {
 	// dedicated API-key file paths, classes, and optional weights. Secret
 	// contents are read only from the referenced files.
 	WebsharePoolsFile string
+
+	// WebshareDefaultPoolID pins Supplier.ProxyURL and egressproxy's default
+	// Webshare selection to one configured DC pool. Residential pools are not
+	// valid defaults; callers must explicitly select them through policy APIs.
+	WebshareDefaultPoolID string
 }
 
 // EnvConfig builds a Config by reading the canonical fleet env vars.
@@ -337,20 +350,21 @@ type Config struct {
 //	s   := proxysupplier.NewFromConfig(cfg)
 func EnvConfig() Config {
 	return Config{
-		Supplier:          strings.ToLower(strings.TrimSpace(os.Getenv("PROXY_SUPPLIER"))),
-		Host:              os.Getenv("PROXY_HOST"),
-		Port:              os.Getenv("PROXY_PORT"),
-		Username:          os.Getenv("PROXY_USERNAME"),
-		Password:          os.Getenv("PROXY_PASSWORD"),
-		Protocol:          os.Getenv("PROXY_PROTOCOL"),
-		ExternalProxyURL:  os.Getenv("EXTERNAL_PROXY_URL"),
-		ProxyURLs:         os.Getenv("PROXY_URLS"),
-		ProxyWeights:      os.Getenv("PROXY_WEIGHTS"),
-		NoProxy:           firstNonEmpty(os.Getenv("NO_PROXY"), os.Getenv("no_proxy")),
-		KeepAliveEnabled:  strings.EqualFold(strings.TrimSpace(os.Getenv("PROXY_KEEPALIVE_ENABLED")), "true"),
-		WebshareAPIKey:    os.Getenv("WEBSHARE_API_KEY"),
-		WebsharePlanID:    os.Getenv("WEBSHARE_PLAN_ID"),
-		WebsharePoolsFile: os.Getenv("WEBSHARE_POOLS_FILE"),
+		Supplier:              strings.ToLower(strings.TrimSpace(os.Getenv("PROXY_SUPPLIER"))),
+		Host:                  os.Getenv("PROXY_HOST"),
+		Port:                  os.Getenv("PROXY_PORT"),
+		Username:              os.Getenv("PROXY_USERNAME"),
+		Password:              os.Getenv("PROXY_PASSWORD"),
+		Protocol:              os.Getenv("PROXY_PROTOCOL"),
+		ExternalProxyURL:      os.Getenv("EXTERNAL_PROXY_URL"),
+		ProxyURLs:             os.Getenv("PROXY_URLS"),
+		ProxyWeights:          os.Getenv("PROXY_WEIGHTS"),
+		NoProxy:               firstNonEmpty(os.Getenv("NO_PROXY"), os.Getenv("no_proxy")),
+		KeepAliveEnabled:      strings.EqualFold(strings.TrimSpace(os.Getenv("PROXY_KEEPALIVE_ENABLED")), "true"),
+		WebshareAPIKey:        os.Getenv("WEBSHARE_API_KEY"),
+		WebsharePlanID:        os.Getenv("WEBSHARE_PLAN_ID"),
+		WebsharePoolsFile:     os.Getenv("WEBSHARE_POOLS_FILE"),
+		WebshareDefaultPoolID: strings.TrimSpace(os.Getenv("WEBSHARE_DEFAULT_POOL_ID")),
 	}
 }
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.133.2] - 2026-11-17
+
+### Added
+
+- Add an optional DC-only `WEBSHARE_DEFAULT_POOL_ID` for process-level pool pinning, preserve weighted DC routing when unset, and reject unknown or residential defaults fail-closed. Teach `egressproxy` to retain and report the exact typed Webshare selection for each upstream connection, avoiding cross-account cooldown updates when exit addresses overlap. Add safehttp's explicit `WithProxyURL` option for guarded, redirect-aware HTTP clients that select a proxy in code; add a safe pinned-default pool metric. Existing suppliers and the old `WebsharePoolSelector` interface remain compatible.
+
 ## [0.133.1] - 2026-11-16
 
 ### Added

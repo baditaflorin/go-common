@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/baditaflorin/go-common/proxysupplier"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -87,6 +88,19 @@ func (s *testSupplier) Marks() []mark {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]mark(nil), s.marks...)
+}
+
+type selectionReporterSupplier struct {
+	selection proxysupplier.WebshareSelection
+	marked    []proxysupplier.WebshareSelection
+	results   []bool
+}
+
+func (*selectionReporterSupplier) Name() string     { return "webshare_multi" }
+func (*selectionReporterSupplier) ProxyURL() string { return "" }
+func (s *selectionReporterSupplier) MarkSelectionResult(selection proxysupplier.WebshareSelection, ok bool) {
+	s.marked = append(s.marked, selection)
+	s.results = append(s.results, ok)
 }
 
 // keyedTestSupplier also implements proxysupplier.KeyedSupplier.

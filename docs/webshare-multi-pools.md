@@ -48,6 +48,14 @@ selection is always explicit and should be made only by the consumer's own
 typed fallback policy. The shared supplier does not retry requests or decide
 when a consumer may use a more expensive pool.
 
+`WEBSHARE_DEFAULT_POOL_ID` is an optional process-level route pin for services
+that need a named DC profile. It must match a configured `class: "dc"` pool;
+an unknown ID or a residential ID makes the supplier unavailable and fails
+closed. When unset, the existing capacity-weighted DC selection is unchanged.
+This setting does not enable browser-level residential egress or request-level
+pool switching. `proxysupplier_webshare_pool_default` identifies a pinned
+default pool without exposing plan IDs, key paths, or proxy credentials.
+
 `HTTPClientForSelection` pins an HTTP client to the exact selected proxy entry.
 Build a client for each selection/attempt; do not reuse it for another selection
 from the same pool. It accepts a custom dial function and redirect policy so

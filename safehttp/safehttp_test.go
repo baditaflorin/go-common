@@ -132,6 +132,18 @@ func TestNewClientDefaultOptions(t *testing.T) {
 	}
 }
 
+func TestWithProxyURLValidationAndConflicts(t *testing.T) {
+	if _, err := safehttp.NewClientE(safehttp.WithProxyURL("http://user:private-token@invalid host")); err == nil || !strings.Contains(err.Error(), "invalid explicit proxy") || strings.Contains(err.Error(), "private-token") {
+		t.Fatalf("invalid explicit proxy error = %v", err)
+	}
+	if _, err := safehttp.NewClientE(safehttp.WithProxyURL("http://proxy.example:8080"), safehttp.WithoutProxy()); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("explicit proxy + WithoutProxy error = %v", err)
+	}
+	if _, err := safehttp.NewClientE(safehttp.WithProxyURL("http://proxy.example:8080")); err != nil {
+		t.Fatalf("valid explicit proxy should not require process proxy env: %v", err)
+	}
+}
+
 func TestGuardedDialer(t *testing.T) {
 	dial := safehttp.GuardedDialer(false)
 	if dial == nil {

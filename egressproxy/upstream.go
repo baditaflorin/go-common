@@ -25,9 +25,10 @@ const firstAttemptShare = 0.6
 // upstream is one parsed upstream proxy. It never exposes the credentialed
 // URL: addr is host:port, auth is the ready Proxy-Authorization value.
 type upstream struct {
-	addr   string // host:port, no credentials
-	scheme string
-	auth   string // "Basic ..." or ""
+	addr      string // host:port, no credentials
+	scheme    string
+	auth      string                           // "Basic ..." or ""
+	selection *proxysupplier.WebshareSelection // exact typed pool entry, when available
 }
 
 var (
@@ -51,7 +52,22 @@ func (p *Proxy) pickUpstream(t Target, attempt int, avoid string) (*upstream, er
 		tries = 4
 	}
 	for i := 0; i < tries; i++ {
-		raw := p.rawUpstreamURL(t, attempt)
+		var raw string
+		var selection *proxysupplier.WebshareSelection
+		if selector, ok := p.cfg.Supplier.(proxysupplier.WebshareDefaultSelector); ok {
+			selected, err := selector.SelectDefaultPool()
+			if err != nil {
+				return nil, errNoUpstream
+			}
+			rawURL, err := selected.ProxyURL()
+			if err != nil {
+				return nil, errBadUpstream
+			}
+			raw = rawURL.String()
+			selection = &selected
+		} else {
+			raw = p.rawUpstreamURL(t, attempt)
+		}
 		if raw == "" {
 			return nil, errNoUpstream
 		}
@@ -63,6 +79,7 @@ func (p *Proxy) pickUpstream(t Target, attempt int, avoid string) (*upstream, er
 			return nil, errNoUpstream
 		}
 		up = u
+		up.selection = selection
 		if avoid == "" || u.addr != avoid {
 			break
 		}
@@ -139,9 +156,18 @@ func (p *Proxy) isSelf(addr string) bool {
 }
 
 // markResult reports an outcome to the supplier when it can take one.
-func (p *Proxy) markResult(addr string, ok bool) {
+func (p *Proxy) markResult(up *upstream, ok bool) {
+	if up == nil {
+		return
+	}
+	if up.selection != nil {
+		if reporter, is := p.cfg.Supplier.(proxysupplier.WebshareSelectionReporter); is {
+			reporter.MarkSelectionResult(*up.selection, ok)
+			return
+		}
+	}
 	if rr, is := p.cfg.Supplier.(proxysupplier.ResultReporter); is {
-		rr.MarkResult(addr, ok)
+		rr.MarkResult(up.addr, ok)
 	}
 }
 
