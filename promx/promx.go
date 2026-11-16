@@ -40,28 +40,29 @@ var (
 	// "duplicate metrics collector registration attempted". Guarded by
 	// its own mutex (not defaultMu) so collector constructors are free
 	// to call ServiceID() — which locks defaultMu — without deadlocking.
-	autoMu           sync.Mutex
-	autoEgress       *EgressCollectors
-	autoHTTP         *HTTPCollectors
-	autoAuth         *AuthCollectors
-	autoSelftest     *SelftestCollectors
-	autoDep          *DepCollectors
-	autoRateCoord    *RateCoordCollectors
-	autoPolicy       *PolicyCollectors
-	autoEnvelope     *EnvelopeCollectors
-	autoDegraded     *DegradedCollectors
-	autoAdmin        *AdminCollectors
-	autoBackoff      *BackoffCollectors
-	autoFleetFetch   *FleetFetchCollectors
-	autoCircuit      *CircuitCollectors
-	autoWorkpool     *WorkpoolCollectors
-	autoLoadshed     *LoadshedCollectors
-	autoBackoffCoord *BackoffCoordCollectors
-	autoWebshare     *WebshareDirectCollectors
-	autoCgroup       *CgroupCollectors
-	autoGraph        *GraphCollectors
-	autoCredfile     *CredfileCollectors
-	autoBoundReg     *prometheus.Registry // the registry the singletons are bound to
+	autoMu            sync.Mutex
+	autoEgress        *EgressCollectors
+	autoHTTP          *HTTPCollectors
+	autoAuth          *AuthCollectors
+	autoSelftest      *SelftestCollectors
+	autoDep           *DepCollectors
+	autoRateCoord     *RateCoordCollectors
+	autoPolicy        *PolicyCollectors
+	autoEnvelope      *EnvelopeCollectors
+	autoDegraded      *DegradedCollectors
+	autoAdmin         *AdminCollectors
+	autoBackoff       *BackoffCollectors
+	autoFleetFetch    *FleetFetchCollectors
+	autoCircuit       *CircuitCollectors
+	autoWorkpool      *WorkpoolCollectors
+	autoLoadshed      *LoadshedCollectors
+	autoBackoffCoord  *BackoffCoordCollectors
+	autoWebshare      *WebshareDirectCollectors
+	autoWebshareMulti *WebshareMultiCollectors
+	autoCgroup        *CgroupCollectors
+	autoGraph         *GraphCollectors
+	autoCredfile      *CredfileCollectors
+	autoBoundReg      *prometheus.Registry // the registry the singletons are bound to
 )
 
 // Init wires the shared registry for a service. Safe to call multiple

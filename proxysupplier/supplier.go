@@ -32,6 +32,15 @@
 //     PROXY_SUPPLIER=multi
 //     PROXY_URLS=http://u:p@host1:1338,http://u:p@host2:80
 //     PROXY_WEIGHTS=70,30
+//   - "webshare_direct" — a single Webshare API-key catalog, optionally
+//     narrowed with WEBSHARE_PLAN_ID; credentials are read from
+//     WEBSHARE_API_KEY as before.
+//   - "webshare_multi" — multiple named account-plan catalogs configured by
+//     WEBSHARE_POOLS_FILE. The strict JSON file contains safe pool/account
+//     labels, class, plan_id, api_key_file, and optional weight; API key
+//     contents are read only from the referenced files. The compatibility
+//     ProxyURL method selects DC pools only. Call WebsharePoolSelector for an
+//     explicit class or named-pool selection, including residential pools.
 //   - "none" / ""     — direct connection (default)
 //
 // A self-proxy guard is always applied: if the resolved URL routes back to
@@ -135,6 +144,86 @@ type KeyedSupplier interface {
 	ProxyURLForKey(key string) string
 }
 
+// PoolClass identifies the kind of Webshare pool selected by a caller.
+// The default ProxyURL implementation of webshare_multi selects only DC
+// pools; residential pools require an explicit class or pool-ID selection.
+type PoolClass string
+
+const (
+	PoolClassDC          PoolClass = "dc"
+	PoolClassResidential PoolClass = "residential"
+)
+
+// WebshareSelection is one exact Webshare proxy selection. Its public fields
+// are safe operational labels; credentials, plan IDs, and the raw proxy URL
+// are held privately and are never included in its formatted representation.
+// Use ProxyURL only to build the request transport, and do not log its result.
+type WebshareSelection struct {
+	PoolID    string
+	AccountID string
+	Class     PoolClass
+
+	owner    *webshareMultiSupplier
+	pool     *webshareNamedPool
+	entry    *webshareDirectEntry
+	proxyURL string
+}
+
+// String deliberately omits the credential-bearing proxy URL and entry
+// pointer so ordinary structured logs do not expose secrets.
+func (s WebshareSelection) String() string {
+	return fmt.Sprintf("WebshareSelection{PoolID:%q AccountID:%q Class:%q}", s.PoolID, s.AccountID, s.Class)
+}
+
+func (s WebshareSelection) GoString() string { return s.String() }
+
+// ProxyURL returns a copy of the credential-bearing URL for this selection.
+// Callers should pass it directly to an HTTP transport and never log it.
+func (s WebshareSelection) ProxyURL() (*url.URL, error) {
+	if s.proxyURL == "" || s.owner == nil || s.pool == nil || s.entry == nil {
+		return nil, ErrProxyUnavailable
+	}
+	u, err := url.Parse(s.proxyURL)
+	if err != nil || u.Scheme != "http" || s.entry == nil || u.Host != s.entry.addr {
+		return nil, ErrProxyUnavailable
+	}
+	return u, nil
+}
+
+// WebsharePoolInfo is the safe, non-secret health projection of a configured
+// pool. Plan IDs, key paths, API credentials, and entry addresses are omitted.
+type WebsharePoolInfo struct {
+	PoolID     string
+	AccountID  string
+	Class      PoolClass
+	Total      int
+	Eligible   int
+	InCooldown int
+}
+
+// WebsharePoolSelector provides explicit tier selection for callers that own
+// retry policy. Excluding prior pool IDs prevents retrying the same account
+// pool; residential pools are reached only when the caller explicitly asks.
+type WebsharePoolSelector interface {
+	SelectPool(class PoolClass, excludePoolIDs ...string) (WebshareSelection, error)
+	SelectPoolID(poolID string) (WebshareSelection, error)
+	MarkSelectionResult(selection WebshareSelection, ok bool)
+	Pools() []WebsharePoolInfo
+}
+
+// WebsharePoolStateProvider is implemented by suppliers that expose bounded,
+// non-secret per-pool health snapshots for metrics collection.
+type WebsharePoolStateProvider interface {
+	WebsharePoolStates() []WebsharePoolState
+}
+
+// WebshareSelectionReporter records the outcome against the exact pool entry
+// selected for a request, even if another configured account has the same
+// address. Implemented by WebsharePoolSelector.
+type WebshareSelectionReporter interface {
+	MarkSelectionResult(selection WebshareSelection, ok bool)
+}
+
 // StickyKeyHeader is the request header HTTPClient checks to opt a single
 // outbound request into KeyedSupplier selection instead of the supplier's
 // default round-robin. Set it before calling client.Do(req):
@@ -204,7 +293,10 @@ type Config struct {
 	// IP-reputation-based limiter. Deterministic round-robin across the
 	// full pool spreads load evenly instead.
 	WebshareAPIKey string
-
+	// WebsharePlanID optionally scopes webshare_direct to one plan. It is
+	// passed only as a catalog query parameter; it is never logged or exposed
+	// in pool metadata.
+	WebsharePlanID string
 	// KeepAliveEnabled controls whether HTTPClient's Transport reuses
 	// connections. Zero-value false preserves this package's original,
 	// unconditional behavior (DisableKeepAlives: true, a fresh proxy
@@ -230,6 +322,12 @@ type Config struct {
 	// choose to accept "a few connections see more traffic" in exchange
 	// for not re-paying handshake cost on every request.
 	KeepAliveEnabled bool
+
+	// WebsharePoolsFile selects the strict JSON config file used by
+	// PROXY_SUPPLIER=webshare_multi. The file contains pool labels, plan IDs,
+	// dedicated API-key file paths, classes, and optional weights. Secret
+	// contents are read only from the referenced files.
+	WebsharePoolsFile string
 }
 
 // EnvConfig builds a Config by reading the canonical fleet env vars.
@@ -239,18 +337,20 @@ type Config struct {
 //	s   := proxysupplier.NewFromConfig(cfg)
 func EnvConfig() Config {
 	return Config{
-		Supplier:         strings.ToLower(strings.TrimSpace(os.Getenv("PROXY_SUPPLIER"))),
-		Host:             os.Getenv("PROXY_HOST"),
-		Port:             os.Getenv("PROXY_PORT"),
-		Username:         os.Getenv("PROXY_USERNAME"),
-		Password:         os.Getenv("PROXY_PASSWORD"),
-		Protocol:         os.Getenv("PROXY_PROTOCOL"),
-		ExternalProxyURL: os.Getenv("EXTERNAL_PROXY_URL"),
-		ProxyURLs:        os.Getenv("PROXY_URLS"),
-		ProxyWeights:     os.Getenv("PROXY_WEIGHTS"),
-		NoProxy:          firstNonEmpty(os.Getenv("NO_PROXY"), os.Getenv("no_proxy")),
-		KeepAliveEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("PROXY_KEEPALIVE_ENABLED")), "true"),
-		WebshareAPIKey:   os.Getenv("WEBSHARE_API_KEY"),
+		Supplier:          strings.ToLower(strings.TrimSpace(os.Getenv("PROXY_SUPPLIER"))),
+		Host:              os.Getenv("PROXY_HOST"),
+		Port:              os.Getenv("PROXY_PORT"),
+		Username:          os.Getenv("PROXY_USERNAME"),
+		Password:          os.Getenv("PROXY_PASSWORD"),
+		Protocol:          os.Getenv("PROXY_PROTOCOL"),
+		ExternalProxyURL:  os.Getenv("EXTERNAL_PROXY_URL"),
+		ProxyURLs:         os.Getenv("PROXY_URLS"),
+		ProxyWeights:      os.Getenv("PROXY_WEIGHTS"),
+		NoProxy:           firstNonEmpty(os.Getenv("NO_PROXY"), os.Getenv("no_proxy")),
+		KeepAliveEnabled:  strings.EqualFold(strings.TrimSpace(os.Getenv("PROXY_KEEPALIVE_ENABLED")), "true"),
+		WebshareAPIKey:    os.Getenv("WEBSHARE_API_KEY"),
+		WebsharePlanID:    os.Getenv("WEBSHARE_PLAN_ID"),
+		WebsharePoolsFile: os.Getenv("WEBSHARE_POOLS_FILE"),
 	}
 }
 
@@ -349,7 +449,7 @@ func httpClient(s Supplier, timeout time.Duration, failClosed bool) *http.Client
 				raw = s.ProxyURL()
 			}
 			if raw == "" {
-				if failClosed {
+				if failClosed || s.Name() == "webshare_multi" {
 					return nil, ErrProxyUnavailable
 				}
 				return nil, nil
