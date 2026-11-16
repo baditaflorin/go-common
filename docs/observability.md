@@ -375,6 +375,7 @@ are 483,160 of that, because `route` is capped per label, not per
 | `loadshed_shed_total` | gate | 16 | 16 |
 | `proxysupplier_webshare_direct_refresh_total` | result | 2 | ok, error |
 | `proxysupplier_webshare_direct_*` | - | 1 | the other five, read at scrape time |
+| `proxysupplier_webshare_pool_default` | pool, account, class | 1 | one pinned default pool |
 | `proxysupplier_webshare_pool_size` | pool, account, class | 2,048 | at most 32 configured pools, 32 account labels, and 2 classes |
 | `proxysupplier_webshare_pool_eligible` | pool, account, class | 2,048 | at most 32 configured pools, 32 account labels, and 2 classes |
 | `proxysupplier_webshare_pool_in_cooldown` | pool, account, class | 2,048 | at most 32 configured pools, 32 account labels, and 2 classes |

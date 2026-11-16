@@ -540,13 +540,13 @@ func webshareMultiCase() harnessCase {
 		}
 		states[i] = proxysupplier.WebsharePoolState{
 			WebsharePoolInfo: proxysupplier.WebsharePoolInfo{
-				PoolID: fmt.Sprintf("pool-%d", i), AccountID: fmt.Sprintf("account-%d", i), Class: class,
+				PoolID: fmt.Sprintf("pool-%d", i), AccountID: fmt.Sprintf("account-%d", i), Class: class, Default: i == 0,
 			},
 			RefreshSuccesses: 1, RefreshFailures: 1,
 		}
 	}
 	return newCase("webshare_multi", []string{"NewWebshareMultiCollectors"}, []string{
-		"proxysupplier_webshare_pool_size", "proxysupplier_webshare_pool_eligible", "proxysupplier_webshare_pool_in_cooldown",
+		"proxysupplier_webshare_pool_default", "proxysupplier_webshare_pool_size", "proxysupplier_webshare_pool_eligible", "proxysupplier_webshare_pool_in_cooldown",
 		"proxysupplier_webshare_pool_refresh_total", "proxysupplier_webshare_pool_refresh_consecutive_failures",
 		"proxysupplier_webshare_pool_last_refresh_age_seconds",
 	}, func(reg prometheus.Registerer) *WebshareMultiCollectors {

@@ -144,23 +144,23 @@ func (s *session) establish(t Target, authority string) (connectOutcome, *failur
 				att = attDialError
 			}
 			p.m.attempts.WithLabelValues(att).Inc()
-			p.markResult(up.addr, false)
+			p.markResult(up, false)
 			p.warn(att, "upstream attempt failed", "upstream", up.addr, "scheme", up.scheme, "result", att, "attempt", attempt, "error", out.err.Error())
 			last = &failure{http.StatusBadGateway, resUpstreamError, "egress proxy: upstream proxy unreachable"}
 		case out.status/100 == 2:
 			p.m.attempts.WithLabelValues(attOK).Inc()
-			p.markResult(up.addr, true)
+			p.markResult(up, true)
 			return out, nil
 		case out.status == http.StatusProxyAuthRequired:
 			s.detach()
 			p.m.attempts.WithLabelValues(attAuthFailed).Inc()
-			p.markResult(up.addr, false)
+			p.markResult(up, false)
 			p.warn(attAuthFailed, "upstream proxy refused our credentials", "upstream", up.addr, "scheme", up.scheme, "result", attAuthFailed, "attempt", attempt)
 			last = &failure{http.StatusBadGateway, resUpstreamError, "egress proxy: upstream proxy refused the credentials"}
 		case out.status >= 500 && !p.cfg.IgnoreUpstream5xx:
 			s.detach()
 			p.m.attempts.WithLabelValues(attUpstream5xx).Inc()
-			p.markResult(up.addr, false)
+			p.markResult(up, false)
 			p.warn(attUpstream5xx, "upstream proxy answered 5xx to CONNECT", "upstream", up.addr, "scheme", up.scheme, "result", attUpstream5xx, "attempt", attempt, "status", out.status)
 			last = &failure{relayStatus(out.status), resUpstreamError, "egress proxy: upstream proxy answered " + strconv.Itoa(out.status)}
 		default:

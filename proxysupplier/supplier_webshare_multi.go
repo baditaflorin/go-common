@@ -59,10 +59,11 @@ type webshareNamedPool struct {
 // Its default Supplier API is deliberately DC-only. Policy callers use the
 // typed selector to explicitly reach a particular class or named pool.
 type webshareMultiSupplier struct {
-	pools   []*webshareNamedPool
-	rules   *noProxyRules
-	mu      sync.Mutex
-	current map[string]int
+	pools         []*webshareNamedPool
+	rules         *noProxyRules
+	defaultPoolID string
+	mu            sync.Mutex
+	current       map[string]int
 }
 
 var activeWebshareMultiSupplier atomic.Pointer[webshareMultiSupplier]
@@ -94,11 +95,20 @@ func (s *webshareMultiSupplier) Close() {
 // A missing/unhealthy DC pool returns empty; HTTPClient treats this supplier
 // as fail-closed and never silently sends the request directly.
 func (s *webshareMultiSupplier) ProxyURL() string {
-	sel, err := s.SelectPool(PoolClassDC)
+	sel, err := s.SelectDefaultPool()
 	if err != nil {
 		return ""
 	}
 	return sel.proxyURL
+}
+
+// SelectDefaultPool follows the process-level default route. Unless explicitly
+// pinned to a named DC pool, it uses the capacity-weighted DC selector.
+func (s *webshareMultiSupplier) SelectDefaultPool() (WebshareSelection, error) {
+	if s.defaultPoolID != "" {
+		return s.SelectPoolID(s.defaultPoolID)
+	}
+	return s.SelectPool(PoolClassDC)
 }
 
 // SelectPool picks one eligible member of the requested class. Excluded pool
@@ -228,7 +238,7 @@ func (s *webshareMultiSupplier) Pools() []WebsharePoolInfo {
 	for _, p := range s.pools {
 		state := p.supplier.poolSnapshot(time.Now().UnixNano())
 		result = append(result, WebsharePoolInfo{
-			PoolID: p.ID, AccountID: p.AccountID, Class: p.Class,
+			PoolID: p.ID, AccountID: p.AccountID, Class: p.Class, Default: p.ID == s.defaultPoolID,
 			Total: state.Total, Eligible: state.Eligible, InCooldown: state.InCooldown,
 		})
 	}
@@ -311,7 +321,7 @@ func websharePoolsSnapshot(m *webshareMultiSupplier) []WebsharePoolState {
 		state := p.supplier.poolSnapshot(now)
 		result = append(result, WebsharePoolState{
 			WebsharePoolInfo: WebsharePoolInfo{
-				PoolID: p.ID, AccountID: p.AccountID, Class: p.Class,
+				PoolID: p.ID, AccountID: p.AccountID, Class: p.Class, Default: p.ID == m.defaultPoolID,
 				Total: state.Total, Eligible: state.Eligible, InCooldown: state.InCooldown,
 			},
 			RefreshSuccesses: state.RefreshSuccesses, RefreshFailures: state.RefreshFailures,
@@ -322,14 +332,33 @@ func websharePoolsSnapshot(m *webshareMultiSupplier) []WebsharePoolState {
 	return result
 }
 
-func newWebshareMultiSupplier(path string, rules *noProxyRules) Supplier {
+func newWebshareMultiSupplier(path string, rules *noProxyRules, defaultPoolIDs ...string) Supplier {
 	activeWebshareMultiSupplier.Store(nil)
+	defaultPoolID := ""
+	if len(defaultPoolIDs) > 0 {
+		defaultPoolID = strings.TrimSpace(defaultPoolIDs[0])
+	}
+	if len(defaultPoolIDs) > 1 || (defaultPoolID != "" && !webshareSafeID.MatchString(defaultPoolID)) {
+		return &unavailableWebshareMultiSupplier{rules: rules}
+	}
 	if strings.TrimSpace(path) == "" {
 		return &unavailableWebshareMultiSupplier{rules: rules}
 	}
 	cfg, err := readWebsharePoolsConfig(path)
 	if err != nil {
 		return &unavailableWebshareMultiSupplier{rules: rules}
+	}
+	if defaultPoolID != "" {
+		found := false
+		for _, pool := range cfg.Pools {
+			if pool.ID == defaultPoolID && pool.Class == PoolClassDC {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return &unavailableWebshareMultiSupplier{rules: rules}
+		}
 	}
 	seen := make(map[string]struct{}, len(cfg.Pools))
 	pools := make([]*webshareNamedPool, 0, len(cfg.Pools))
@@ -379,7 +408,7 @@ func newWebshareMultiSupplier(path string, rules *noProxyRules) Supplier {
 		pools = append(pools, &webshareNamedPool{WebsharePoolConfig: pc, supplier: core})
 	}
 	sort.Slice(pools, func(i, j int) bool { return pools[i].ID < pools[j].ID })
-	m := &webshareMultiSupplier{pools: pools, rules: rules}
+	m := &webshareMultiSupplier{pools: pools, rules: rules, defaultPoolID: defaultPoolID}
 	activeWebshareMultiSupplier.Store(m)
 	return m
 }
@@ -572,4 +601,5 @@ func HTTPClientForSelection(selection WebshareSelection, timeout time.Duration, 
 }
 
 var _ WebsharePoolSelector = (*webshareMultiSupplier)(nil)
+var _ WebshareDefaultSelector = (*webshareMultiSupplier)(nil)
 var _ WebshareSelectionReporter = (*webshareMultiSupplier)(nil)

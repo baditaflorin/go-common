@@ -52,8 +52,14 @@ func NewClientE(opts ...Option) (*http.Client, error) {
 	for _, opt := range opts {
 		opt(o)
 	}
+	if o.proxyURLError != nil {
+		return nil, o.proxyURLError
+	}
 	if o.withoutProxy && o.requireProxy {
 		return nil, errors.New(errProxyOptionsConflict)
+	}
+	if o.withoutProxy && o.proxyURL != nil {
+		return nil, errors.New("safehttp: WithoutProxy and WithProxyURL are mutually exclusive")
 	}
 	// Fleet-wide enforcement: FLEET_REQUIRE_PROXY=1 promotes any
 	// caller to RequireProxy posture unless they explicitly opted
@@ -62,14 +68,20 @@ func NewClientE(opts ...Option) (*http.Client, error) {
 	// true, so a caller that forgot to pass RequireProxy() still
 	// fails-fast on a missing HTTPS_PROXY instead of silently
 	// leaking the dockerhost IP.
-	if !o.withoutProxy && !o.requireProxy && fleetRequireProxyEnv() {
+	if !o.withoutProxy && o.proxyURL == nil && !o.requireProxy && fleetRequireProxyEnv() {
 		o.requireProxy = true
 	}
-	if o.requireProxy && os.Getenv("HTTPS_PROXY") == "" && os.Getenv("https_proxy") == "" && os.Getenv("HTTP_PROXY") == "" && os.Getenv("http_proxy") == "" {
+	if o.requireProxy && o.proxyURL == nil && os.Getenv("HTTPS_PROXY") == "" && os.Getenv("https_proxy") == "" && os.Getenv("HTTP_PROXY") == "" && os.Getenv("http_proxy") == "" {
 		return nil, errors.New(errProxyRequiredMissing)
 	}
 	proxyFn := func(req *http.Request) (*url.URL, error) {
-		return proxySkippingPrivate(req)
+		return proxySkippingPrivateWith(req, func(req *http.Request) (*url.URL, error) {
+			if o.proxyURL == nil {
+				return http.ProxyFromEnvironment(req)
+			}
+			proxy := *o.proxyURL
+			return &proxy, nil
+		})
 	}
 	if o.withoutProxy {
 		proxyFn = nil
@@ -137,7 +149,7 @@ func NewClientE(opts ...Option) (*http.Client, error) {
 	// effect. An explicit per-client WithFetchDelegate is a deliberate
 	// opt-in and still wins — only the *default* (process-wide) delegate is
 	// skipped here.
-	useDefaultFetchCache := !o.noFetchCache && !o.withoutProxy && !o.forceHTTP2
+	useDefaultFetchCache := !o.noFetchCache && !o.withoutProxy && o.proxyURL == nil && !o.forceHTTP2
 
 	extras := &extrasTransport{
 		inner:                rt,

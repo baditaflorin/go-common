@@ -415,8 +415,10 @@ type options struct {
 
 	// Proxy posture — see WithoutProxy / RequireProxy. Defaults to
 	// "follow HTTPS_PROXY env if set, else direct" (Go std behaviour).
-	withoutProxy bool
-	requireProxy bool
+	withoutProxy  bool
+	requireProxy  bool
+	proxyURL      *url.URL
+	proxyURLError error
 
 	// Egress observer — see WithObserver. nil = no observation.
 	observer EgressObserver
@@ -488,6 +490,23 @@ func WithMaxIdleConnsPerHost(n int) Option {
 // defeat the purpose. Mutually exclusive with RequireProxy — passing
 // both panics in NewClient (NewClientE returns the error instead).
 func WithoutProxy() Option { return func(o *options) { o.withoutProxy = true } }
+
+// WithProxyURL pins this client to an explicitly configured HTTP(S) proxy
+// instead of reading HTTP_PROXY / HTTPS_PROXY. It still uses safehttp's
+// guarded dialer and redirect checks. The URL may contain proxy credentials;
+// callers must not log it. Invalid values are rejected by NewClientE.
+func WithProxyURL(raw string) Option {
+	return func(o *options) {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.Fragment != "" {
+			o.proxyURL = nil
+			o.proxyURLError = errors.New("safehttp: invalid explicit proxy URL")
+			return
+		}
+		o.proxyURL = u
+		o.proxyURLError = nil
+	}
+}
 
 // RequireProxy asserts HTTPS_PROXY (or HTTP_PROXY) is set in the
 // environment at NewClient time. Services declared `proxy_egress:

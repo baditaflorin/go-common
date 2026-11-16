@@ -11,6 +11,7 @@ import (
 //
 // Metrics exposed:
 //
+//	proxysupplier_webshare_pool_default{service,pool,account,class}
 //	proxysupplier_webshare_pool_size{service,pool,account,class}
 //	proxysupplier_webshare_pool_eligible{service,pool,account,class}
 //	proxysupplier_webshare_pool_in_cooldown{service,pool,account,class}
@@ -18,10 +19,10 @@ import (
 //	proxysupplier_webshare_pool_refresh_consecutive_failures{service,pool,account,class}
 //	proxysupplier_webshare_pool_last_refresh_age_seconds{service,pool,account,class}
 type WebshareMultiCollectors struct {
-	service                                      string
-	supplier                                     proxysupplier.Supplier
-	poolSize, poolEligible, poolInCooldown       *prometheus.Desc
-	refreshTotal, refreshConsecutive, refreshAge *prometheus.Desc
+	service                                             string
+	supplier                                            proxysupplier.Supplier
+	poolDefault, poolSize, poolEligible, poolInCooldown *prometheus.Desc
+	refreshTotal, refreshConsecutive, refreshAge        *prometheus.Desc
 }
 
 // NewWebshareMultiCollectors registers per-pool catalog/cooldown health on
@@ -33,6 +34,7 @@ func NewWebshareMultiCollectors(supplier proxysupplier.Supplier, reg prometheus.
 	labels := []string{"service", "pool", "account", "class"}
 	c := &WebshareMultiCollectors{
 		service: ServiceID(), supplier: supplier,
+		poolDefault:        prometheus.NewDesc("proxysupplier_webshare_pool_default", "1 when a named DC pool is pinned as the process default route.", labels, nil),
 		poolSize:           prometheus.NewDesc("proxysupplier_webshare_pool_size", "Total proxy IPs loaded by a named Webshare pool.", labels, nil),
 		poolEligible:       prometheus.NewDesc("proxysupplier_webshare_pool_eligible", "Proxy IPs currently eligible for selection by a named Webshare pool.", labels, nil),
 		poolInCooldown:     prometheus.NewDesc("proxysupplier_webshare_pool_in_cooldown", "Proxy IPs currently cooling down in a named Webshare pool.", labels, nil),
@@ -45,6 +47,7 @@ func NewWebshareMultiCollectors(supplier proxysupplier.Supplier, reg prometheus.
 }
 
 func (c *WebshareMultiCollectors) Describe(ch chan<- *prometheus.Desc) {
+	ch <- c.poolDefault
 	ch <- c.poolSize
 	ch <- c.poolEligible
 	ch <- c.poolInCooldown
@@ -56,6 +59,9 @@ func (c *WebshareMultiCollectors) Describe(ch chan<- *prometheus.Desc) {
 func (c *WebshareMultiCollectors) Collect(ch chan<- prometheus.Metric) {
 	for _, state := range proxysupplier.WebsharePoolsSnapshot(c.supplier) {
 		labels := []string{c.service, state.PoolID, state.AccountID, string(state.Class)}
+		if state.Default {
+			ch <- prometheus.MustNewConstMetric(c.poolDefault, prometheus.GaugeValue, 1, labels...)
+		}
 		ch <- prometheus.MustNewConstMetric(c.poolSize, prometheus.GaugeValue, float64(state.Total), labels...)
 		ch <- prometheus.MustNewConstMetric(c.poolEligible, prometheus.GaugeValue, float64(state.Eligible), labels...)
 		ch <- prometheus.MustNewConstMetric(c.poolInCooldown, prometheus.GaugeValue, float64(state.InCooldown), labels...)

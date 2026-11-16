@@ -157,6 +157,45 @@ func TestWebshareMultiDefaultExcludesResidentialAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestWebshareMultiDefaultPoolCanPinNamedDCOnly(t *testing.T) {
+	legacy := &webshareDirectSupplier{}
+	quality := &webshareDirectSupplier{}
+	installEntries(legacy, testEntry("192.0.2.10", 8000, "legacy"))
+	installEntries(quality, testEntry("192.0.2.11", 8000, "quality"))
+	res := &webshareDirectSupplier{}
+	installEntries(res, testEntry("192.0.2.12", 8000, "isp"))
+	m := testMulti(
+		&webshareNamedPool{WebsharePoolConfig: WebsharePoolConfig{ID: "legacy", AccountID: "legacy-account", Class: PoolClassDC}, supplier: legacy},
+		&webshareNamedPool{WebsharePoolConfig: WebsharePoolConfig{ID: "quality", AccountID: "quality-account", Class: PoolClassDC}, supplier: quality},
+		&webshareNamedPool{WebsharePoolConfig: WebsharePoolConfig{ID: "isp", AccountID: "quality-account", Class: PoolClassResidential}, supplier: res},
+	)
+	m.defaultPoolID = "quality"
+	selection, err := m.SelectDefaultPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.PoolID != "quality" || selection.Class != PoolClassDC {
+		t.Fatalf("default selection = %s, want pinned quality DC", selection)
+	}
+	if got := m.ProxyURL(); !strings.Contains(got, "192.0.2.11:8000") {
+		t.Fatalf("ProxyURL did not honor named DC default: %q", got)
+	}
+}
+
+func TestWebshareMultiRejectsInvalidDefaultPoolWithoutFallback(t *testing.T) {
+	dir := t.TempDir()
+	path := writePoolConfig(t,
+		poolConfig(t, dir, "legacy", "legacy-account", PoolClassDC, "1001", 0),
+		poolConfig(t, dir, "isp", "quality-account", PoolClassResidential, "2002", 0),
+	)
+	for _, id := range []string{"missing", "isp"} {
+		supplier := NewFromConfig(Config{Supplier: "webshare_multi", WebsharePoolsFile: path, WebshareDefaultPoolID: id})
+		if supplier.Name() != "webshare_multi" || supplier.ProxyURL() != "" {
+			t.Fatalf("invalid default %q fell back: supplier=%q proxy=%q", id, supplier.Name(), supplier.ProxyURL())
+		}
+	}
+}
+
 func TestWebshareMultiInvalidKeyFileFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pools.json")
 	config := WebsharePoolsConfig{Pools: []WebsharePoolConfig{{
