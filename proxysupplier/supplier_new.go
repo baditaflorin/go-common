@@ -50,6 +50,11 @@ func NewFromConfig(cfg Config) Supplier {
 		// single static rawURL.
 		return newWebshareDirectSupplier(cfg)
 
+	case "webshare_multi":
+		// Catalogs are individually fetched per account plan. The wrapper
+		// selects DC pools by default and requires typed selection for ISP.
+		return newWebshareMultiSupplier(cfg.WebsharePoolsFile, rules)
+
 	default:
 		return noneSupplier{}
 	}

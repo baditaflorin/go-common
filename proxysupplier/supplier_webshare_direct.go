@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"math/rand/v2"
 	"net"
@@ -133,6 +134,7 @@ func (e *webshareDirectEntry) eligible(nowUnixNano int64) bool {
 // judgment back to cool down the specific IP that produced it.
 type webshareDirectSupplier struct {
 	apiKey          string
+	planID          string
 	baseURL         string
 	refreshInterval time.Duration
 	httpClient      *http.Client
@@ -178,13 +180,21 @@ func (s *webshareDirectSupplier) Bypass(host string) bool {
 // is currently empty OR every entry is in cooldown -- callers should treat
 // either the same as any other "none" supplier result rather than block.
 func (s *webshareDirectSupplier) ProxyURL() string {
+	e := s.nextEntry()
+	if e == nil {
+		return ""
+	}
+	return e.proxyURL
+}
+
+func (s *webshareDirectSupplier) nextEntry() *webshareDirectEntry {
 	s.mu.RLock()
 	list := s.list
 	s.mu.RUnlock()
 
 	n := len(list)
 	if n == 0 {
-		return ""
+		return nil
 	}
 
 	now := time.Now().UnixNano()
@@ -192,7 +202,7 @@ func (s *webshareDirectSupplier) ProxyURL() string {
 	for i := 0; i < n; i++ {
 		e := list[(int(start)+i)%n]
 		if e.eligible(now) {
-			return e.proxyURL
+			return e
 		}
 	}
 	// Every entry is currently in cooldown. Unlike go-html-proxy's Pool
@@ -200,7 +210,7 @@ func (s *webshareDirectSupplier) ProxyURL() string {
 	// gets SOME proxy), this returns "" -- a caller retrying against a
 	// rate limiter is better served going direct or waiting than being
 	// handed back an IP already known to be in its penalty window.
-	return ""
+	return nil
 }
 
 // ProxyURLForKey deterministically selects a proxy URL for key instead of
@@ -262,14 +272,21 @@ func (s *webshareDirectSupplier) MarkResult(addr string, ok bool) {
 	defer s.mu.RUnlock()
 	for _, e := range s.list {
 		if e.addr == addr {
-			if ok {
-				e.failures.Store(0)
-				e.cooldownUntil.Store(0)
-			} else if e.failures.Add(1) >= webshareDirectMaxConsecutiveFailures {
-				e.cooldownUntil.Store(time.Now().Add(webshareDirectFailureCooldown).UnixNano())
-			}
+			s.markEntryResult(e, ok)
 			return
 		}
+	}
+}
+
+func (s *webshareDirectSupplier) markEntryResult(e *webshareDirectEntry, ok bool) {
+	if e == nil {
+		return
+	}
+	if ok {
+		e.failures.Store(0)
+		e.cooldownUntil.Store(0)
+	} else if e.failures.Add(1) >= webshareDirectMaxConsecutiveFailures {
+		e.cooldownUntil.Store(time.Now().Add(webshareDirectFailureCooldown).UnixNano())
 	}
 }
 
@@ -278,12 +295,24 @@ func (s *webshareDirectSupplier) MarkResult(addr string, ok bool) {
 // NewFromConfig, which never returns an error itself. The initial fetch
 // runs in the background; see refreshLoop.
 func newWebshareDirectSupplier(cfg Config) Supplier {
-	if cfg.WebshareAPIKey == "" {
+	s := newWebshareDirectSupplierCore(cfg, true)
+	if s == nil {
 		activeWebshareDirectSupplier.Store(nil)
 		return noneSupplier{}
 	}
+	return s
+}
+
+// newWebshareDirectSupplierCore constructs the shared catalog/rotation core.
+// A multi-account wrapper disables the legacy singleton metrics pointer and
+// exports one aggregate snapshot with safe pool labels instead.
+func newWebshareDirectSupplierCore(cfg Config, registerActive bool) *webshareDirectSupplier {
+	if cfg.WebshareAPIKey == "" || (cfg.WebsharePlanID != "" && !validWebsharePlanID(cfg.WebsharePlanID)) {
+		return nil
+	}
 	s := &webshareDirectSupplier{
 		apiKey:          cfg.WebshareAPIKey,
+		planID:          cfg.WebsharePlanID,
 		baseURL:         webshareDirectDefaultBaseURL,
 		refreshInterval: webshareDirectDefaultRefreshInterval,
 		httpClient:      &http.Client{Timeout: webshareDirectDefaultHTTPTimeout},
@@ -292,7 +321,17 @@ func newWebshareDirectSupplier(cfg Config) Supplier {
 		retryMax:        webshareDirectRetryMax,
 		stop:            make(chan struct{}),
 	}
-	activeWebshareDirectSupplier.Store(s)
+	apiBase := s.baseURL
+	planID := s.planID
+	s.httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 || len(via) == 0 || !safeWebshareURL(apiBase, via[len(via)-1].URL.String(), req.URL.String(), planID) {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	}
+	if registerActive {
+		activeWebshareDirectSupplier.Store(s)
+	}
 	// The initial fetch runs in the background rather than blocking here.
 	// Traced live 2026-08-26: paginating a real account (~1800 entries,
 	// growing) sequentially against Webshare's API took long enough
@@ -323,14 +362,42 @@ type webshareListResponse struct {
 
 func (s *webshareDirectSupplier) refresh(ctx context.Context) error {
 	var all []webshareEntry
-	nextURL := fmt.Sprintf("%s?mode=direct&page=1&page_size=%d", s.baseURL, webshareDirectDefaultPageSize)
+	base, err := url.Parse(s.baseURL)
+	if err != nil || !allowedWebshareCatalogURL(base) {
+		return errors.New("proxysupplier: invalid Webshare catalog endpoint")
+	}
+	q := base.Query()
+	q.Set("mode", "direct")
+	q.Set("page", "1")
+	q.Set("page_size", strconv.Itoa(webshareDirectDefaultPageSize))
+	if s.planID != "" {
+		q.Set("plan_id", s.planID)
+	}
+	base.RawQuery = q.Encode()
+	nextURL := base.String()
+	seenPages := make(map[string]struct{})
+	pageCount := 0
 	for nextURL != "" {
+		if pageCount >= webshareDirectMaxPages {
+			return errors.New("proxysupplier: Webshare catalog exceeds page limit")
+		}
+		if _, seen := seenPages[nextURL]; seen {
+			return errors.New("proxysupplier: Webshare catalog pagination cycle")
+		}
+		seenPages[nextURL] = struct{}{}
+		pageCount++
 		page, err := s.fetchPageRetrying(ctx, nextURL)
 		if err != nil {
 			return err
 		}
+		if page.Count < 0 || page.Count > webshareDirectMaxEntries || len(page.Results) > webshareDirectDefaultPageSize || len(all)+len(page.Results) > webshareDirectMaxEntries {
+			return errors.New("proxysupplier: Webshare catalog exceeds entry limit")
+		}
 		all = append(all, page.Results...)
-		nextURL = page.Next
+		nextURL, err = safeWebshareNextURL(s.baseURL, nextURL, page.Next, s.planID)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Index the outgoing list by address so any entry that survives into
@@ -425,6 +492,9 @@ func (s *webshareDirectSupplier) fetchPageRetrying(ctx context.Context, pageURL 
 }
 
 func (s *webshareDirectSupplier) fetchPage(ctx context.Context, pageURL string) (*webshareListResponse, error) {
+	if _, err := safeWebshareNextURL(s.baseURL, pageURL, pageURL, s.planID); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
 		return nil, err
@@ -433,19 +503,31 @@ func (s *webshareDirectSupplier) fetchPage(ctx context.Context, pageURL string) 
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, context.DeadlineExceeded
+		}
+		return nil, errors.New("proxysupplier: Webshare catalog request failed")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, &webshareAPIError{
 			Status:     resp.StatusCode,
-			URL:        pageURL,
 			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
 		}
 	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, webshareDirectMaxPageBytes+1))
+	if err != nil {
+		return nil, errors.New("proxysupplier: Webshare catalog response unreadable")
+	}
+	if len(body) > webshareDirectMaxPageBytes {
+		return nil, errors.New("proxysupplier: Webshare catalog page exceeds byte limit")
+	}
 	var page webshareListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+	if err := json.Unmarshal(body, &page); err != nil {
 		return nil, fmt.Errorf("decode webshare response: %w", err)
 	}
 	return &page, nil
@@ -454,12 +536,11 @@ func (s *webshareDirectSupplier) fetchPage(ctx context.Context, pageURL string) 
 // webshareAPIError is a non-200 answer from the Webshare account API.
 type webshareAPIError struct {
 	Status     int
-	URL        string
 	RetryAfter time.Duration // from the Retry-After header; 0 when absent or unusable
 }
 
 func (e *webshareAPIError) Error() string {
-	return fmt.Sprintf("webshare API returned status %d for %s", e.Status, e.URL)
+	return fmt.Sprintf("webshare API returned status %d", e.Status)
 }
 
 // parseRetryAfter reads a Retry-After header (delay seconds or an HTTP date).

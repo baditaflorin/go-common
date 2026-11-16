@@ -375,6 +375,12 @@ are 483,160 of that, because `route` is capped per label, not per
 | `loadshed_shed_total` | gate | 16 | 16 |
 | `proxysupplier_webshare_direct_refresh_total` | result | 2 | ok, error |
 | `proxysupplier_webshare_direct_*` | - | 1 | the other five, read at scrape time |
+| `proxysupplier_webshare_pool_size` | pool, account, class | 2,048 | at most 32 configured pools, 32 account labels, and 2 classes |
+| `proxysupplier_webshare_pool_eligible` | pool, account, class | 2,048 | at most 32 configured pools, 32 account labels, and 2 classes |
+| `proxysupplier_webshare_pool_in_cooldown` | pool, account, class | 2,048 | at most 32 configured pools, 32 account labels, and 2 classes |
+| `proxysupplier_webshare_pool_refresh_total` | pool, account, class, result | 4,096 | 32 pools x 32 account labels x 2 classes x 2 results |
+| `proxysupplier_webshare_pool_refresh_consecutive_failures` | pool, account, class | 2,048 | at most 32 configured pools, 32 account labels, and 2 classes |
+| `proxysupplier_webshare_pool_last_refresh_age_seconds` | pool, account, class | 2,048 | at most 32 configured pools, 32 account labels, and 2 classes |
 | `go_container_*` | - | 1 | twenty cgroup gauges and counters, read at scrape time |
 | `fleet_graph_*` | - | 1 | six sender counters, read at scrape time |
 | `fleet_credential_expiry_timestamp_seconds` | credential | 17 | 16 credential names (first-come, from `credfile.Open`) and `_other`; only credentials loaded from a file |

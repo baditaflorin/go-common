@@ -35,6 +35,7 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 		autoLoadshed = nil
 		autoBackoffCoord = nil
 		autoWebshare = nil
+		autoWebshareMulti = nil
 		autoCgroup = nil
 		autoGraph = nil
 		autoCredfile = nil
@@ -104,6 +105,9 @@ func AutoWire(serviceID, version string) (*EgressCollectors, *HTTPCollectors, *A
 	}
 	if autoWebshare == nil {
 		autoWebshare = NewWebshareDirectCollectors(reg)
+	}
+	if autoWebshareMulti == nil {
+		autoWebshareMulti = NewWebshareMultiCollectors(nil, reg)
 	}
 	if autoCgroup == nil {
 		autoCgroup = NewCgroupCollectors(reg, ServiceID())
@@ -190,6 +194,13 @@ func AutoWebshareDirect() *WebshareDirectCollectors {
 	autoMu.Lock()
 	defer autoMu.Unlock()
 	return autoWebshare
+}
+
+// AutoWebshareMulti returns the singleton named Webshare-pool collector.
+func AutoWebshareMulti() *WebshareMultiCollectors {
+	autoMu.Lock()
+	defer autoMu.Unlock()
+	return autoWebshareMulti
 }
 
 // AutoSelftest returns the singleton SelftestCollectors created by

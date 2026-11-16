@@ -21,6 +21,7 @@ import (
 	"github.com/baditaflorin/go-common/loadshed"
 	"github.com/baditaflorin/go-common/middleware"
 	"github.com/baditaflorin/go-common/policyeval"
+	"github.com/baditaflorin/go-common/proxysupplier"
 	"github.com/baditaflorin/go-common/ratecoord"
 	"github.com/baditaflorin/go-common/response"
 	"github.com/baditaflorin/go-common/safehttp"
@@ -101,6 +102,7 @@ func harnessCases() []harnessCase {
 		httpCase(), egressCase(), fleetFetchCase(), backoffCase(), backoffCoordCase(), rateCoordCase(),
 		degradedCase(), authCase(), adminCase(), selftestCase(), depCase(), policyCase(), envelopeCase(),
 		circuitCase(), workpoolCase(), loadshedCase(), webshareCase(), cgroupCase(), graphCase(), credfileCase(), buildInfoCase(),
+		webshareMultiCase(),
 	}
 }
 
@@ -517,6 +519,39 @@ func webshareCase() harnessCase {
 			"proxysupplier_webshare_direct_refresh_total", "proxysupplier_webshare_direct_refresh_consecutive_failures", "proxysupplier_webshare_direct_last_refresh_age_seconds",
 		},
 		func(reg prometheus.Registerer) *WebshareDirectCollectors { return NewWebshareDirectCollectors(reg) }, nil)
+}
+
+type webshareMultiHarnessSupplier struct {
+	states []proxysupplier.WebsharePoolState
+}
+
+func (webshareMultiHarnessSupplier) Name() string     { return "webshare_multi" }
+func (webshareMultiHarnessSupplier) ProxyURL() string { return "" }
+func (s webshareMultiHarnessSupplier) WebsharePoolStates() []proxysupplier.WebsharePoolState {
+	return s.states
+}
+
+func webshareMultiCase() harnessCase {
+	states := make([]proxysupplier.WebsharePoolState, 32)
+	for i := range states {
+		class := proxysupplier.PoolClassDC
+		if i%2 == 1 {
+			class = proxysupplier.PoolClassResidential
+		}
+		states[i] = proxysupplier.WebsharePoolState{
+			WebsharePoolInfo: proxysupplier.WebsharePoolInfo{
+				PoolID: fmt.Sprintf("pool-%d", i), AccountID: fmt.Sprintf("account-%d", i), Class: class,
+			},
+			RefreshSuccesses: 1, RefreshFailures: 1,
+		}
+	}
+	return newCase("webshare_multi", []string{"NewWebshareMultiCollectors"}, []string{
+		"proxysupplier_webshare_pool_size", "proxysupplier_webshare_pool_eligible", "proxysupplier_webshare_pool_in_cooldown",
+		"proxysupplier_webshare_pool_refresh_total", "proxysupplier_webshare_pool_refresh_consecutive_failures",
+		"proxysupplier_webshare_pool_last_refresh_age_seconds",
+	}, func(reg prometheus.Registerer) *WebshareMultiCollectors {
+		return NewWebshareMultiCollectors(webshareMultiHarnessSupplier{states: states}, reg)
+	}, nil)
 }
 
 func fullCgroupSnapshot() (cgroup.Snapshot, error) {

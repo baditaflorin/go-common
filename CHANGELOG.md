@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.133.1] - 2026-11-16
+
+### Added
+
+- Add `webshare_multi` for strict, named Webshare account-plan pools with file-backed API keys, explicit plan-scoped catalog refresh, capacity-weighted DC selection, explicit class/pool selection, exact-entry feedback, fail-closed behavior, and per-pool health metrics. Existing `webshare_direct` remains supported. Full Go tests and vet pass; the change adds no credentials, dependencies, or production traffic.
+
 ## [0.133.0] - 2026-11-12
 
 ### Fixed
