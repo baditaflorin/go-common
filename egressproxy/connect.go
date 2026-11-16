@@ -54,6 +54,12 @@ func (s *session) checkGuard(t Target) bool {
 	defer cancel()
 	err := p.guard.check(ctx, p.cfg.Guard, t.Host, t.Port)
 	if err == nil {
+		if p.cfg.AllowTarget != nil && !p.cfg.AllowTarget(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(t.Host)), ".")) {
+			p.m.result(t.Kind, resGuardDenied)
+			p.warn("target_policy_denied", "target denied by additional policy", "kind", t.Kind, "target", net.JoinHostPort(t.Host, t.Port))
+			s.reply(http.StatusForbidden, "egress proxy: target not permitted")
+			return false
+		}
 		return true
 	}
 	target := net.JoinHostPort(t.Host, t.Port)

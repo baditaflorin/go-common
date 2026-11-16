@@ -43,6 +43,12 @@
 //     explicit class or named-pool selection, including residential pools.
 //   - "none" / ""     — direct connection (default)
 //
+// For explicit per-request provider routing, set PROXY_ROUTES_FILE and use
+// NewRouteRouterFromEnv. This does not alter the Supplier default. Consumers
+// resolve safe route candidates, enforce any route-specific budget, then select
+// one exact RouteSelection. Residential selection requires an explicit caller
+// permit and is never implied by request input alone.
+//
 // A self-proxy guard is always applied: if the resolved URL routes back to
 // this host (loopback literal or own hostname), [noneSupplier] is returned
 // to prevent proxy loops.

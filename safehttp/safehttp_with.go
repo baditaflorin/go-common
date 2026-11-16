@@ -1,6 +1,8 @@
 package safehttp
 
 import (
+	"context"
+	"net"
 	"strings"
 	"time"
 )
@@ -10,6 +12,15 @@ func WithTimeout(d time.Duration) Option { return func(o *options) { o.timeout =
 
 // WithMaxRedirects sets the redirect limit (default 5).
 func WithMaxRedirects(n int) Option { return func(o *options) { o.maxRedirects = n } }
+
+// WithConnWrapper wraps each newly dialed socket after safehttp's SSRF/DNS
+// rebind and optional port guards pass. It is intended for caller-owned byte
+// metering or accounting. The callback must return a non-nil connection on
+// success; any error fails the request and closes the raw socket. It runs for
+// the proxy socket when WithProxyURL or proxy environment routing is active.
+func WithConnWrapper(wrap func(context.Context, net.Conn) (net.Conn, error)) Option {
+	return func(o *options) { o.connWrapper = wrap }
+}
 
 // WithUserAgent sets the User-Agent on all requests including redirects.
 func WithUserAgent(ua string) Option { return func(o *options) { o.userAgent = ua } }
