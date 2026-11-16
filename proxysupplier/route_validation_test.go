@@ -33,11 +33,11 @@ func TestLoadRouteRouterConfigAndEnvironmentConstructor(t *testing.T) {
 	router.Close()
 	router.Close()
 
-	t.Setenv(EnvRouteRouterFile, "")
+	t.Setenv(EnvRouteRoutingFile, "")
 	if got, err := NewRouteRouterFromEnv(); err != nil || got != nil {
 		t.Fatalf("unset env constructor = (%v,%v), want nil,nil", got, err)
 	}
-	t.Setenv(EnvRouteRouterFile, path)
+	t.Setenv(EnvRouteRoutingFile, path)
 	router, err = NewRouteRouterFromEnv()
 	if err != nil || router == nil {
 		t.Fatalf("configured env constructor = (%v,%v), want router", router, err)
@@ -160,6 +160,11 @@ func TestRouteRouterRejectsInvalidIntentsAndExactCandidates(t *testing.T) {
 	if _, err := router.SelectRoute(candidates[0], false); !errors.Is(err, ErrProxyUnavailable) {
 		t.Fatalf("closed router selected route: %v", err)
 	}
+	if _, err := selection.ProxyURL(); !errors.Is(err, ErrProxyUnavailable) {
+		t.Fatalf("closed router selection returned a proxy URL: %v", err)
+	}
+	selection.Report(RouteOutcomeSuccess)
+	router.MarkRouteResult(selection, RouteOutcomeSuccess)
 	if _, err := ParseRouteIntentQuery(url.Values{"proxy_pool": {"../secret"}}); err == nil {
 		t.Fatal("unsafe query selector was accepted")
 	}

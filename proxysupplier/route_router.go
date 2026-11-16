@@ -14,7 +14,7 @@ import (
 const (
 	RouteProviderWebshare = "webshare_multi"
 	RouteProviderStatic   = "static_proxy"
-	EnvRouteRouterFile    = "PROXY_ROUTES_FILE"
+	EnvRouteRoutingFile   = "PROXY_ROUTING_FILE"
 	maxRouteConfigBytes   = 1 << 20
 	maxRouteProviders     = 32
 	maxRouteProfiles      = 64
@@ -100,10 +100,10 @@ func NewRouteRouterFromFile(path string) (*RouteRouter, error) {
 }
 
 // NewRouteRouterFromEnv enables explicit request routing only when
-// PROXY_ROUTES_FILE is set. An unset variable returns (nil, nil), preserving
+// PROXY_ROUTING_FILE is set. An unset variable returns (nil, nil), preserving
 // existing service defaults.
 func NewRouteRouterFromEnv() (*RouteRouter, error) {
-	path := strings.TrimSpace(os.Getenv(EnvRouteRouterFile))
+	path := strings.TrimSpace(os.Getenv(EnvRouteRoutingFile))
 	if path == "" {
 		return nil, nil
 	}
@@ -150,7 +150,7 @@ func NewRouteRouter(cfg RouteRouterConfig) (*RouteRouter, error) {
 		var provider routeProvider
 		switch pc.Type {
 		case RouteProviderWebshare:
-			supplier := newWebshareMultiSupplier(pc.PoolsFile, parseNoProxy(""))
+			supplier := newWebshareMultiSupplierWithPublish(pc.PoolsFile, parseNoProxy(""), false)
 			selector, ok := supplier.(WebsharePoolSelector)
 			if !ok {
 				return cleanup(errors.New("proxysupplier: configured Webshare route provider unavailable"))
@@ -288,7 +288,11 @@ func (r *RouteRouter) ResolveCandidates(intent RouteIntent) ([]RouteCandidate, e
 	candidates := provider.descriptors()
 	filtered := candidates[:0]
 	for _, candidate := range candidates {
-		if intent.Class == "" || candidate.Class == intent.Class {
+		class := intent.Class
+		if class == "" {
+			class = PoolClassDC
+		}
+		if candidate.Class == class {
 			filtered = append(filtered, candidate)
 		}
 	}
@@ -324,7 +328,7 @@ func (r *RouteRouter) SelectRoute(candidate RouteCandidate, allowResidential boo
 // MarkRouteResult records feedback only against the exact selection issued by
 // this router. Selections from another router or a fabricated value are ignored.
 func (r *RouteRouter) MarkRouteResult(selection RouteSelection, outcome RouteOutcome) {
-	if r == nil || selection.owner != r || selection.provider == nil || selection.token == nil ||
+	if r == nil || r.isClosed() || selection.owner != r || selection.provider == nil || selection.token == nil ||
 		outcome < RouteOutcomeSuccess || outcome > RouteOutcomeCanceled {
 		return
 	}
@@ -495,7 +499,10 @@ func (p *webshareRouteProvider) markRouteResult(token any, outcome RouteOutcome)
 	if !ok {
 		return
 	}
-	success := outcome == RouteOutcomeSuccess || outcome == RouteOutcomeOriginResponse || outcome == RouteOutcomeCanceled
+	if outcome == RouteOutcomeCanceled {
+		return
+	}
+	success := outcome == RouteOutcomeSuccess || outcome == RouteOutcomeOriginResponse
 	reporter.MarkSelectionResult(selection, success)
 }
 func (p *webshareRouteProvider) close() {

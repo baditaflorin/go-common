@@ -92,6 +92,7 @@ func TestRouteRouterProviderClassUsesFairPoolOrder(t *testing.T) {
 	router, err := NewRouteRouter(staticRouteConfig(t,
 		staticPoolFile(t, "large", string(PoolClassDC), 2),
 		staticPoolFile(t, "small", string(PoolClassDC), 1),
+		staticPoolFile(t, "residential", string(PoolClassResidential), 1),
 	))
 	if err != nil {
 		t.Fatal(err)
@@ -99,12 +100,12 @@ func TestRouteRouterProviderClassUsesFairPoolOrder(t *testing.T) {
 	t.Cleanup(router.Close)
 	counts := map[string]int{}
 	for i := 0; i < 300; i++ {
-		candidates, err := router.ResolveCandidates(RouteIntent{ProviderID: "thunder", Class: PoolClassDC})
+		candidates, err := router.ResolveCandidates(RouteIntent{ProviderID: "thunder"})
 		if err != nil {
 			t.Fatal("resolve provider/class:", err)
 		}
-		if len(candidates) != 2 {
-			t.Fatalf("candidate count = %d, want 2", len(candidates))
+		if len(candidates) != 2 || candidates[0].Class != PoolClassDC || candidates[1].Class != PoolClassDC {
+			t.Fatalf("provider-only default candidates = %#v, want only DC", candidates)
 		}
 		counts[candidates[0].PoolID]++
 	}
@@ -188,6 +189,15 @@ func TestWebshareRouteFeedbackIsBoundToExactAccountEntry(t *testing.T) {
 	}))
 	defer server.Close()
 	withWebshareDirectBaseURL(t, server.URL)
+	previousDefault := activeWebshareMultiSupplier.Load()
+	defaultPool := &webshareDirectSupplier{}
+	installEntries(defaultPool, testEntry("192.0.2.50", 8000, "default"))
+	defaultMulti := &webshareMultiSupplier{pools: []*webshareNamedPool{{
+		WebsharePoolConfig: WebsharePoolConfig{ID: "process-default", AccountID: "default-account", Class: PoolClassDC},
+		supplier:           defaultPool,
+	}}}
+	activeWebshareMultiSupplier.Store(defaultMulti)
+	t.Cleanup(func() { activeWebshareMultiSupplier.Store(previousDefault) })
 	dir := t.TempDir()
 	poolsPath := writePoolConfig(t,
 		poolConfig(t, dir, "legacy", "old-account", PoolClassDC, "1001", 0),
@@ -201,6 +211,9 @@ func TestWebshareRouteFeedbackIsBoundToExactAccountEntry(t *testing.T) {
 		t.Fatal("NewRouteRouter:", err)
 	}
 	t.Cleanup(router.Close)
+	if snapshot := WebsharePoolsSnapshot(nil); len(snapshot) != 1 || snapshot[0].PoolID != "process-default" {
+		t.Fatalf("route router stole process-default Webshare snapshot: %#v", snapshot)
+	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) && (oldRequests.Load() == 0 || qualityRequests.Load() == 0) {
 		time.Sleep(time.Millisecond)
@@ -213,13 +226,13 @@ func TestWebshareRouteFeedbackIsBoundToExactAccountEntry(t *testing.T) {
 	for time.Now().Before(deadline) {
 		candidates, err = router.ResolveCandidates(RouteIntent{ProviderID: "webshare", Class: PoolClassDC})
 		if err == nil && len(candidates) == 2 {
-			ready := 0
-			for _, state := range WebsharePoolsSnapshot(nil) {
-				if state.Eligible > 0 {
-					ready++
+			ready := true
+			for _, candidate := range candidates {
+				if _, selectErr := router.SelectRoute(candidate, false); selectErr != nil {
+					ready = false
 				}
 			}
-			if ready == 2 {
+			if ready {
 				break
 			}
 		}
@@ -244,11 +257,20 @@ func TestWebshareRouteFeedbackIsBoundToExactAccountEntry(t *testing.T) {
 	if oldCandidate.PoolID == "" || qualityCandidate.PoolID == "" {
 		t.Fatalf("missing configured candidates: %#v", candidates)
 	}
-	selected, err := router.SelectRoute(qualityCandidate, false)
+	var selected RouteSelection
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		selected, err = router.SelectRoute(qualityCandidate, false)
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if err != nil {
 		t.Fatal("select quality route:", err)
 	}
 	selected.Report(RouteOutcomeChallenge)
+	selected.Report(RouteOutcomeCanceled)
 	if _, err := router.SelectRoute(qualityCandidate, false); !errors.Is(err, ErrProxyUnavailable) {
 		t.Fatalf("challenge feedback did not cool selected account route: %v", err)
 	}
@@ -257,5 +279,8 @@ func TestWebshareRouteFeedbackIsBoundToExactAccountEntry(t *testing.T) {
 	}
 	if selected.Descriptor().ProviderID != "webshare" || selected.Descriptor().AccountID != "new-account" {
 		t.Fatalf("route receipt has wrong safe identity: %#v", selected.Descriptor())
+	}
+	if snapshot := WebsharePoolsSnapshot(nil); len(snapshot) != 1 || snapshot[0].PoolID != "process-default" {
+		t.Fatalf("explicit route changed default supplier snapshot: %#v", snapshot)
 	}
 }

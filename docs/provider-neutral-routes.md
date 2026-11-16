@@ -1,7 +1,7 @@
 # Provider-neutral request routes
 
 `proxysupplier.NewRouteRouterFromEnv()` enables explicit per-request provider
-routing only when `PROXY_ROUTES_FILE` is set. An unset variable leaves existing
+routing only when `PROXY_ROUTING_FILE` is set. An unset variable leaves existing
 `Supplier` defaults unchanged. The router is an additional optional capability;
 it does not add retries, choose when residential traffic is acceptable, or
 meter bytes.

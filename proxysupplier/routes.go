@@ -11,20 +11,20 @@ import (
 // of ProfileID, ProviderID, or PoolID. A route router never silently ignores a
 // supplied selector or falls back to the process default.
 type RouteIntent struct {
-	ProfileID  string
-	ProviderID string
-	PoolID     string
-	Class      PoolClass
+	ProfileID  string    `json:"profile_id,omitempty"`
+	ProviderID string    `json:"provider_id,omitempty"`
+	PoolID     string    `json:"pool_id,omitempty"`
+	Class      PoolClass `json:"class,omitempty"`
 }
 
 // RouteCandidate is safe metadata describing one configured exact route.
 // ProfileID is set when the candidate came from a named ordered profile.
 type RouteCandidate struct {
-	ProfileID  string
-	ProviderID string
-	PoolID     string
-	AccountID  string
-	Class      PoolClass
+	ProfileID  string    `json:"profile_id,omitempty"`
+	ProviderID string    `json:"provider_id"`
+	PoolID     string    `json:"pool_id"`
+	AccountID  string    `json:"account_id"`
+	Class      PoolClass `json:"class"`
 }
 
 // RouteOutcome describes the observed result for one exact selected route.
@@ -72,7 +72,7 @@ func (s RouteSelection) Report(outcome RouteOutcome) {
 // ProxyURL returns a parsed copy of the credential-bearing proxy URL. Callers
 // should pass it directly to a transport and must not log it.
 func (s RouteSelection) ProxyURL() (*url.URL, error) {
-	if s.proxyURL == "" || s.owner == nil || s.provider == nil {
+	if s.proxyURL == "" || s.owner == nil || s.provider == nil || s.owner.isClosed() {
 		return nil, ErrProxyUnavailable
 	}
 	u, err := url.Parse(s.proxyURL)
