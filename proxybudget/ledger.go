@@ -14,9 +14,9 @@ import (
 	"time"
 )
 
-// byteLedger is the lane's persistent byte account. Every byte read from or written to the upstream gateway is added with AddIn / AddOut (atomics, no
-// lock on the hot path); a background loop writes the file about once a second when it changed, and Close writes it a last time. A crash loses at
-// most one flush interval of counts (about a second of traffic): the gap between the 45 GB default budget and the 50 GB trial is the margin for that.
+// byteLedger is the persistent byte account. The manager durably reserves a
+// request's entire allowance before admitting a socket and settles actual bytes
+// as I/O completes. Unfinished allowances are charged conservatively on restart.
 //
 // A ledger file that exists but cannot be read is NOT reset to zero: Open fails and the lane stays closed, because zero would hand the budget back.
 type byteLedger struct {
@@ -54,7 +54,7 @@ type ledgerFile struct {
 	Updated     time.Time `json:"updated"`
 }
 
-// ErrbyteLedgerLocked is returned by openByteLedger when another process holds the ledger (two lanes would double-spend the same budget).
+// errLedgerLocked prevents two processes from spending the same allocation.
 var errLedgerLocked = errors.New("proxybudget: ledger is locked by another process")
 
 // openByteLedger opens (creating if absent) dir/ledger.json under an exclusive lock and starts the flush loop. initialUsed seeds a new file only.
