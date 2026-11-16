@@ -2,7 +2,7 @@
 
 # Package index
 
-76 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
+77 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
 
 | Package | Summary |
 | --- | --- |
@@ -53,6 +53,7 @@
 | [`policyeval`](../policyeval/) | A pure-Go rule engine for in-process policy evaluation. |
 | [`profiling`](../profiling/) | Provides opt-in continuous Go profiling through Grafana Pyroscope. |
 | [`promx`](../promx/) | Provides fleet-wide Prometheus collectors and a single-call AutoWire function that installs all observers. |
+| [`proxybudget`](../proxybudget/) | Meters proxy socket bytes against a durable, bounded account. |
 | [`proxysupplier`](../proxysupplier/) | Resolves the upstream egress-proxy URL for outbound HTTP requests. |
 | [`qrterm`](../qrterm/) | Turns a short piece of content — a URL, an id, a token — into a QR code an operator can scan straight off a terminal, or an image/png a browser/client can render. |
 | [`ratecoord`](../ratecoord/) | Provides a distributed rate-limit coordination client. |
