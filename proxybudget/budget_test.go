@@ -341,7 +341,7 @@ func TestCancellationAndNilInputs(t *testing.T) {
 	if _, err := m.Admit(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
-	if _, err := m.Admit(nil); !errors.Is(err, ErrUnavailable) {
+	if _, err := m.Admit(nil); !errors.Is(err, ErrUnavailable) { //nolint:staticcheck // Deliberately exercise rejection of an invalid caller context.
 		t.Fatal(err)
 	}
 	var nilM *Manager
