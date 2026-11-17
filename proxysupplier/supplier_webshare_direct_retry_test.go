@@ -308,6 +308,9 @@ func TestWebshareDirect_ThrottledPageIsRetriedWithoutRestartingTheRefresh(t *tes
 	var srvURL string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		page := r.URL.Query().Get("page")
+		if got := r.URL.Query().Get("page_size"); got != "1000" {
+			t.Errorf("page %s requested page_size=%q, want 1000", page, got)
+		}
 		mu.Lock()
 		hits[page]++
 		n := hits[page]
@@ -321,10 +324,10 @@ func TestWebshareDirect_ThrottledPageIsRetriedWithoutRestartingTheRefresh(t *tes
 		switch page {
 		case "1":
 			resp.Results = []webshareEntry{{Username: "u", Password: "p", ProxyAddress: "10.0.0.1", Port: 5000, Valid: true}}
-			resp.Next = srvURL + "/?mode=direct&page=2&page_size=100"
+			resp.Next = srvURL + "/?mode=direct&page=2&page_size=1000"
 		case "2":
 			resp.Results = []webshareEntry{{Username: "u", Password: "p", ProxyAddress: "10.0.0.1", Port: 5001, Valid: true}}
-			resp.Next = srvURL + "/?mode=direct&page=3&page_size=100"
+			resp.Next = srvURL + "/?mode=direct&page=3&page_size=1000"
 		default:
 			resp.Results = []webshareEntry{{Username: "u", Password: "p", ProxyAddress: "10.0.0.1", Port: 5002, Valid: true}}
 		}

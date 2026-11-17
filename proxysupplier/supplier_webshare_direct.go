@@ -23,12 +23,12 @@ import (
 // the values go-html-proxy's webshareproxy package validated in production
 // (2026-08-25/26) before this was promoted here as a shared primitive.
 const (
-	webshareDirectDefaultPageSize        = 100
+	webshareDirectDefaultPageSize        = 1_000
 	webshareDirectDefaultRefreshInterval = 10 * time.Minute
 	webshareDirectDefaultHTTPTimeout     = 15 * time.Second
 	// webshareDirectRefreshBudget bounds one full paginated refresh
 	// regardless of pool size -- sized for tens of thousands of entries
-	// (500 pages at page_size=100 is a 50k-entry account), not just
+	// (100 pages at page_size=1000 is the 100k-entry catalog limit), not just
 	// whatever the account holds today. A fixed "2x one page's timeout"
 	// budget silently starts failing refreshes the moment the account's
 	// pool outgrows a couple thousand entries.
@@ -462,7 +462,7 @@ func retryablePageError(err error) bool {
 }
 
 // fetchPageRetrying fetches one catalog page, repeating it with the same jittered backoff (and the
-// API's Retry-After) as the refresh loop. The catalog is paginated (about 18 requests for 1,800
+// API's Retry-After) as the refresh loop. The catalog is paginated (about 2 requests for 1,800
 // entries), so a throttled API (429) used to abort the refresh and restart it from page 1 every
 // time: traced 2026-10-17, replicas needed 2.5 to 6 minutes and up to 11 whole attempts to get
 // through. Repeating only the page that failed keeps the pages already fetched and finishes in

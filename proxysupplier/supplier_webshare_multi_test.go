@@ -494,7 +494,7 @@ func TestWebshareMultiRejectsPaginationCycles(t *testing.T) {
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		_ = json.NewEncoder(w).Encode(webshareListResponse{Next: "?mode=direct&page=1&page_size=100&plan_id=8123"})
+		_ = json.NewEncoder(w).Encode(webshareListResponse{Next: "?mode=direct&page=1&page_size=1000&plan_id=8123"})
 	}))
 	defer server.Close()
 	withWebshareDirectBaseURL(t, server.URL)
@@ -621,9 +621,9 @@ func TestWebshareMultiCloseClearsOnlyItsMetricsPointer(t *testing.T) {
 
 func TestWebshareCatalogPaginationRequiresSameOriginPathAndPlan(t *testing.T) {
 	base := webshareDirectDefaultBaseURL
-	current := base + "?mode=direct&page=1&page_size=100&plan_id=1001"
-	valid, err := safeWebshareNextURL(base, current, "?mode=direct&page=2&page_size=100&plan_id=1001", "1001")
-	if err != nil || !strings.HasSuffix(valid, "page=2&page_size=100&plan_id=1001") {
+	current := base + "?mode=direct&page=1&page_size=1000&plan_id=1001"
+	valid, err := safeWebshareNextURL(base, current, "?mode=direct&page=2&page_size=1000&plan_id=1001", "1001")
+	if err != nil || !strings.HasSuffix(valid, "page=2&page_size=1000&plan_id=1001") {
 		t.Fatalf("valid relative pagination URL = %q, %v", valid, err)
 	}
 	for _, next := range []string{
