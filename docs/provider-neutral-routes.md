@@ -121,21 +121,40 @@ These smoke checks prove the listed selector paths on the stated replicas;
 they are not throughput, CAPTCHA, or supplier-quality benchmarks. A code
 release by itself is not deployment evidence.
 
-| Consumer | Version | Replicas | Verified selector coverage |
+| Consumer | Version | Deployment scope | Verified selector coverage |
 | --- | --- | ---: | --- |
-| Go HTML proxy | 0.5.39 | 3 | Both Webshare DC pool pins returned matching live receipts. |
-| Go JavaScript proxy | 0.12.8 | 4 | Chrome request-local routing; provider-only selection returned a live receipt. |
-| Go network JavaScript proxy | 0.9.5 | 4 | Both Webshare DC pool pins returned matching receipts. |
-| Go DuckDuckGo search | 0.4.31 | 2 | Default and both DC pool pins returned results. |
-| Go Bing search | 0.4.5 | 2 | Both DC pool pins returned results and matching receipts. |
-| Node Duck search | 0.1.7 | 2 | Both DC pins, provider, and profile returned results and matching receipts on each replica. |
-| Node Bing search | 0.1.6 | 2 | Both DC pins, provider, and profile returned results and matching receipts on each replica. Its existing default C-backend path still returned 500. |
-| Private DomainScope DuckDuckGo sidecar | 0.4.31 | 1 | Default and quality-pool pin returned uncached results; conflicting selectors returned 400 without an attempt. |
+| Go HTML proxy | 0.5.39 | 3 replicas | Both Webshare DC pool pins returned matching live receipts. |
+| Go JavaScript proxy | 0.12.8 | 4 replicas | Chrome request-local routing; provider-only selection returned a live receipt. |
+| Go network JavaScript proxy | 0.9.5 | 4 replicas | Both Webshare DC pool pins returned matching receipts. |
+| Go DuckDuckGo search | 0.4.31 | 2 replicas | Default and both DC pool pins returned results. |
+| Go Bing search | 0.4.5 | 2 replicas | Both DC pool pins returned results and matching receipts. |
+| Node Duck search | 0.1.7 | 2 replicas | Both DC pins, provider, and profile returned results and matching receipts on each replica. |
+| Node Bing search | 0.1.6 | 2 replicas | Both DC pins, provider, and profile returned results and matching receipts on each replica. Its existing default C-backend path still returned 500. |
+| Private DomainScope DuckDuckGo sidecar | 0.4.31 | 1 replica | Default and quality-pool pin returned uncached results; conflicting selectors returned 400 without an attempt. |
+| DomainScope operator API and frontend | 1.99.362-82d2782 | Stage and production | Staging UI settings roundtrips are recorded below; they verify configuration persistence, not outbound route execution. |
 
-The 19 replicas above are a scoped deployment snapshot, not a claim that all
-fleet services or all providers support explicit selectors. The two configured
+The 19 proxy-service replicas above are a scoped deployment snapshot, not a claim
+that all fleet services or all providers support explicit selectors. The two configured
 DC pools in this snapshot are both Webshare; dc-failover does not provide an
 independent DC supplier. See the
 [registry operations guide](https://github.com/baditaflorin/services-registry/blob/main/FLEET.md#shared-proxy-environment-versus-named-webshare-pools)
 for the distinction between shared environment proxy settings and per-request
 route selection.
+
+DomainScope API and frontend `1.99.362-82d2782` were deployed to staging and
+production. In staging, the operator UI set/read/cleared Bing search-engine and
+strict `legacy-dc` pool settings for ICANN, CT Names, and OpenINTEL, then restored
+the original `auto`/empty selectors with those sources still disabled. BigPicture
+was only filled and reset as a draft; it was not submitted. These checks show
+settings persistence and restoration, not requests made through the selected
+routes. On production, API health and selftest returned 200, and the existing
+ICANN and BigPicture batch IDs resumed and progressed while the source controls
+remained disabled and Cron357 was preserved. That is batch-recovery evidence,
+not a production route-selector smoke test.
+
+Shell probes using short-lived keys were denied with 403 and are not routing
+evidence. The staging stale-market selftest returned 503; the targeted UI
+roundtrips passed, but that broader staging selftest did not. These checks added
+no per-provider, per-account, per-pool, per-class, per-attempt, latency, byte, or
+budget metrics. Legacy consumers outside this scoped list remain unported or
+unverified; do not infer support from the shared API or from catalog readiness.
