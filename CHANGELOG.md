@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.133.3] - 2026-11-17
+
+### Added
+
+- Add `proxybudget`, a provider-independent proxy socket byte meter extracted from the existing search lane accounting. Admissions persist a bounded reservation before any connection; unfinished reservations are conservatively charged after a crash. Tickets share a request cap across concurrent sockets, close and drain before flushing, and retain independent total/daily limits and a runtime kill switch. A strict pool-budget file maps safe provider/pool IDs to private state directories and exact destination host policies; authentication and SSRF checks remain with the consumer.
+
 ## [0.133.2] - 2026-11-17
 
 ### Added
