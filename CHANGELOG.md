@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.134.6] - 2026-11-17
+
+### Added
+
+- Add behavioral coverage for capturestore derivation filters and pagination, owner-token propagation, pre-network validation, receipt bindings, checksum and JSON failures, and safe error redaction. The exact Go 1.26 coverage ratchet passes with capturestore at 82.5%.
+
 ## [0.134.5] - 2026-11-17
 
 ### Added
