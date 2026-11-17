@@ -102,10 +102,12 @@ encoded-metadata limits, scoped credential, idempotent writes, and verified
 body-download checksum. The optional route API is available from go-common
 v0.134.0; the capture-store SDK is in v0.134.4.
 
-Current fetch-cache capture metrics cover write outcome
+The optional fetch-cache writer defines bounded metrics for write outcome
 (`fetchcache_capture_store_writes_total`, with fixed stored/error/skipped/disabled
 values), duration (`fetchcache_capture_store_write_duration_seconds`), and invalid
-optional writer configuration (`fetchcache_capture_store_config_errors_total`).
+writer configuration (`fetchcache_capture_store_config_errors_total`). A writer
+must be configured before these metrics are emitted; their absence is not evidence
+that capture writes succeeded or that there were no errors.
 They have no domain, run, account, pool, provider, or route attempt labels. The shared route package does not itself export attempt,
 failure, per-route latency/bytes, or residential budget/spend metrics. Its
 catalog-readiness gauges and the [fleet routing dashboard](https://fleet-grafana.0exec.com/d/fleet-proxy-routing/fleet-proxy-routing)
