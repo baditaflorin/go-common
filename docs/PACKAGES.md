@@ -2,7 +2,7 @@
 
 # Package index
 
-77 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
+78 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
 
 | Package | Summary |
 | --- | --- |
@@ -13,6 +13,7 @@
 | [`botwall`](../botwall/) | Recognises the interstitial pages a bot-protection vendor answers a client it distrusts with: a captcha, a "checking your browser" wait, an "Access Denied" page. |
 | [`browserheaders`](../browserheaders/) | Generates a coherent set of browser-typical HTTP request headers for outbound calls that need to evade trivial bot detection. |
 | [`cache`](../cache/) | Provides a generic, concurrency-safe LRU+TTL cache. |
+| [`capturestore`](../capturestore/) | Provides a bounded client for the fleet capture-store API. |
 | [`cgroup`](../cgroup/) | Reads resource counters and limits for the current Linux cgroup. |
 | [`chromeguard`](../chromeguard/) | Keeps a Chromium process tree from taking its container down: it reads per-process memory from /proc, raises the OOM score of the browser's children so the kernel kills a renderer first, kills a… |
 | [`circuitbreaker`](../circuitbreaker/) | Implements a per-host circuit breaker state machine (ok → backing_off → failed → ok) that protects services from cascading failures when upstream dependencies are overloaded or down. |
