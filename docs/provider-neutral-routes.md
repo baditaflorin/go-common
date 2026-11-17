@@ -80,3 +80,60 @@ and allowlist hooks are opt-in; nil preserves existing behavior.
 The service owns retries and byte-budget state. Profiles only provide a bounded
 ordered set of exact candidates. Static endpoint support does not itself grant
 residential access or account for bandwidth.
+
+## Capture evidence and observability boundaries
+
+A consumer may persist a response and its route receipt with
+[capturestore](../capturestore/). The optional fetch-cache writer is a
+separate feature: it writes only a fresh, live, complete, non-truncated response
+of at most 8 MiB, and storage errors do not turn a successful fetch into a
+failed fetch. It verifies an explicit route receipt before setting
+`route_verified` and copying the requested selector and actual attempt
+provider/account/pool/class/outcome fields. For an ordinary default request,
+there is no explicit-route verification claim.
+
+Capture metadata is a bounded provenance record supplied by the consumer.
+`route_verified` means that consumer validated the service receipt; it is not
+independent network attestation. Capture writers must not include proxy URLs,
+credentials, raw request headers or cookies. The fetch-cache writer stores a
+SHA-256 fingerprint for forwarded-header identity instead of the headers
+themselves. Use the capture-store SDK for its bounded 8 MiB body and 16 KiB
+encoded-metadata limits, scoped credential, idempotent writes, and verified
+body-download checksum. The optional route API is available from go-common
+v0.134.0; the capture-store SDK is in v0.134.4.
+
+Current fetch-cache capture metrics cover write outcome
+(`fetchcache_capture_store_writes_total`, with fixed stored/error/skipped/disabled
+values), duration (`fetchcache_capture_store_write_duration_seconds`), and invalid
+optional writer configuration (`fetchcache_capture_store_config_errors_total`).
+They have no domain, run, account, pool, provider, or route attempt labels. The shared route package does not itself export attempt,
+failure, per-route latency/bytes, or residential budget/spend metrics. Its
+catalog-readiness gauges and the [fleet routing dashboard](https://fleet-grafana.0exec.com/d/fleet-proxy-routing/fleet-proxy-routing)
+therefore describe pool catalog readiness only; use verified receipts and
+bounded consumer telemetry for request evidence. Do not infer route quality or billing from
+catalog readiness.
+
+## Verified consumer propagation — 2026-11-17
+
+These smoke checks prove the listed selector paths on the stated replicas;
+they are not throughput, CAPTCHA, or supplier-quality benchmarks. A code
+release by itself is not deployment evidence.
+
+| Consumer | Version | Replicas | Verified selector coverage |
+| --- | --- | ---: | --- |
+| Go HTML proxy | 0.5.39 | 3 | Both Webshare DC pool pins returned matching live receipts. |
+| Go JavaScript proxy | 0.12.8 | 4 | Chrome request-local routing; provider-only selection returned a live receipt. |
+| Go network JavaScript proxy | 0.9.5 | 4 | Both Webshare DC pool pins returned matching receipts. |
+| Go DuckDuckGo search | 0.4.31 | 2 | Default and both DC pool pins returned results. |
+| Go Bing search | 0.4.5 | 2 | Both DC pool pins returned results and matching receipts. |
+| Node Duck search | 0.1.7 | 2 | Both DC pins, provider, and profile returned results and matching receipts on each replica. |
+| Node Bing search | 0.1.6 | 2 | Both DC pins, provider, and profile returned results and matching receipts on each replica. Its existing default C-backend path still returned 500. |
+| Private DomainScope DuckDuckGo sidecar | 0.4.31 | 1 | Default and quality-pool pin returned uncached results; conflicting selectors returned 400 without an attempt. |
+
+The 19 replicas above are a scoped deployment snapshot, not a claim that all
+fleet services or all providers support explicit selectors. The two configured
+DC pools in this snapshot are both Webshare; dc-failover does not provide an
+independent DC supplier. See the
+[registry operations guide](https://github.com/baditaflorin/services-registry/blob/main/FLEET.md#shared-proxy-environment-versus-named-webshare-pools)
+for the distinction between shared environment proxy settings and per-request
+route selection.
