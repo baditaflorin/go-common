@@ -186,16 +186,16 @@ func (m *Manager) Close() error {
 // Ticket is a single admitted request across all its proxy connections. It is
 // safe to wrap multiple browser subresource sockets in the same ticket.
 type Ticket struct {
-	manager                    *Manager
-	ctx                        context.Context
-	mu                         sync.Mutex
-	closed                     bool
-	conns                      map[*countingConn]struct{}
-	ops                        sync.WaitGroup
-	in, out, claimed, reserved atomic.Int64
-	closeOnce                  sync.Once
-	closeErr                   error
-	stopContext                func() bool
+	manager                      *Manager
+	ctx                          context.Context
+	mu                           sync.Mutex
+	closed                       bool
+	conns                        map[*countingConn]struct{}
+	ops                          sync.WaitGroup
+	in, out, allocated, reserved atomic.Int64
+	closeOnce                    sync.Once
+	closeErr                     error
+	stopContext                  func() bool
 }
 
 // Usage is the actual socket usage recorded so far, in both directions.
@@ -261,13 +261,16 @@ func (t *Ticket) begin() error {
 
 func (t *Ticket) claim(want int) int64 {
 	for {
-		claimed := t.claimed.Load()
-		remaining := t.manager.cfg.MaxRequestBytes - t.in.Load() - t.out.Load() - claimed
+		// One atomic counter holds consumed bytes plus outstanding I/O claims.
+		// Moving a completed claim into the usage counters must not count it
+		// twice temporarily and refuse unrelated connections before the cap.
+		allocated := t.allocated.Load()
+		remaining := t.manager.cfg.MaxRequestBytes - allocated
 		if remaining <= 0 {
 			return 0
 		}
 		n := min(int64(want), remaining)
-		if t.claimed.CompareAndSwap(claimed, claimed+n) {
+		if t.allocated.CompareAndSwap(allocated, allocated+n) {
 			return n
 		}
 	}
@@ -350,10 +353,12 @@ func (c *countingConn) transfer(p []byte, read bool) (int, error) {
 		_ = c.Close()
 		return 0, ErrRequest
 	}
-	defer c.ticket.claimed.Add(-claimed)
+	var n int
+	// Consumed bytes remain allocated for the ticket's lifetime. Only the
+	// unused portion of this I/O claim becomes available to another socket.
+	defer func() { c.ticket.allocated.Add(int64(n) - claimed) }()
 	want := len(p)
 	p = p[:int(claimed)]
-	var n int
 	var err error
 	if read {
 		n, err = c.Conn.Read(p)
