@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.134.1] - 2026-11-17
+
+### Fixed
+
+- Request up to 1,000 Webshare direct proxies per catalog page and validate the response against that same bound. This reduces pagination calls for larger plans while keeping the existing page-byte, total-entry, and page-count limits. Tests verify a full page succeeds and oversized pages are rejected.
+
 ## [0.134.0] - 2026-11-17
 
 ### Added
