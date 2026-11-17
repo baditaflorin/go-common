@@ -146,7 +146,7 @@ production. Staging advanced to later API and frontend images within that releas
 during QA; the selector controls and API routes exercised in this check were
 unchanged. In staging, the operator UI set/read/cleared Bing search-engine and
 strict `legacy-dc` pool settings for ICANN, CT Names, and OpenINTEL. Each setting
-write and readback returned 200, and the original `auto`/empty selectors were
+write and readback returned 200, and the intended `auto`/empty defaults were
 restored while all three sources remained disabled. A final read-only database
 check confirmed those values and no running or pending ICANN slices, CT Names or
 OpenINTEL imports, or BigPicture batches. BigPicture was only filled and reset as
