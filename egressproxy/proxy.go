@@ -48,7 +48,7 @@ func Start(ctx context.Context, cfg Config) (*Proxy, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if cfg.RequireUpstream && cfg.Supplier == nil {
+	if cfg.RequireUpstream && cfg.Supplier == nil && cfg.RouteSelection == nil {
 		return nil, ErrNoSupplier
 	}
 	cfg = cfg.withDefaults()

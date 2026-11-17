@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.134.0] - 2026-11-17
+
+### Added
+
+- Add optional provider-neutral request routing with strict pool/provider pins, ordered named profiles, safe route descriptors, exact selection feedback and file-backed static proxy endpoints. Existing supplier defaults remain unchanged when `PROXY_ROUTING_FILE` is unset. Add guarded connection-wrapping hooks for safehttp and egressproxy bandwidth accounting, plus an egressproxy destination allowlist callback that runs only after the canonical SSRF guard. A request-local outcome callback lets browser consumers distinguish proxy transport failures from origin HTTP errors.
+
+### Fixed
+
+- Keep consumed and in-flight socket bytes in one atomic allocation counter so concurrent transfers cannot temporarily count the same bytes twice and refuse a request before its cap. Reproduced on fresh main; 400 repeated concurrent-cap tests and the budget race suite pass without relaxing the cap assertions.
+
 ## [0.133.3] - 2026-11-17
 
 ### Added

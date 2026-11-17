@@ -333,7 +333,17 @@ func websharePoolsSnapshot(m *webshareMultiSupplier) []WebsharePoolState {
 }
 
 func newWebshareMultiSupplier(path string, rules *noProxyRules, defaultPoolIDs ...string) Supplier {
-	activeWebshareMultiSupplier.Store(nil)
+	return newWebshareMultiSupplierWithPublish(path, rules, true, defaultPoolIDs...)
+}
+
+// newWebshareMultiSupplierWithPublish allows independent route routers to
+// reuse the same catalog implementation without replacing the process-default
+// metrics snapshot. The public/process supplier retains the old publication
+// behavior through newWebshareMultiSupplier.
+func newWebshareMultiSupplierWithPublish(path string, rules *noProxyRules, publish bool, defaultPoolIDs ...string) Supplier {
+	if publish {
+		activeWebshareMultiSupplier.Store(nil)
+	}
 	defaultPoolID := ""
 	if len(defaultPoolIDs) > 0 {
 		defaultPoolID = strings.TrimSpace(defaultPoolIDs[0])
@@ -409,7 +419,9 @@ func newWebshareMultiSupplier(path string, rules *noProxyRules, defaultPoolIDs .
 	}
 	sort.Slice(pools, func(i, j int) bool { return pools[i].ID < pools[j].ID })
 	m := &webshareMultiSupplier{pools: pools, rules: rules, defaultPoolID: defaultPoolID}
-	activeWebshareMultiSupplier.Store(m)
+	if publish {
+		activeWebshareMultiSupplier.Store(m)
+	}
 	return m
 }
 

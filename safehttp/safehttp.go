@@ -391,6 +391,7 @@ type options struct {
 	maxRedirects int
 	userAgent    string
 	portCheck    bool
+	connWrapper  func(context.Context, net.Conn) (net.Conn, error)
 
 	// forceHTTP2 sets Transport.ForceAttemptHTTP2 so the client offers
 	// "h2" in the TLS ClientHello ALPN. Off by default — see
@@ -644,7 +645,7 @@ func newBaseTransport(o *options, proxyFn func(*http.Request) (*url.URL, error))
 		// Override via WithoutProxy (force direct) or RequireProxy
 		// (fail-fast if env not set). See those options above.
 		Proxy:                  proxyFn,
-		DialContext:            makeDialer(o.portCheck),
+		DialContext:            makeDialerWithConnWrapper(o.portCheck, o.connWrapper),
 		OnProxyConnectResponse: o.proxyConnectResponseHook,
 		// ForceAttemptHTTP2 must be set explicitly: because DialContext
 		// above is a custom dialer, net/http otherwise disables HTTP/2,
@@ -709,6 +710,10 @@ func NegotiatedProtocol(resp *http.Response) string {
 }
 
 func makeDialer(portCheck bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return makeDialerWithConnWrapper(portCheck, nil)
+}
+
+func makeDialerWithConnWrapper(portCheck bool, wrap func(context.Context, net.Conn) (net.Conn, error)) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
@@ -738,7 +743,20 @@ func makeDialer(portCheck bool) func(ctx context.Context, network, addr string) 
 				return nil
 			},
 		}
-		return d.DialContext(ctx, network, addr)
+		conn, err := d.DialContext(ctx, network, addr)
+		if err != nil || wrap == nil {
+			return conn, err
+		}
+		wrapped, err := wrap(ctx, conn)
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		if wrapped == nil {
+			_ = conn.Close()
+			return nil, errors.New("safehttp: connection wrapper returned nil")
+		}
+		return wrapped, nil
 	}
 }
 

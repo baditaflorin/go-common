@@ -69,6 +69,17 @@ type Config struct {
 	// only way out: there is no direct path to a target in this package.
 	Supplier proxysupplier.Supplier
 
+	// RouteSelection pins this proxy instance to one exact provider-neutral
+	// route selection. Consumers resolve candidate metadata, acquire any
+	// required residential bandwidth permit, and select the route before Start.
+	// It takes precedence over Supplier when set.
+	RouteSelection *proxysupplier.RouteSelection
+
+	// OnRouteOutcome observes route-selection feedback emitted by this proxy.
+	// It can be called concurrently for independent connections and must be
+	// concurrency-safe. It is observational only; panics are not recovered.
+	OnRouteOutcome func(proxysupplier.RouteOutcome)
+
 	// KeyFunc, when set and the Supplier also implements
 	// proxysupplier.KeyedSupplier, gives the key passed to ProxyURLForKey (for
 	// example the target host, to keep one exit IP per site). An empty key
@@ -88,6 +99,11 @@ type Config struct {
 	// only briefly).
 	Guard Guard
 
+	// AllowTarget, when non-nil, is an additional destination policy applied
+	// after the canonical SSRF Guard succeeds and before any upstream dial. The
+	// callback receives a normalized lowercase hostname without a trailing dot.
+	// A false result is a fail-closed 403. Nil preserves existing behavior.
+	AllowTarget func(host string) bool
 	// GuardCacheTTL and GuardCacheSize bound the verdict cache (defaults 30 s,
 	// 4096 entries; the cache is cleared wholesale when full).
 	GuardCacheTTL  time.Duration
@@ -115,6 +131,12 @@ type Config struct {
 	// closes the tunnel and counts a byte_cap result. 0 or negative means
 	// unlimited; DefaultConfig sets 64 MiB.
 	MaxTunnelBytes int64
+
+	// WrapUpstreamConn optionally wraps every newly dialed upstream-proxy
+	// socket after TCP connect and before proxy CONNECT/authentication. Use this
+	// for caller-owned byte metering. A wrapper error closes the raw socket and
+	// fails closed. Nil preserves the existing transport path.
+	WrapUpstreamConn func(net.Conn) (net.Conn, error)
 
 	// IgnoreUpstream5xx stops an upstream 5xx answer to CONNECT from counting
 	// as an upstream failure: no MarkResult(false), no retry, the status is
