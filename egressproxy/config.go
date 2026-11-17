@@ -75,6 +75,11 @@ type Config struct {
 	// It takes precedence over Supplier when set.
 	RouteSelection *proxysupplier.RouteSelection
 
+	// OnRouteOutcome observes route-selection feedback emitted by this proxy.
+	// It can be called concurrently for independent connections and must be
+	// concurrency-safe. It is observational only; panics are not recovered.
+	OnRouteOutcome func(proxysupplier.RouteOutcome)
+
 	// KeyFunc, when set and the Supplier also implements
 	// proxysupplier.KeyedSupplier, gives the key passed to ProxyURLForKey (for
 	// example the target host, to keep one exit IP per site). An empty key

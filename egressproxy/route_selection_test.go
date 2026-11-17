@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/baditaflorin/go-common/proxysupplier"
@@ -46,5 +47,55 @@ func TestEgressProxyUsesPreselectedProviderNeutralRoute(t *testing.T) {
 	}
 	if got := upstream.auths(); len(got) != 1 || got[0] != basicHeader("route-user", "route-pass") {
 		t.Fatalf("upstream auth did not use selected route credentials (count=%d)", len(got))
+	}
+}
+
+func TestRouteOutcomeObserverReceivesExactTransportFeedbackConcurrently(t *testing.T) {
+	fakeUp := newFakeUpstream(t, "route-user", "route-pass")
+	proxyURLFile := filepath.Join(t.TempDir(), "route.proxy")
+	if err := os.WriteFile(proxyURLFile, []byte(fakeUp.url()), 0600); err != nil {
+		t.Fatal("write proxy URL file:", err)
+	}
+	router, err := proxysupplier.NewRouteRouter(proxysupplier.RouteRouterConfig{Providers: []proxysupplier.RouteProviderConfig{{
+		ID: "thunder", Type: proxysupplier.RouteProviderStatic, Pools: []proxysupplier.StaticRoutePoolConfig{{
+			ID: "trial", AccountID: "trial-account", Class: proxysupplier.PoolClassDC, ProxyURLFile: proxyURLFile,
+		}},
+	}}})
+	if err != nil {
+		t.Fatal("NewRouteRouter:", err)
+	}
+	t.Cleanup(router.Close)
+	candidates, err := router.ResolveCandidates(proxysupplier.RouteIntent{PoolID: "trial"})
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("resolve exact route: candidates=%#v err=%v", candidates, err)
+	}
+	selection, err := router.SelectRoute(candidates[0], false)
+	if err != nil {
+		t.Fatal("select route:", err)
+	}
+
+	got := make(chan proxysupplier.RouteOutcome, 2)
+	p := startProxy(t, func(c *Config) {
+		c.Supplier = nil
+		c.RouteSelection = &selection
+		c.OnRouteOutcome = func(outcome proxysupplier.RouteOutcome) { got <- outcome }
+	})
+	var wg sync.WaitGroup
+	for _, ok := range []bool{false, true} {
+		ok := ok
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.markResult(&upstream{routeSelection: &selection}, ok)
+		}()
+	}
+	wg.Wait()
+	close(got)
+	seen := map[proxysupplier.RouteOutcome]int{}
+	for outcome := range got {
+		seen[outcome]++
+	}
+	if seen[proxysupplier.RouteOutcomeSuccess] != 1 || seen[proxysupplier.RouteOutcomeTransportFailure] != 1 || len(seen) != 2 {
+		t.Fatalf("observed route outcomes = %v", seen)
 	}
 }

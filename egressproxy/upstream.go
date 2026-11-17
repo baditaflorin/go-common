@@ -177,6 +177,9 @@ func (p *Proxy) markResult(up *upstream, ok bool) {
 			outcome = proxysupplier.RouteOutcomeTransportFailure
 		}
 		up.routeSelection.Report(outcome)
+		if p.cfg.OnRouteOutcome != nil {
+			p.cfg.OnRouteOutcome(outcome)
+		}
 		return
 	}
 	if up.selection != nil {
