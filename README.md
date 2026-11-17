@@ -25,6 +25,7 @@ trustworthy, which is what the API policy and the CI gates below are for.
 | Call a **sibling fleet service** on the private mesh | [`meshclient`](meshclient/): you must choose fail-open or fail-closed, and in fail-open it adds `"<primitive>-down"` to the request's [`degraded`](degraded/) list. `safehttp` rejects private IPs by design, so it cannot be used here |
 | Fetch a page through the fleet fetch cache | [`fleetfetch`](fleetfetch/) |
 | Send a browser through an upstream proxy that needs credentials | [`egressproxy`](egressproxy/) with [`proxysupplier`](proxysupplier/) |
+| Select a provider, pool, or ordered profile for one request | [Provider-neutral route guide](docs/provider-neutral-routes.md) and [`proxysupplier`](proxysupplier/) |
 | Verify an API key, or protect a handler | [`apikey`](apikey/), [`middleware`](middleware/) |
 | Read environment variables | [`env`](env/); declare the ones your package owns in its registry so they are listed in [docs/ENV.md](docs/ENV.md), checked at start-up and shown redacted on the debug server |
 | Write structured logs with the service, version and trace id | [`logx`](logx/): set `LOG_FORMAT=json` (or pass `server.WithStructuredLogs()`); off by default |
