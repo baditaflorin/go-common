@@ -23,6 +23,7 @@ trustworthy, which is what the API policy and the CI gates below are for.
 | Start an HTTP service with the fleet middleware, `/health`, `/selftest`, graceful drain | [`server`](server/) with [`config`](config/) and [`env`](env/) |
 | Call the **public internet** | [`safehttp.NewClient`](safehttp/) (refuses internal addresses, DNS-rebind safe) |
 | Call a **sibling fleet service** on the private mesh | [`meshclient`](meshclient/): you must choose fail-open or fail-closed, and in fail-open it adds `"<primitive>-down"` to the request's [`degraded`](degraded/) list. `safehttp` rejects private IPs by design, so it cannot be used here |
+| Store and query bounded response captures | [`capturestore`](capturestore/): scoped bearer auth, binary ingest limits, owner-scoped queries, and checksum-verified body downloads |
 | Fetch a page through the fleet fetch cache | [`fleetfetch`](fleetfetch/) |
 | Send a browser through an upstream proxy that needs credentials | [`egressproxy`](egressproxy/) with [`proxysupplier`](proxysupplier/) |
 | Select a provider, pool, or ordered profile for one request | [Provider-neutral route guide](docs/provider-neutral-routes.md) and [`proxysupplier`](proxysupplier/) |

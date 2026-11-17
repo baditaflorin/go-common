@@ -1,10 +1,17 @@
 # Changelog
 
+## [0.134.4] - 2026-11-17
+
+### Added
+
+- Add the bounded capturestore client for authenticated binary capture ingest, metadata/list/storage/compare reads, and gzip body downloads with checksum verification. The SDK validates HTTPS origins, limits raw bodies and encoded metadata, and returns safe errors without response bodies or credentials.
+
 ## [0.134.3] - 2026-11-17
 
 ### Fixed
 
-- Dependencies with published advisories move to their fixed releases: `github.com/go-jose/go-jose/v4` 4.1.5 to 4.1.6 (GHSA-mgcc-cww5-fp2q, high: DoS when parsing JWKs that contain RSA keys) and OpenTelemetry 1.46.0 to 1.47.0 for `otel`, `otel/sdk`, `otel/trace`, `otel/metric` and both OTLP trace exporters (GHSA-q7gw-24fr-5p69, medium: `AttributeValueLengthLimit` bypassed by values made of valid U+FFFD runes). Consumers inherit the fix by bumping go-common, since both are pinned here; `otel/log` 1.47.0 joins the module graph as an indirect dependency and the genproto modules move with it. No go-common code changes. `go build ./...`, `go vet ./...` and `go test -short ./...` pass.
+- Dependencies with published advisories move to their fixed releases: github.com/go-jose/go-jose/v4 4.1.5 to 4.1.6 (GHSA-mgcc-cww5-fp2q, high: DoS when parsing JWKs that contain RSA keys) and OpenTelemetry 1.46.0 to 1.47.0 for otel, otel/sdk, otel/trace, otel/metric and both OTLP trace exporters (GHSA-q7gw-24fr-5p69, medium: AttributeValueLengthLimit bypassed by values made of valid U+FFFD runes). Consumers inherit the fix by bumping go-common, since both are pinned here; otel/log 1.47.0 joins the module graph as an indirect dependency and the genproto modules move with it. No go-common code changes. go build ./..., go vet ./... and go test -short ./... pass.
+
 
 ## [0.134.2] - 2026-11-17
 

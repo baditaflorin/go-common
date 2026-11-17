@@ -7,6 +7,7 @@ bootgate 94
 botwall 96
 browserheaders 93
 cache 98
+capturestore 75
 cgroup 75
 chromeguard 87
 circuitbreaker 74
