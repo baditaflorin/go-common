@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.134.2] - 2026-11-17
+
+### Fixed
+
+- Apply a conservative minimum 60-second delay after a Webshare direct-catalog HTTP 429, while honoring a longer `Retry-After` up to the existing five-minute cap. Recheck cancellation before another page request so an expired refresh budget cannot trigger a late retry. Deterministic retry-delay and cancellation tests cover the behavior.
+
 ## [0.134.1] - 2026-11-17
 
 ### Fixed
