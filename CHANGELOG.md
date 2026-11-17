@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.134.5] - 2026-11-17
+
+### Added
+
+- Extend capturestore with owner-scoped immutable derivation writes, filtered listing, metadata reads, and bounded JSON downloads verified against both metadata and response checksums. Parser results carry their exact source capture hash, parser version, and options fingerprint.
+
 ## [0.134.4] - 2026-11-17
 
 ### Added
