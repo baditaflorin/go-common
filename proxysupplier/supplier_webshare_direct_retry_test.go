@@ -16,8 +16,13 @@ import (
 func fastRetries(t *testing.T, base, max time.Duration) {
 	t.Helper()
 	ob, om := webshareDirectRetryBase, webshareDirectRetryMax
+	of := webshareDirectRateLimitRetryFloor
 	webshareDirectRetryBase, webshareDirectRetryMax = base, max
-	t.Cleanup(func() { webshareDirectRetryBase, webshareDirectRetryMax = ob, om })
+	webshareDirectRateLimitRetryFloor = base
+	t.Cleanup(func() {
+		webshareDirectRetryBase, webshareDirectRetryMax = ob, om
+		webshareDirectRateLimitRetryFloor = of
+	})
 }
 
 // flakyWebshare answers the first `failures` requests with status (and Retry-After when
@@ -279,16 +284,51 @@ func TestWebshareDirect_NextDelay(t *testing.T) {
 
 	t.Run("Retry-After wins over a shorter backoff and is capped", func(t *testing.T) {
 		s := mk(0, 10*time.Minute)
-		if got := s.nextDelay(&webshareAPIError{Status: 429, RetryAfter: 45 * time.Second}, 1); got != 45*time.Second {
-			t.Errorf("Retry-After 45 s: %s", got)
+		if got := s.nextDelay(&webshareAPIError{Status: 429, RetryAfter: 45 * time.Second}, 1); got != time.Minute {
+			t.Errorf("Retry-After 45 s is below the 60 s 429 floor: %s", got)
 		}
-		if got := s.nextDelay(&webshareAPIError{Status: 429, RetryAfter: time.Hour}, 1); got != 10*time.Minute {
-			t.Errorf("an absurd Retry-After is capped to max(interval, 5 min): %s", got)
+		if got := s.nextDelay(&webshareAPIError{Status: 429, RetryAfter: 2 * time.Minute}, 1); got != 2*time.Minute {
+			t.Errorf("Retry-After longer than the floor: %s", got)
 		}
-		if got := s.nextDelay(&webshareAPIError{Status: 429}, 1); got != 500*time.Millisecond {
-			t.Errorf("no Retry-After: %s, want the plain backoff", got)
+		if got := s.nextDelay(&webshareAPIError{Status: 429, RetryAfter: time.Hour}, 1); got != webshareDirectMaxRetryAfter {
+			t.Errorf("an absurd Retry-After is capped at %s: got %s", webshareDirectMaxRetryAfter, got)
+		}
+		if got := s.nextDelay(&webshareAPIError{Status: 429}, 1); got != time.Minute {
+			t.Errorf("missing Retry-After: %s, want the 60 s floor", got)
+		}
+		if got := s.nextDelay(&webshareAPIError{Status: http.StatusBadGateway}, 1); got != 500*time.Millisecond {
+			t.Errorf("non-429 server errors keep normal backoff: %s", got)
 		}
 	})
+}
+
+func TestWebshareDirect_CanceledRefreshDoesNotIssueAnotherRequest(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &webshareDirectSupplier{
+		apiKey:     "test-key",
+		baseURL:    srv.URL,
+		httpClient: srv.Client(),
+		retryBase:  time.Second,
+		retryMax:   time.Minute,
+		retryWait: func(_ context.Context, delay time.Duration, _ <-chan struct{}) bool {
+			if delay != time.Minute {
+				t.Errorf("retry delay = %s, want 60 s floor", delay)
+			}
+			cancel()
+			return true // Simulate the timer winning a simultaneous cancel.
+		},
+	}
+	_, _ = s.fetchPageRetrying(ctx, srv.URL)
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("requests after canceled retry wait = %d, want only the first request", got)
+	}
 }
 
 func TestWebshareDirect_RefreshMetricsStartAtNeverAndAreZeroWithoutKey(t *testing.T) {
@@ -308,6 +348,9 @@ func TestWebshareDirect_ThrottledPageIsRetriedWithoutRestartingTheRefresh(t *tes
 	var srvURL string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		page := r.URL.Query().Get("page")
+		if got := r.URL.Query().Get("page_size"); got != "1000" {
+			t.Errorf("page %s requested page_size=%q, want 1000", page, got)
+		}
 		mu.Lock()
 		hits[page]++
 		n := hits[page]
@@ -321,10 +364,10 @@ func TestWebshareDirect_ThrottledPageIsRetriedWithoutRestartingTheRefresh(t *tes
 		switch page {
 		case "1":
 			resp.Results = []webshareEntry{{Username: "u", Password: "p", ProxyAddress: "10.0.0.1", Port: 5000, Valid: true}}
-			resp.Next = srvURL + "/?mode=direct&page=2&page_size=100"
+			resp.Next = srvURL + "/?mode=direct&page=2&page_size=1000"
 		case "2":
 			resp.Results = []webshareEntry{{Username: "u", Password: "p", ProxyAddress: "10.0.0.1", Port: 5001, Valid: true}}
-			resp.Next = srvURL + "/?mode=direct&page=3&page_size=100"
+			resp.Next = srvURL + "/?mode=direct&page=3&page_size=1000"
 		default:
 			resp.Results = []webshareEntry{{Username: "u", Password: "p", ProxyAddress: "10.0.0.1", Port: 5002, Valid: true}}
 		}

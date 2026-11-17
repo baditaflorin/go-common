@@ -157,6 +157,126 @@ func TestWebshareMultiDefaultExcludesResidentialAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestWebshareMultiDefaultPoolCanPinNamedDCOnly(t *testing.T) {
+	legacy := &webshareDirectSupplier{}
+	quality := &webshareDirectSupplier{}
+	installEntries(legacy, testEntry("192.0.2.10", 8000, "legacy"))
+	installEntries(quality, testEntry("192.0.2.11", 8000, "quality"))
+	res := &webshareDirectSupplier{}
+	installEntries(res, testEntry("192.0.2.12", 8000, "isp"))
+	m := testMulti(
+		&webshareNamedPool{WebsharePoolConfig: WebsharePoolConfig{ID: "legacy", AccountID: "legacy-account", Class: PoolClassDC}, supplier: legacy},
+		&webshareNamedPool{WebsharePoolConfig: WebsharePoolConfig{ID: "quality", AccountID: "quality-account", Class: PoolClassDC}, supplier: quality},
+		&webshareNamedPool{WebsharePoolConfig: WebsharePoolConfig{ID: "isp", AccountID: "quality-account", Class: PoolClassResidential}, supplier: res},
+	)
+	m.defaultPoolID = "quality"
+	selection, err := m.SelectDefaultPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.PoolID != "quality" || selection.Class != PoolClassDC {
+		t.Fatalf("default selection = %s, want pinned quality DC", selection)
+	}
+	if got := m.ProxyURL(); !strings.Contains(got, "192.0.2.11:8000") {
+		t.Fatalf("ProxyURL did not honor named DC default: %q", got)
+	}
+}
+
+func TestWebshareMultiRejectsInvalidDefaultPoolWithoutFallback(t *testing.T) {
+	dir := t.TempDir()
+	path := writePoolConfig(t,
+		poolConfig(t, dir, "legacy", "legacy-account", PoolClassDC, "1001", 0),
+		poolConfig(t, dir, "isp", "quality-account", PoolClassResidential, "2002", 0),
+	)
+	for _, id := range []string{"missing", "isp"} {
+		supplier := NewFromConfig(Config{Supplier: "webshare_multi", WebsharePoolsFile: path, WebshareDefaultPoolID: id})
+		if supplier.Name() != "webshare_multi" || supplier.ProxyURL() != "" {
+			t.Fatalf("invalid default %q fell back: supplier=%q proxy=%q", id, supplier.Name(), supplier.ProxyURL())
+		}
+	}
+}
+
+func TestWebshareMultiDefaultSelectorFailsClosedForInvalidConfig(t *testing.T) {
+	dir := t.TempDir()
+	validPath := writePoolConfig(t,
+		poolConfig(t, dir, "legacy", "legacy-account", PoolClassDC, "1001", 0),
+		poolConfig(t, dir, "isp", "quality-account", PoolClassResidential, "2002", 0),
+	)
+	cases := []struct {
+		name    string
+		path    string
+		poolIDs []string
+	}{
+		{name: "missing config file", path: filepath.Join(t.TempDir(), "missing.json")},
+		{name: "blank config path"},
+		{name: "unsafe default pool id", path: validPath, poolIDs: []string{"../legacy"}},
+		{name: "multiple default pool ids", path: validPath, poolIDs: []string{"legacy", "isp"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			supplier := newWebshareMultiSupplier(tc.path, parseNoProxy(""), tc.poolIDs...)
+			if supplier.Name() != "webshare_multi" || supplier.ProxyURL() != "" {
+				t.Fatalf("invalid selector configuration fell back: name=%q proxy=%q", supplier.Name(), supplier.ProxyURL())
+			}
+			client := HTTPClient(supplier, time.Second)
+			resp, err := client.Get("http://127.0.0.1:1/should-not-connect")
+			if resp != nil {
+				resp.Body.Close()
+			}
+			if !errors.Is(err, ErrProxyUnavailable) {
+				t.Fatalf("invalid selector configuration HTTP error = %v, want ErrProxyUnavailable", err)
+			}
+		})
+	}
+}
+
+func TestWebshareMultiSelectPoolRejectsUnknownClassAndExcludedPools(t *testing.T) {
+	dc := &webshareDirectSupplier{}
+	installEntries(dc, testEntry("192.0.2.20", 8000, "dc"))
+	m := testMulti(&webshareNamedPool{WebsharePoolConfig: WebsharePoolConfig{ID: "dc", Class: PoolClassDC}, supplier: dc})
+	if _, err := m.SelectPool(PoolClass("unknown")); !errors.Is(err, ErrProxyUnavailable) {
+		t.Fatalf("unknown class selection error = %v, want ErrProxyUnavailable", err)
+	}
+	if _, err := m.SelectPool(PoolClassDC, "dc"); !errors.Is(err, ErrProxyUnavailable) {
+		t.Fatalf("all-excluded selection error = %v, want ErrProxyUnavailable", err)
+	}
+}
+
+func TestWebsharePoolInfoHelpersExposeOnlySafeConfiguredLabels(t *testing.T) {
+	previous := activeWebshareMultiSupplier.Load()
+	activeWebshareMultiSupplier.Store(nil)
+	t.Cleanup(func() { activeWebshareMultiSupplier.Store(previous) })
+	dir := t.TempDir()
+	path := writePoolConfig(t,
+		poolConfig(t, dir, "quality", "quality-account", PoolClassDC, "2002", 0),
+		poolConfig(t, dir, "legacy", "legacy-account", PoolClassDC, "1001", 0),
+	)
+	info, err := LoadWebsharePoolInfo(path)
+	if err != nil {
+		t.Fatal("LoadWebsharePoolInfo:", err)
+	}
+	if len(info) != 2 || info[0].PoolID != "legacy" || info[1].PoolID != "quality" {
+		t.Fatalf("safe pool labels are not sorted: %#v", info)
+	}
+	for _, pool := range info {
+		if pool.AccountID == "" || pool.Class != PoolClassDC {
+			t.Fatalf("safe pool metadata missing: %#v", pool)
+		}
+	}
+	if got := WebsharePools(noneSupplier{}); got != nil {
+		t.Fatalf("WebsharePools(non-Webshare supplier) = %#v, want nil", got)
+	}
+	if got := WebsharePoolsSnapshot(noneSupplier{}); got != nil {
+		t.Fatalf("WebsharePoolsSnapshot(non-Webshare supplier) = %#v, want nil", got)
+	}
+	if got := WebsharePoolsSnapshot(nil); got != nil {
+		t.Fatalf("WebsharePoolsSnapshot(nil without active supplier) = %#v, want nil", got)
+	}
+	if _, err := LoadWebsharePoolInfo(filepath.Join(t.TempDir(), "missing.json")); err == nil {
+		t.Fatal("LoadWebsharePoolInfo(missing file) unexpectedly succeeded")
+	}
+}
+
 func TestWebshareMultiInvalidKeyFileFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pools.json")
 	config := WebsharePoolsConfig{Pools: []WebsharePoolConfig{{
@@ -374,7 +494,7 @@ func TestWebshareMultiRejectsPaginationCycles(t *testing.T) {
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		_ = json.NewEncoder(w).Encode(webshareListResponse{Next: "?mode=direct&page=1&page_size=100&plan_id=8123"})
+		_ = json.NewEncoder(w).Encode(webshareListResponse{Next: "?mode=direct&page=1&page_size=1000&plan_id=8123"})
 	}))
 	defer server.Close()
 	withWebshareDirectBaseURL(t, server.URL)
@@ -501,9 +621,9 @@ func TestWebshareMultiCloseClearsOnlyItsMetricsPointer(t *testing.T) {
 
 func TestWebshareCatalogPaginationRequiresSameOriginPathAndPlan(t *testing.T) {
 	base := webshareDirectDefaultBaseURL
-	current := base + "?mode=direct&page=1&page_size=100&plan_id=1001"
-	valid, err := safeWebshareNextURL(base, current, "?mode=direct&page=2&page_size=100&plan_id=1001", "1001")
-	if err != nil || !strings.HasSuffix(valid, "page=2&page_size=100&plan_id=1001") {
+	current := base + "?mode=direct&page=1&page_size=1000&plan_id=1001"
+	valid, err := safeWebshareNextURL(base, current, "?mode=direct&page=2&page_size=1000&plan_id=1001", "1001")
+	if err != nil || !strings.HasSuffix(valid, "page=2&page_size=1000&plan_id=1001") {
 		t.Fatalf("valid relative pagination URL = %q, %v", valid, err)
 	}
 	for _, next := range []string{

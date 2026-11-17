@@ -25,9 +25,11 @@ const firstAttemptShare = 0.6
 // upstream is one parsed upstream proxy. It never exposes the credentialed
 // URL: addr is host:port, auth is the ready Proxy-Authorization value.
 type upstream struct {
-	addr   string // host:port, no credentials
-	scheme string
-	auth   string // "Basic ..." or ""
+	addr           string // host:port, no credentials
+	scheme         string
+	auth           string                           // "Basic ..." or ""
+	selection      *proxysupplier.WebshareSelection // exact typed pool entry, when available
+	routeSelection *proxysupplier.RouteSelection
 }
 
 var (
@@ -40,7 +42,7 @@ var (
 // error is one of errNoUpstream (nothing available, or a loop back to this
 // proxy) or errBadUpstream (the supplier returned something unusable).
 func (p *Proxy) pickUpstream(t Target, attempt int, avoid string) (*upstream, error) {
-	if p.cfg.Supplier == nil {
+	if p.cfg.Supplier == nil && p.cfg.RouteSelection == nil {
 		return nil, errNoUpstream
 	}
 	var up *upstream
@@ -51,7 +53,31 @@ func (p *Proxy) pickUpstream(t Target, attempt int, avoid string) (*upstream, er
 		tries = 4
 	}
 	for i := 0; i < tries; i++ {
-		raw := p.rawUpstreamURL(t, attempt)
+		var raw string
+		var selection *proxysupplier.WebshareSelection
+		var routeSelection *proxysupplier.RouteSelection
+		if p.cfg.RouteSelection != nil {
+			selected := *p.cfg.RouteSelection
+			rawURL, err := selected.ProxyURL()
+			if err != nil {
+				return nil, errBadUpstream
+			}
+			raw = rawURL.String()
+			routeSelection = &selected
+		} else if selector, ok := p.cfg.Supplier.(proxysupplier.WebshareDefaultSelector); ok {
+			selected, err := selector.SelectDefaultPool()
+			if err != nil {
+				return nil, errNoUpstream
+			}
+			rawURL, err := selected.ProxyURL()
+			if err != nil {
+				return nil, errBadUpstream
+			}
+			raw = rawURL.String()
+			selection = &selected
+		} else {
+			raw = p.rawUpstreamURL(t, attempt)
+		}
 		if raw == "" {
 			return nil, errNoUpstream
 		}
@@ -63,6 +89,8 @@ func (p *Proxy) pickUpstream(t Target, attempt int, avoid string) (*upstream, er
 			return nil, errNoUpstream
 		}
 		up = u
+		up.selection = selection
+		up.routeSelection = routeSelection
 		if avoid == "" || u.addr != avoid {
 			break
 		}
@@ -139,9 +167,29 @@ func (p *Proxy) isSelf(addr string) bool {
 }
 
 // markResult reports an outcome to the supplier when it can take one.
-func (p *Proxy) markResult(addr string, ok bool) {
+func (p *Proxy) markResult(up *upstream, ok bool) {
+	if up == nil {
+		return
+	}
+	if up.routeSelection != nil {
+		outcome := proxysupplier.RouteOutcomeSuccess
+		if !ok {
+			outcome = proxysupplier.RouteOutcomeTransportFailure
+		}
+		up.routeSelection.Report(outcome)
+		if p.cfg.OnRouteOutcome != nil {
+			p.cfg.OnRouteOutcome(outcome)
+		}
+		return
+	}
+	if up.selection != nil {
+		if reporter, is := p.cfg.Supplier.(proxysupplier.WebshareSelectionReporter); is {
+			reporter.MarkSelectionResult(*up.selection, ok)
+			return
+		}
+	}
 	if rr, is := p.cfg.Supplier.(proxysupplier.ResultReporter); is {
-		rr.MarkResult(addr, ok)
+		rr.MarkResult(up.addr, ok)
 	}
 }
 
@@ -149,7 +197,20 @@ func (p *Proxy) markResult(addr string, ok bool) {
 // direct dial in the package.
 func (p *Proxy) dialUpstream(ctx context.Context, up *upstream) (net.Conn, error) {
 	d := net.Dialer{KeepAlive: 30 * time.Second}
-	return d.DialContext(ctx, "tcp", up.addr)
+	conn, err := d.DialContext(ctx, "tcp", up.addr)
+	if err != nil || p.cfg.WrapUpstreamConn == nil {
+		return conn, err
+	}
+	wrapped, err := p.cfg.WrapUpstreamConn(conn)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if wrapped == nil {
+		_ = conn.Close()
+		return nil, errors.New("upstream connection wrapper returned nil")
+	}
+	return wrapped, nil
 }
 
 // attemptContext returns the context for one attempt: all attempts share the

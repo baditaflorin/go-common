@@ -83,3 +83,14 @@ func TestEnvConfig_ReadsKeepAliveEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestEnvConfigReadsWebshareDefaultPoolID(t *testing.T) {
+	t.Setenv("WEBSHARE_DEFAULT_POOL_ID", "dc-quality")
+	if got := proxysupplier.EnvConfig().WebshareDefaultPoolID; got != "dc-quality" {
+		t.Fatalf("WebshareDefaultPoolID = %q, want dc-quality", got)
+	}
+	t.Setenv("WEBSHARE_DEFAULT_POOL_ID", "  ")
+	if got := proxysupplier.EnvConfig().WebshareDefaultPoolID; got != "" {
+		t.Fatalf("blank WebshareDefaultPoolID = %q, want empty", got)
+	}
+}

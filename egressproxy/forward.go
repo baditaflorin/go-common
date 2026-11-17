@@ -297,19 +297,19 @@ func (s *session) exchange(req *http.Request, t Target, bodyless bool) (forwardR
 				retriable = idempotent
 			}
 			p.m.attempts.WithLabelValues(att).Inc()
-			p.markResult(up.addr, false)
+			p.markResult(up, false)
 			p.warn(att, "upstream attempt failed", "upstream", up.addr, "scheme", up.scheme, "result", att, "attempt", attempt, "error", res.err.Error())
 			last = &failure{http.StatusBadGateway, resUpstreamError, "egress proxy: upstream proxy unreachable"}
 		case res.resp.StatusCode == http.StatusProxyAuthRequired:
 			s.detach() // closes the connection; the body is not worth draining
 			retriable = bodyless
 			p.m.attempts.WithLabelValues(attAuthFailed).Inc()
-			p.markResult(up.addr, false)
+			p.markResult(up, false)
 			p.warn(attAuthFailed, "upstream proxy refused our credentials", "upstream", up.addr, "scheme", up.scheme, "result", attAuthFailed, "attempt", attempt)
 			last = &failure{http.StatusBadGateway, resUpstreamError, "egress proxy: upstream proxy refused the credentials"}
 		default:
 			p.m.attempts.WithLabelValues(attOK).Inc()
-			p.markResult(up.addr, true)
+			p.markResult(up, true)
 			return res, nil
 		}
 		if !retriable {

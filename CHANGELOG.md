@@ -1,10 +1,44 @@
 # Changelog
 
-## [0.133.2] - 2026-11-17
+## [0.134.3] - 2026-11-17
 
 ### Fixed
 
 - Dependencies with published advisories move to their fixed releases: `github.com/go-jose/go-jose/v4` 4.1.5 to 4.1.6 (GHSA-mgcc-cww5-fp2q, high: DoS when parsing JWKs that contain RSA keys) and OpenTelemetry 1.46.0 to 1.47.0 for `otel`, `otel/sdk`, `otel/trace`, `otel/metric` and both OTLP trace exporters (GHSA-q7gw-24fr-5p69, medium: `AttributeValueLengthLimit` bypassed by values made of valid U+FFFD runes). Consumers inherit the fix by bumping go-common, since both are pinned here; `otel/log` 1.47.0 joins the module graph as an indirect dependency and the genproto modules move with it. No go-common code changes. `go build ./...`, `go vet ./...` and `go test -short ./...` pass.
+
+## [0.134.2] - 2026-11-17
+
+### Fixed
+
+- Apply a conservative minimum 60-second delay after a Webshare direct-catalog HTTP 429, while honoring a longer `Retry-After` up to the existing five-minute cap. Recheck cancellation before another page request so an expired refresh budget cannot trigger a late retry. Deterministic retry-delay and cancellation tests cover the behavior.
+
+## [0.134.1] - 2026-11-17
+
+### Fixed
+
+- Request up to 1,000 Webshare direct proxies per catalog page and validate the response against that same bound. This reduces pagination calls for larger plans while keeping the existing page-byte, total-entry, and page-count limits. Tests verify a full page succeeds and oversized pages are rejected.
+
+## [0.134.0] - 2026-11-17
+
+### Added
+
+- Add optional provider-neutral request routing with strict pool/provider pins, ordered named profiles, safe route descriptors, exact selection feedback and file-backed static proxy endpoints. Existing supplier defaults remain unchanged when `PROXY_ROUTING_FILE` is unset. Add guarded connection-wrapping hooks for safehttp and egressproxy bandwidth accounting, plus an egressproxy destination allowlist callback that runs only after the canonical SSRF guard. A request-local outcome callback lets browser consumers distinguish proxy transport failures from origin HTTP errors.
+
+### Fixed
+
+- Keep consumed and in-flight socket bytes in one atomic allocation counter so concurrent transfers cannot temporarily count the same bytes twice and refuse a request before its cap. Reproduced on fresh main; 400 repeated concurrent-cap tests and the budget race suite pass without relaxing the cap assertions.
+
+## [0.133.3] - 2026-11-17
+
+### Added
+
+- Add `proxybudget`, a provider-independent proxy socket byte meter extracted from the existing search lane accounting. Admissions persist a bounded reservation before any connection; unfinished reservations are conservatively charged after a crash. Tickets share a request cap across concurrent sockets, close and drain before flushing, and retain independent total/daily limits and a runtime kill switch. A strict pool-budget file maps safe provider/pool IDs to private state directories and exact destination host policies; authentication and SSRF checks remain with the consumer.
+
+## [0.133.2] - 2026-11-17
+
+### Added
+
+- Add an optional DC-only `WEBSHARE_DEFAULT_POOL_ID` for process-level pool pinning, preserve weighted DC routing when unset, and reject unknown or residential defaults fail-closed. Teach `egressproxy` to retain and report the exact typed Webshare selection for each upstream connection, avoiding cross-account cooldown updates when exit addresses overlap. Add safehttp's explicit `WithProxyURL` option for guarded, redirect-aware HTTP clients that select a proxy in code; add a safe pinned-default pool metric. Existing suppliers and the old `WebsharePoolSelector` interface remain compatible.
 
 ## [0.133.1] - 2026-11-16
 

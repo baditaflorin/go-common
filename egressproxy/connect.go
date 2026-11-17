@@ -54,6 +54,12 @@ func (s *session) checkGuard(t Target) bool {
 	defer cancel()
 	err := p.guard.check(ctx, p.cfg.Guard, t.Host, t.Port)
 	if err == nil {
+		if p.cfg.AllowTarget != nil && !p.cfg.AllowTarget(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(t.Host)), ".")) {
+			p.m.result(t.Kind, resGuardDenied)
+			p.warn("target_policy_denied", "target denied by additional policy", "kind", t.Kind, "target", net.JoinHostPort(t.Host, t.Port))
+			s.reply(http.StatusForbidden, "egress proxy: target not permitted")
+			return false
+		}
 		return true
 	}
 	target := net.JoinHostPort(t.Host, t.Port)
@@ -144,23 +150,23 @@ func (s *session) establish(t Target, authority string) (connectOutcome, *failur
 				att = attDialError
 			}
 			p.m.attempts.WithLabelValues(att).Inc()
-			p.markResult(up.addr, false)
+			p.markResult(up, false)
 			p.warn(att, "upstream attempt failed", "upstream", up.addr, "scheme", up.scheme, "result", att, "attempt", attempt, "error", out.err.Error())
 			last = &failure{http.StatusBadGateway, resUpstreamError, "egress proxy: upstream proxy unreachable"}
 		case out.status/100 == 2:
 			p.m.attempts.WithLabelValues(attOK).Inc()
-			p.markResult(up.addr, true)
+			p.markResult(up, true)
 			return out, nil
 		case out.status == http.StatusProxyAuthRequired:
 			s.detach()
 			p.m.attempts.WithLabelValues(attAuthFailed).Inc()
-			p.markResult(up.addr, false)
+			p.markResult(up, false)
 			p.warn(attAuthFailed, "upstream proxy refused our credentials", "upstream", up.addr, "scheme", up.scheme, "result", attAuthFailed, "attempt", attempt)
 			last = &failure{http.StatusBadGateway, resUpstreamError, "egress proxy: upstream proxy refused the credentials"}
 		case out.status >= 500 && !p.cfg.IgnoreUpstream5xx:
 			s.detach()
 			p.m.attempts.WithLabelValues(attUpstream5xx).Inc()
-			p.markResult(up.addr, false)
+			p.markResult(up, false)
 			p.warn(attUpstream5xx, "upstream proxy answered 5xx to CONNECT", "upstream", up.addr, "scheme", up.scheme, "result", attUpstream5xx, "attempt", attempt, "status", out.status)
 			last = &failure{relayStatus(out.status), resUpstreamError, "egress proxy: upstream proxy answered " + strconv.Itoa(out.status)}
 		default:

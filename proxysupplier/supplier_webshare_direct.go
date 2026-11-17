@@ -23,12 +23,12 @@ import (
 // the values go-html-proxy's webshareproxy package validated in production
 // (2026-08-25/26) before this was promoted here as a shared primitive.
 const (
-	webshareDirectDefaultPageSize        = 100
+	webshareDirectDefaultPageSize        = 1_000
 	webshareDirectDefaultRefreshInterval = 10 * time.Minute
 	webshareDirectDefaultHTTPTimeout     = 15 * time.Second
 	// webshareDirectRefreshBudget bounds one full paginated refresh
 	// regardless of pool size -- sized for tens of thousands of entries
-	// (500 pages at page_size=100 is a 50k-entry account), not just
+	// (100 pages at page_size=1000 is the 100k-entry catalog limit), not just
 	// whatever the account holds today. A fixed "2x one page's timeout"
 	// budget silently starts failing refreshes the moment the account's
 	// pool outgrows a couple thousand entries.
@@ -78,6 +78,9 @@ const (
 var (
 	webshareDirectRetryBase = time.Second
 	webshareDirectRetryMax  = time.Minute
+	// Use a conservative 60-second minimum after HTTP 429, including responses
+	// without a usable Retry-After header.
+	webshareDirectRateLimitRetryFloor = time.Minute
 )
 
 // webshareDirectDefaultBaseURL is a var (not const) so internal tests can
@@ -153,6 +156,9 @@ type webshareDirectSupplier struct {
 	// retryBase / retryMax are webshareDirectRetryBase / webshareDirectRetryMax as they were at
 	// construction (zero = the package defaults).
 	retryBase, retryMax time.Duration
+	// retryWait is test-only timing injection; nil uses a timer and remains
+	// interruptible by the refresh context and supplier shutdown.
+	retryWait func(context.Context, time.Duration, <-chan struct{}) bool
 
 	// rand01 returns a float in [0,1); nil uses math/rand/v2. Tests pin it.
 	rand01 func() float64
@@ -462,7 +468,7 @@ func retryablePageError(err error) bool {
 }
 
 // fetchPageRetrying fetches one catalog page, repeating it with the same jittered backoff (and the
-// API's Retry-After) as the refresh loop. The catalog is paginated (about 18 requests for 1,800
+// API's Retry-After) as the refresh loop. The catalog is paginated (about 2 requests for 1,800
 // entries), so a throttled API (429) used to abort the refresh and restart it from page 1 every
 // time: traced 2026-10-17, replicas needed 2.5 to 6 minutes and up to 11 whole attempts to get
 // through. Repeating only the page that failed keeps the pages already fetched and finishes in
@@ -470,6 +476,9 @@ func retryablePageError(err error) bool {
 func (s *webshareDirectSupplier) fetchPageRetrying(ctx context.Context, pageURL string) (*webshareListResponse, error) {
 	var err error
 	for attempt := 1; ; attempt++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		var page *webshareListResponse
 		page, err = s.fetchPage(ctx, pageURL)
 		if err == nil {
@@ -478,16 +487,31 @@ func (s *webshareDirectSupplier) fetchPageRetrying(ctx context.Context, pageURL 
 		if attempt >= webshareDirectPageAttempts || !retryablePageError(err) {
 			return nil, err
 		}
-		timer := time.NewTimer(s.nextDelay(err, attempt))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !s.waitBeforeRetry(ctx, s.nextDelay(err, attempt)) {
 			return nil, err
-		case <-s.stop:
-			timer.Stop()
-			return nil, err
-		case <-timer.C:
 		}
+		// The timer and cancellation can become ready together. Recheck before
+		// issuing another API request so a closed refresh budget never starts a
+		// late retry.
+		if ctx.Err() != nil {
+			return nil, err
+		}
+	}
+}
+
+func (s *webshareDirectSupplier) waitBeforeRetry(ctx context.Context, delay time.Duration) bool {
+	if s.retryWait != nil {
+		return s.retryWait(ctx, delay, s.stop)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-s.stop:
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -594,8 +618,14 @@ func (s *webshareDirectSupplier) nextDelay(err error, consecutiveFailures int) t
 	backoff = min(backoff, ceiling, s.refreshInterval)
 	d := backoff/2 + time.Duration(float64(backoff/2)*s.random())
 	var apiErr *webshareAPIError
-	if errors.As(err, &apiErr) && apiErr.RetryAfter > d {
-		d = apiErr.RetryAfter
+	if errors.As(err, &apiErr) {
+		if apiErr.Status == http.StatusTooManyRequests {
+			d = max(d, webshareDirectRateLimitRetryFloor)
+		}
+		retryAfter := min(apiErr.RetryAfter, webshareDirectMaxRetryAfter)
+		if retryAfter > d {
+			d = retryAfter
+		}
 	}
 	return min(d, max(s.refreshInterval, webshareDirectMaxRetryAfter))
 }
