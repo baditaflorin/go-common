@@ -105,6 +105,9 @@ func TestDownloadDecompressesAndChecksRawChecksum(t *testing.T) {
 	digest := hex.EncodeToString(sum[:])
 	makeServer := func(checksum string) *httptest.Server {
 		return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Accept-Encoding") != "identity" {
+				t.Errorf("Accept-Encoding=%q", r.Header.Get("Accept-Encoding"))
+			}
 			var b bytes.Buffer
 			gz := gzip.NewWriter(&b)
 			_, _ = gz.Write(raw)
@@ -209,5 +212,25 @@ func TestReadEndpointsAndBoundedListFilters(t *testing.T) {
 	}
 	if _, err := c.List(context.Background(), ListOptions{Limit: 101}); err == nil {
 		t.Fatal("accepted list limit above 100")
+	}
+}
+func TestLargeListFitsBoundedResponseLimit(t *testing.T) {
+	row := "{\"id\":\"cap\",\"padding\":\"" + strings.Repeat("x", 12000) + "\"}"
+	rows := make([]string, 100)
+	for i := range rows {
+		rows[i] = row
+	}
+	raw := "{\"captures\":[" + strings.Join(rows, ",") + "],\"total\":100,\"limit\":100,\"offset\":0}"
+	c, s := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, raw)
+	}))
+	defer s.Close()
+	got, err := c.List(context.Background(), ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Captures) != 100 {
+		t.Fatalf("got %d rows", len(got.Captures))
 	}
 }

@@ -30,7 +30,7 @@ const (
 	MaxBodyBytes     = 8 << 20
 	MaxMetadataBytes = 16 << 10
 	DefaultTimeout   = 5 * time.Second
-	maxResponseBytes = 1 << 20
+	maxResponseBytes = 2 << 20
 	capturesPath     = "/v1/captures"
 )
 
@@ -301,7 +301,9 @@ func (c *Client) OpenBody(ctx context.Context, id string) (BodyResult, error) {
 	if !validID(id) {
 		return BodyResult{}, errors.New("capturestore: invalid capture ID")
 	}
-	resp, err := c.do(ctx, http.MethodGet, capturesPath+"/"+url.PathEscape(id)+"/body", nil, nil, "", nil, nil)
+	headers := make(http.Header)
+	headers.Set("Accept-Encoding", "identity")
+	resp, err := c.do(ctx, http.MethodGet, capturesPath+"/"+url.PathEscape(id)+"/body", nil, nil, "", headers, nil)
 	if err != nil {
 		return BodyResult{}, err
 	}
