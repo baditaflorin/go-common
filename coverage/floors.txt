@@ -66,6 +66,7 @@ secrets 85
 selftest 85
 server 80
 shutdown 54
+snapshotparse 82
 spiffe 32
 spiffeauth 76
 telemetry 77

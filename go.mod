@@ -3,7 +3,7 @@ module github.com/baditaflorin/go-common
 go 1.26.0
 
 require (
-	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/net v0.61.0
 	golang.org/x/time v0.14.0
 )
 

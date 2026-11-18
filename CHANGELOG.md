@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.135.0] - 2026-11-18
+
+### Added
+
+- Add `snapshotparse` so fleet parsers can accept bounded saved HTML, validate source receipts and return versioned evidence. Text parsers can decode the page charset while retaining the exact original checksum.
+
 ## [0.134.6] - 2026-11-17
 
 ### Added
