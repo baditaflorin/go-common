@@ -67,12 +67,16 @@ func (c *Client) CreateDerivation(ctx context.Context, captureID string, m Deriv
 	if err != nil {
 		return out, err
 	}
-	sum := sha256.Sum256(body)
-	d := out.Derivation
-	if !validID(d.ID) || d.CaptureID != captureID || d.DerivationMetadata != m || d.BodyBytes != int64(len(body)) || d.SHA256 != hex.EncodeToString(sum[:]) || d.GzipBytes <= 0 {
+	if !validDerivationReceipt(out.Derivation, captureID, m, body) {
 		return DerivationResult{}, errors.New("capturestore: invalid derivation receipt")
 	}
 	return out, nil
+}
+
+func validDerivationReceipt(d Derivation, captureID string, m DerivationMetadata, body []byte) bool {
+	sum := sha256.Sum256(body)
+	return validID(d.ID) && d.CaptureID == captureID && d.DerivationMetadata == m &&
+		d.BodyBytes == int64(len(body)) && d.SHA256 == hex.EncodeToString(sum[:]) && d.GzipBytes > 0
 }
 func (c *Client) ListDerivations(ctx context.Context, o DerivationListOptions) (DerivationList, error) {
 	var out DerivationList
