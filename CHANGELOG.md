@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.135.1] - 2026-11-19
+
+### Added
+
+- Add bounded capture-store batch writes with ordered, checksum-verified receipts and exact parser response bytes.
+
 ## [0.135.0] - 2026-11-18
 
 ### Added
