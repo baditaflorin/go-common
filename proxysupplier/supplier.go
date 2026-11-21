@@ -165,9 +165,13 @@ const (
 // are held privately and are never included in its formatted representation.
 // Use ProxyURL only to build the request transport, and do not log its result.
 type WebshareSelection struct {
-	PoolID    string
-	AccountID string
-	Class     PoolClass
+	PoolID      string
+	AccountID   string
+	Class       PoolClass
+	ASNNumber   int
+	ASNName     string
+	Subnet24    string
+	CountryCode string
 
 	owner    *webshareMultiSupplier
 	pool     *webshareNamedPool
@@ -223,6 +227,13 @@ type WebsharePoolSelector interface {
 // existing interface contract for consumers and test doubles.
 type WebshareDefaultSelector interface {
 	SelectDefaultPool() (WebshareSelection, error)
+}
+
+// WebshareASNExcludedSelector is an additive optional capability that allows
+// retry callers to exclude previously challenged ASNs in addition to pool IDs.
+type WebshareASNExcludedSelector interface {
+	SelectPoolExcludingASNs(class PoolClass, excludePoolIDs []string, excludeASNs []int) (WebshareSelection, error)
+	SelectPoolIDExcludingASNs(poolID string, excludeASNs []int) (WebshareSelection, error)
 }
 
 // WebsharePoolStateProvider is implemented by suppliers that expose bounded,
