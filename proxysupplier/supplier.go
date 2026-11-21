@@ -236,6 +236,16 @@ type WebshareASNExcludedSelector interface {
 	SelectPoolIDExcludingASNs(poolID string, excludeASNs []int) (WebshareSelection, error)
 }
 
+// PacedProxyURLSupplier is implemented by the webshare_direct and
+// webshare_multi suppliers: NextProxyURL is ProxyURL with an error saying why
+// no URL was returned (ErrProxyUnavailable, or a *PacedError when per-ASN
+// pacing holds every eligible ASN back). Use it with SelectWait to block:
+//
+//	raw, err := proxysupplier.SelectWait(ctx, ps.NextProxyURL)
+type PacedProxyURLSupplier interface {
+	NextProxyURL() (string, error)
+}
+
 // WebsharePoolStateProvider is implemented by suppliers that expose bounded,
 // non-secret per-pool health snapshots for metrics collection.
 type WebsharePoolStateProvider interface {
@@ -358,6 +368,12 @@ type Config struct {
 	// Webshare selection to one configured DC pool. Residential pools are not
 	// valid defaults; callers must explicitly select them through policy APIs.
 	WebshareDefaultPoolID string
+
+	// WebsharePacing turns on per-ASN request pacing for webshare_direct and
+	// webshare_multi (see WebsharePacing). The zero value leaves it off.
+	// EnvConfig fills it from WEBSHARE_PACING_PER_IP_RATE,
+	// WEBSHARE_PACING_MIN_ASN_RATE and WEBSHARE_PACING_BURST.
+	WebsharePacing WebsharePacing
 }
 
 // EnvConfig builds a Config by reading the canonical fleet env vars.
@@ -382,6 +398,7 @@ func EnvConfig() Config {
 		WebsharePlanID:        os.Getenv("WEBSHARE_PLAN_ID"),
 		WebsharePoolsFile:     os.Getenv("WEBSHARE_POOLS_FILE"),
 		WebshareDefaultPoolID: strings.TrimSpace(os.Getenv("WEBSHARE_DEFAULT_POOL_ID")),
+		WebsharePacing:        WebsharePacingFromEnv(),
 	}
 }
 

@@ -67,3 +67,32 @@ response sizes.
 `WebsharePools` and `WebsharePoolsSnapshot` expose only bounded pool labels and
 health. Keys, key paths, plan IDs, and proxy URLs are excluded. `Close` stops
 all catalog refresh goroutines created by the multi-pool supplier.
+
+## Outcome kinds, ASN exclusion, pacing and capacity
+
+Report results with an outcome kind when the caller can tell them apart:
+`MarkSelectionOutcome(selection, proxysupplier.OutcomeChallenge)` for a bot
+challenge, 403 or 429; `OutcomeTransport` for a dial, TLS, timeout or proxy
+error; `OutcomeUpstream` for a 5xx or a body that cannot be parsed; `OutcomeOK`
+for a usable answer. Every non-OK outcome cools the exit IP down; only
+`OutcomeChallenge` counts against its ASN and /24, so a target outage cannot
+quarantine a network. The bool `MarkSelectionResult` keeps counting false as a
+network failure.
+
+A retry that passes the ASN that just challenged it to
+`SelectPoolExcludingASNs` gets another ASN whenever any other ASN has an
+eligible IP in any pool of the class; the excluded ASN is only the last resort.
+
+Per-ASN pacing is off unless configured. With
+`WEBSHARE_PACING_PER_IP_RATE=0.0167` (one request per IP per minute; or
+`Config.WebsharePacing`, or `proxysupplier.ConfigureWebsharePacing`), each ASN
+may send `PerIPRate` x its IP count requests per second across every pool
+(floored at `WEBSHARE_PACING_MIN_ASN_RATE`, bursts of `WEBSHARE_PACING_BURST`,
+default 2). When every eligible ASN is out of tokens a selection returns a
+`*PacedError` with `RetryAfter`; `proxysupplier.SelectWait(ctx, fn)` sleeps and
+retries until ctx is done. Quarantined ASNs never slow the others down: pacing
+is per ASN, and the healthy ASNs keep their own buckets.
+
+`HealthyCapacity(poolID)` and `HealthyCapacityAll()` (`WebshareCapacityReporter`)
+say how many non-quarantined ASNs still have an eligible IP, how many IPs that
+is, and how soon a quarantined ASN probes again.

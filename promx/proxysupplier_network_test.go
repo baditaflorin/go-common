@@ -5,6 +5,7 @@ import (
 
 	"github.com/baditaflorin/go-common/proxysupplier"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 type fakeNetworkSupplier struct {
@@ -74,6 +75,46 @@ func TestWebshareMultiCollectors_EmitsASNAndSubnetMetrics(t *testing.T) {
 	} {
 		if !found[want] {
 			t.Errorf("expected metric %q in registry output", want)
+		}
+	}
+}
+
+func TestWebshareMultiCollectors_EmitsPacingMetrics(t *testing.T) {
+	snap := proxysupplier.WebshareNetworkSnapshot{
+		TotalASNs: 1, HealthyASNs: 1, TotalSubnets24: 1,
+		ASNs: []proxysupplier.WebshareASNStatus{
+			{ASNNumber: 55286, ASNName: "B2 Net Solutions", IPs: 218, State: proxysupplier.WebshareASNStateHealthy, PacedTotal: 7, PacingRatePerSecond: 3.6},
+		},
+		Pacing: proxysupplier.WebsharePacingStatus{Enabled: true, PerIPRate: 1.0 / 60, Burst: 2, PacedTotal: 7, WaitsTotal: 4},
+	}
+	reg := prometheus.NewRegistry()
+	NewWebshareMultiCollectors(fakeNetworkSupplier{snap: snap}, reg)
+	for name, want := range map[string]int{
+		"proxysupplier_webshare_asn_paced_total":    1,
+		"proxysupplier_webshare_pacing_waits_total": 1,
+		"proxysupplier_webshare_pacing_per_ip_rate": 1,
+		"proxysupplier_webshare_asn_outcomes_total": 2,
+	} {
+		if got, err := testutil.GatherAndCount(reg, name); err != nil || got != want {
+			t.Errorf("%s: %d series (err %v), want %d", name, got, err, want)
+		}
+	}
+
+	// Pacing off and never used: no per-ASN paced series, the rate gauge reads 0.
+	snap.Pacing = proxysupplier.WebsharePacingStatus{}
+	snap.ASNs[0].PacedTotal = 0
+	reg = prometheus.NewRegistry()
+	NewWebshareMultiCollectors(fakeNetworkSupplier{snap: snap}, reg)
+	if got, _ := testutil.GatherAndCount(reg, "proxysupplier_webshare_asn_paced_total"); got != 0 {
+		t.Errorf("paced series with pacing off: %d", got)
+	}
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() == "proxysupplier_webshare_pacing_per_ip_rate" && mf.GetMetric()[0].GetGauge().GetValue() != 0 {
+			t.Errorf("per-IP rate gauge with pacing off = %v", mf.GetMetric()[0].GetGauge().GetValue())
 		}
 	}
 }

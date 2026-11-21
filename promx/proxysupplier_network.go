@@ -18,6 +18,9 @@ type webshareNetworkDescs struct {
 	asnFailureRatio   *prometheus.Desc
 	asnOutcomesTotal  *prometheus.Desc
 	asnTripsTotal     *prometheus.Desc
+	asnPacedTotal     *prometheus.Desc
+	pacingWaitsTotal  *prometheus.Desc
+	pacingPerIPRate   *prometheus.Desc
 }
 
 func newWebshareNetworkDescs() webshareNetworkDescs {
@@ -55,13 +58,28 @@ func newWebshareNetworkDescs() webshareNetworkDescs {
 		),
 		asnOutcomesTotal: prometheus.NewDesc(
 			"proxysupplier_webshare_asn_outcomes_total",
-			"Cumulative proxy outcomes per Webshare DC ASN by result (ok, failure).",
+			"Cumulative proxy outcomes per Webshare DC ASN by result (ok, failure). failure counts what counts against the ASN's health: OutcomeChallenge and MarkResult(false); OutcomeTransport and OutcomeUpstream are not counted.",
 			[]string{"service", "asn", "asn_name", "result"}, nil,
 		),
 		asnTripsTotal: prometheus.NewDesc(
 			"proxysupplier_webshare_asn_trips_total",
 			"Cumulative quarantine trips for a Webshare DC ASN.",
 			asnLabels, nil,
+		),
+		asnPacedTotal: prometheus.NewDesc(
+			"proxysupplier_webshare_asn_paced_total",
+			"Selections that skipped a Webshare DC ASN because its per-ASN pacing bucket had no token (one per ASN per selection).",
+			asnLabels, nil,
+		),
+		pacingWaitsTotal: prometheus.NewDesc(
+			"proxysupplier_webshare_pacing_waits_total",
+			"Sleeps proxysupplier.SelectWait made because every eligible Webshare ASN was paced.",
+			[]string{"service"}, nil,
+		),
+		pacingPerIPRate: prometheus.NewDesc(
+			"proxysupplier_webshare_pacing_per_ip_rate",
+			"Configured per-ASN pacing rate per proxy IP, in requests per second; 0 when pacing is disabled.",
+			[]string{"service"}, nil,
 		),
 	}
 }
@@ -75,6 +93,9 @@ func (d webshareNetworkDescs) describe(ch chan<- *prometheus.Desc) {
 	ch <- d.asnFailureRatio
 	ch <- d.asnOutcomesTotal
 	ch <- d.asnTripsTotal
+	ch <- d.asnPacedTotal
+	ch <- d.pacingWaitsTotal
+	ch <- d.pacingPerIPRate
 }
 
 func (d webshareNetworkDescs) collect(ch chan<- prometheus.Metric, service string, snap proxysupplier.WebshareNetworkSnapshot) {
@@ -86,6 +107,13 @@ func (d webshareNetworkDescs) collect(ch chan<- prometheus.Metric, service strin
 	ch <- prometheus.MustNewConstMetric(d.asnsTotal, prometheus.GaugeValue, float64(snap.QuarantinedASNs), service, proxysupplier.WebshareASNStateQuarantined)
 	ch <- prometheus.MustNewConstMetric(d.subnetsTotal, prometheus.GaugeValue, float64(snap.TotalSubnets24), service)
 	ch <- prometheus.MustNewConstMetric(d.subnetsInCooldown, prometheus.GaugeValue, float64(snap.CooledSubnets24), service)
+	perIPRate := 0.0
+	if snap.Pacing.Enabled {
+		perIPRate = snap.Pacing.PerIPRate
+	}
+	ch <- prometheus.MustNewConstMetric(d.pacingPerIPRate, prometheus.GaugeValue, perIPRate, service)
+	ch <- prometheus.MustNewConstMetric(d.pacingWaitsTotal, prometheus.CounterValue, float64(snap.Pacing.WaitsTotal), service)
+	emitPaced := snap.Pacing.Enabled || snap.Pacing.PacedTotal > 0
 
 	limit := len(snap.ASNs)
 	if limit > webshareMaxExportedASNs {
@@ -111,5 +139,8 @@ func (d webshareNetworkDescs) collect(ch chan<- prometheus.Metric, service strin
 		ch <- prometheus.MustNewConstMetric(d.asnOutcomesTotal, prometheus.CounterValue, float64(a.OKTotal), service, asnLabel, name, "ok")
 		ch <- prometheus.MustNewConstMetric(d.asnOutcomesTotal, prometheus.CounterValue, float64(a.FailTotal), service, asnLabel, name, "failure")
 		ch <- prometheus.MustNewConstMetric(d.asnTripsTotal, prometheus.CounterValue, float64(a.TripsTotal), service, asnLabel, name)
+		if emitPaced {
+			ch <- prometheus.MustNewConstMetric(d.asnPacedTotal, prometheus.CounterValue, float64(a.PacedTotal), service, asnLabel, name)
+		}
 	}
 }

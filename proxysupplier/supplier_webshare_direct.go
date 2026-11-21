@@ -92,6 +92,11 @@ var webshareDirectDefaultBaseURL = "https://proxy.webshare.io/api/v2/proxy/list/
 // (no credentials) callers correlate back via ResultReporter.MarkResult --
 // see that method's doc comment for why address, not the full proxyURL,
 // is the reporting key.
+//
+// proxyURL, addr and the network metadata (ASN, /24, country) are immutable
+// once the entry is published in a list: selection reads them without a lock.
+// A refresh that sees new metadata for an address builds a new entry and
+// carries the atomic state over (see refresh) instead of writing these fields.
 type webshareDirectEntry struct {
 	proxyURL    string // fully formed http://user:pass@address:port
 	addr        string // address:port only
@@ -108,6 +113,16 @@ type webshareDirectEntry struct {
 	// constants above.
 	failures      atomic.Int32
 	cooldownUntil atomic.Int64 // UnixNano; 0 means "not in cooldown"
+
+	// admit is this entry's thinning counter (see webshareNetworkHealth.Allows).
+	admit atomic.Uint64
+}
+
+// sameMetadata reports whether e already holds everything a fresh catalog
+// entry would give it, so the refresh can keep e itself.
+func (e *webshareDirectEntry) sameMetadata(proxyURL string, asnNumber int, asnName, subnet24, countryCode string) bool {
+	return e.proxyURL == proxyURL && e.asnNumber == asnNumber && e.asnName == asnName &&
+		e.subnet24 == subnet24 && e.countryCode == countryCode
 }
 
 func (e *webshareDirectEntry) eligible(nowUnixNano int64) bool {
@@ -205,60 +220,132 @@ func (s *webshareDirectSupplier) nextEntry() *webshareDirectEntry {
 }
 
 func (s *webshareDirectSupplier) nextEntryExcludingASNs(excludeASNs map[int]struct{}) *webshareDirectEntry {
+	e, _ := s.selectEntry(excludeASNs)
+	return e
+}
+
+// selectEntry picks the next entry in round-robin order. It returns
+// ErrProxyUnavailable when no entry is eligible and a *PacedError when pacing
+// is enabled and every otherwise-eligible entry's ASN is out of tokens.
+//
+// Three passes, each stricter than the next about what it gives up:
+//
+//  1. honour the IP cooldown, excludeASNs, the /24 cooldown and the ASN's
+//     thinning and quarantine;
+//  2. drop the thinning (a degraded ASN may be used at its full share) but
+//     still honour excludeASNs and hard /24 or ASN cooldowns;
+//  3. last resort: any IP-eligible entry, even in an excluded or cooling ASN,
+//     so that temporary network pressure cannot deadlock the whole pool.
+//
+// Pacing applies to every pass: a selection never falls back to an entry
+// whose ASN has no token, and the token is taken only for the entry returned.
+// When pass 2 skipped an entry only for pacing, pass 3 is not tried: the
+// selection returns a *PacedError so the caller waits for that ASN instead
+// of falling back onto an excluded or cooling one.
+func (s *webshareDirectSupplier) selectEntry(excludeASNs map[int]struct{}) (*webshareDirectEntry, error) {
+	return s.selectEntryExcluding(excludeASNs, false)
+}
+
+// selectEntryExcluding is selectEntry; with strictExclusion, pass 3 also
+// skips excluded ASNs, so that a multi-pool caller can first ask every pool
+// for a non-excluded entry before any pool falls back to an excluded one.
+func (s *webshareDirectSupplier) selectEntryExcluding(excludeASNs map[int]struct{}, strictExclusion bool) (*webshareDirectEntry, error) {
 	s.mu.RLock()
 	list := s.list
 	s.mu.RUnlock()
 
 	n := len(list)
 	if n == 0 {
-		return nil
+		return nil, ErrProxyUnavailable
 	}
 
+	nh := s.networkHealth
+	pace := nh.pacingScan()
 	now := time.Now().UnixNano()
 	start := s.idx.Add(1)
-	// Pass 1: honor IP cooldown, /24 subnet cooldown, ASN adaptive thinning/quarantine, and excludeASNs.
-	for i := 0; i < n; i++ {
-		e := list[(int(start)+i)%n]
-		if !e.eligible(now) {
-			continue
+	excluded := func(e *webshareDirectEntry) bool {
+		if len(excludeASNs) == 0 || e.asnNumber <= 0 {
+			return false
 		}
-		if len(excludeASNs) > 0 && e.asnNumber > 0 {
-			if _, skip := excludeASNs[e.asnNumber]; skip {
+		_, skip := excludeASNs[e.asnNumber]
+		return skip
+	}
+	// viablePaced: pass 2 found an entry it would have returned but for its
+	// ASN's pacing. That ASN gets a token within RetryAfter, so waiting beats
+	// pass 3's fallback onto an excluded or cooling ASN.
+	viablePaced := false
+	for pass := 1; pass <= 3; pass++ {
+		if pass == 3 && viablePaced {
+			break
+		}
+		for i := 0; i < n; i++ {
+			e := list[(int(start)+i)%n]
+			if !e.eligible(now) {
 				continue
 			}
+			if (pass < 3 || strictExclusion) && excluded(e) {
+				continue
+			}
+			switch pass {
+			case 1:
+				// Pacing is checked (without taking a token) before Allows,
+				// whose thinning and probe bookkeeping must only count
+				// entries that could really be returned.
+				if !pace.ready(e) {
+					continue
+				}
+				if nh != nil && !nh.Allows(e.asnNumber, e.subnet24, now, &e.admit) {
+					continue
+				}
+			case 2:
+				if nh != nil && nh.IsQuarantinedOrSubnetCooled(e.asnNumber, e.subnet24, now) {
+					continue
+				}
+				if !pace.ready(e) {
+					viablePaced = true
+					continue
+				}
+			default:
+				if !pace.ready(e) {
+					continue
+				}
+			}
+			if !pace.take(e) {
+				viablePaced = viablePaced || pass == 2
+				continue
+			}
+			return e, nil
 		}
-		if s.networkHealth != nil && !s.networkHealth.Allows(e.asnNumber, e.subnet24, now, start+uint64(i)) {
-			continue
-		}
-		return e
 	}
-	// Pass 2: if degraded thinning or excludeASNs filtered everything out, allow
-	// any IP-eligible entry whose ASN/subnet is not hard-quarantined.
-	for i := 0; i < n; i++ {
-		e := list[(int(start)+i)%n]
-		if !e.eligible(now) {
-			continue
-		}
-		if s.networkHealth != nil && s.networkHealth.IsQuarantinedOrSubnetCooled(e.asnNumber, e.subnet24, now) {
-			continue
-		}
-		return e
-	}
-	// Pass 3: if all ASNs/subnets are hard-cooled but individual IPs are still
-	// eligible, fail-open onto the next IP-eligible entry unless excluded, so
-	// temporary subnet/ASN pressure does not self-deadlock the entire pool.
-	for i := 0; i < n; i++ {
-		e := list[(int(start)+i)%n]
-		if e.eligible(now) {
-			return e
-		}
+	if paced := pace.err(); paced != nil {
+		return nil, paced
 	}
 	// Every entry is currently in cooldown. Unlike go-html-proxy's Pool
 	// (which fails open onto the next entry so a caller mid-request always
-	// gets SOME proxy), this returns "" -- a caller retrying against a
+	// gets SOME proxy), this returns nothing -- a caller retrying against a
 	// rate limiter is better served going direct or waiting than being
 	// handed back an IP already known to be in its penalty window.
-	return nil
+	return nil, ErrProxyUnavailable
+}
+
+// NextProxyURL is ProxyURL with the reason for an empty answer: it returns
+// ErrProxyUnavailable when no entry is eligible and a *PacedError (see
+// WebsharePacing) when pacing holds every eligible ASN back. Combine it with
+// SelectWait to block until an ASN has a token.
+func (s *webshareDirectSupplier) NextProxyURL() (string, error) {
+	e, err := s.selectEntry(nil)
+	if err != nil {
+		return "", err
+	}
+	return e.proxyURL, nil
+}
+
+// SetWebsharePacing implements WebsharePacingConfigurer.
+func (s *webshareDirectSupplier) SetWebsharePacing(p WebsharePacing) {
+	if s == nil || s.networkHealth == nil {
+		return
+	}
+	s.networkHealth.pacer.configure(p)
 }
 
 // ProxyURLForKey deterministically selects a proxy URL for key instead of
@@ -329,19 +416,47 @@ func (s *webshareDirectSupplier) MarkResult(addr string, ok bool) {
 	}
 }
 
+// MarkOutcome is MarkResult with an outcome kind (see Outcome): the exit IP
+// is cooled down for every non-OK outcome, exactly as MarkResult(addr, false)
+// does, but only OutcomeChallenge counts against the IP's ASN and /24.
+func (s *webshareDirectSupplier) MarkOutcome(addr string, outcome Outcome) {
+	ipOK, verdict, valid := outcomeEffect(outcome)
+	if !valid {
+		return
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, e := range s.list {
+		if e.addr == addr {
+			s.markEntry(e, ipOK, verdict)
+			return
+		}
+	}
+}
+
+// markEntryResult is the bool form: ok counts as ok for the exit IP and its
+// network, !ok as a failure for both (the behaviour before Outcome existed).
 func (s *webshareDirectSupplier) markEntryResult(e *webshareDirectEntry, ok bool) {
+	verdict := healthFail
+	if ok {
+		verdict = healthOK
+	}
+	s.markEntry(e, ok, verdict)
+}
+
+func (s *webshareDirectSupplier) markEntry(e *webshareDirectEntry, ipOK bool, verdict healthVerdict) {
 	if e == nil {
 		return
 	}
 	now := time.Now()
-	if ok {
+	if ipOK {
 		e.failures.Store(0)
 		e.cooldownUntil.Store(0)
 	} else if e.failures.Add(1) >= webshareDirectMaxConsecutiveFailures {
 		e.cooldownUntil.Store(now.Add(webshareDirectFailureCooldown).UnixNano())
 	}
-	if s.networkHealth != nil {
-		s.networkHealth.Record(e.asnNumber, e.asnName, e.subnet24, e.addr, ok, now)
+	if s.networkHealth != nil && verdict != healthNone {
+		s.networkHealth.Record(e.asnNumber, e.asnName, e.subnet24, e.addr, verdict == healthOK, now)
 	}
 }
 
@@ -361,7 +476,7 @@ func (s *webshareDirectSupplier) WebshareNetworkHealth() WebshareNetworkSnapshot
 // NewFromConfig, which never returns an error itself. The initial fetch
 // runs in the background; see refreshLoop.
 func newWebshareDirectSupplier(cfg Config) Supplier {
-	s := newWebshareDirectSupplierCore(cfg, true)
+	s := newWebshareDirectSupplierCore(cfg, true, nil)
 	if s == nil {
 		activeWebshareDirectSupplier.Store(nil)
 		return noneSupplier{}
@@ -371,10 +486,17 @@ func newWebshareDirectSupplier(cfg Config) Supplier {
 
 // newWebshareDirectSupplierCore constructs the shared catalog/rotation core.
 // A multi-account wrapper disables the legacy singleton metrics pointer and
-// exports one aggregate snapshot with safe pool labels instead.
-func newWebshareDirectSupplierCore(cfg Config, registerActive bool) *webshareDirectSupplier {
+// exports one aggregate snapshot with safe pool labels instead, and passes the
+// network-health tracker its pools share (nil creates one for this core). The
+// tracker is set before the refresh goroutine starts, so it is never written
+// while that goroutine reads it.
+func newWebshareDirectSupplierCore(cfg Config, registerActive bool, health *webshareNetworkHealth) *webshareDirectSupplier {
 	if cfg.WebshareAPIKey == "" || (cfg.WebsharePlanID != "" && !validWebsharePlanID(cfg.WebsharePlanID)) {
 		return nil
+	}
+	if health == nil {
+		health = newWebshareNetworkHealth()
+		health.pacer.configure(cfg.WebsharePacing)
 	}
 	s := &webshareDirectSupplier{
 		apiKey:          cfg.WebshareAPIKey,
@@ -383,7 +505,7 @@ func newWebshareDirectSupplierCore(cfg Config, registerActive bool) *webshareDir
 		refreshInterval: webshareDirectDefaultRefreshInterval,
 		httpClient:      &http.Client{Timeout: webshareDirectDefaultHTTPTimeout},
 		rules:           parseNoProxy(cfg.NoProxy),
-		networkHealth:   newWebshareNetworkHealth(),
+		networkHealth:   health,
 		retryBase:       webshareDirectRetryBase,
 		retryMax:        webshareDirectRetryMax,
 		stop:            make(chan struct{}),
@@ -471,10 +593,14 @@ func (s *webshareDirectSupplier) refresh(ctx context.Context) error {
 	}
 
 	// Index the outgoing list by address so any entry that survives into
-	// the new list carries its failure/cooldown state forward by pointer,
-	// same rationale as webshareproxy.Pool.refresh (this session): a list
+	// the new list carries its failure/cooldown state forward, same
+	// rationale as webshareproxy.Pool.refresh (this session): a list
 	// refresh is metadata, not an amnesty for an IP that was just
-	// rate-limited.
+	// rate-limited. An entry whose metadata is unchanged is kept by pointer
+	// (an in-flight selection can still report against it); one whose
+	// metadata changed is replaced by a new entry that copies its state.
+	// Entries already published are never written: selection reads their
+	// fields without the lock.
 	s.mu.RLock()
 	prev := s.list
 	s.mu.RUnlock()
@@ -492,32 +618,46 @@ func (s *webshareDirectSupplier) refresh(ctx context.Context) error {
 		// below parseable and makes addr the "[host]:port" form that
 		// conn.RemoteAddr() reports (MarkResult's key).
 		addr := net.JoinHostPort(e.ProxyAddress, strconv.Itoa(e.Port))
+		proxyURL := fmt.Sprintf("http://%s:%s@%s",
+			url.QueryEscape(e.Username), url.QueryEscape(e.Password), addr)
+		asnNumber := e.ASNNumber
+		asnName := strings.TrimSpace(e.ASNName)
 		sub24 := subnet24ForHost(e.ProxyAddress)
-		if old, ok := prevByAddr[addr]; ok {
-			if e.ASNNumber > 0 {
-				old.asnNumber = e.ASNNumber
+		country := strings.TrimSpace(e.CountryCode)
+		old, existed := prevByAddr[addr]
+		if existed {
+			// A field the catalog left empty keeps its previous value.
+			if asnNumber <= 0 {
+				asnNumber = old.asnNumber
 			}
-			if e.ASNName != "" {
-				old.asnName = strings.TrimSpace(e.ASNName)
+			if asnName == "" {
+				asnName = old.asnName
 			}
-			if sub24 != "" {
-				old.subnet24 = sub24
+			if sub24 == "" {
+				sub24 = old.subnet24
 			}
-			if e.CountryCode != "" {
-				old.countryCode = strings.TrimSpace(e.CountryCode)
+			if country == "" {
+				country = old.countryCode
 			}
-			list = append(list, old)
-			continue
+			if old.sameMetadata(proxyURL, asnNumber, asnName, sub24, country) {
+				list = append(list, old)
+				continue
+			}
 		}
-		list = append(list, &webshareDirectEntry{
-			proxyURL: fmt.Sprintf("http://%s:%s@%s",
-				url.QueryEscape(e.Username), url.QueryEscape(e.Password), addr),
+		ne := &webshareDirectEntry{
+			proxyURL:    proxyURL,
 			addr:        addr,
-			asnNumber:   e.ASNNumber,
-			asnName:     strings.TrimSpace(e.ASNName),
+			asnNumber:   asnNumber,
+			asnName:     asnName,
 			subnet24:    sub24,
-			countryCode: strings.TrimSpace(e.CountryCode),
-		})
+			countryCode: country,
+		}
+		if existed {
+			ne.failures.Store(old.failures.Load())
+			ne.cooldownUntil.Store(old.cooldownUntil.Load())
+			ne.admit.Store(old.admit.Load())
+		}
+		list = append(list, ne)
 	}
 	if len(list) == 0 {
 		return errors.New("proxysupplier: webshare_direct fetched proxy list has zero valid entries")
@@ -535,6 +675,10 @@ func (s *webshareDirectSupplier) refresh(ctx context.Context) error {
 	s.keyedList = keyed
 	s.list = interleaved
 	s.mu.Unlock()
+	if s.networkHealth != nil {
+		s.networkHealth.pacer.setSource(s, interleaved)
+		s.networkHealth.PruneSubnets(time.Now())
+	}
 	return nil
 }
 
