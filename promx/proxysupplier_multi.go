@@ -23,6 +23,7 @@ type WebshareMultiCollectors struct {
 	supplier                                            proxysupplier.Supplier
 	poolDefault, poolSize, poolEligible, poolInCooldown *prometheus.Desc
 	refreshTotal, refreshConsecutive, refreshAge        *prometheus.Desc
+	network                                             webshareNetworkDescs
 }
 
 // NewWebshareMultiCollectors registers per-pool catalog/cooldown health on
@@ -41,6 +42,7 @@ func NewWebshareMultiCollectors(supplier proxysupplier.Supplier, reg prometheus.
 		refreshTotal:       prometheus.NewDesc("proxysupplier_webshare_pool_refresh_total", "Catalog refreshes by result for a named Webshare pool.", []string{"service", "pool", "account", "class", "result"}, nil),
 		refreshConsecutive: prometheus.NewDesc("proxysupplier_webshare_pool_refresh_consecutive_failures", "Catalog refresh failures in a row for a named Webshare pool.", labels, nil),
 		refreshAge:         prometheus.NewDesc("proxysupplier_webshare_pool_last_refresh_age_seconds", "Seconds since a named Webshare pool last refreshed successfully; -1 means never.", labels, nil),
+		network:            newWebshareNetworkDescs(),
 	}
 	reg.MustRegister(c)
 	return c
@@ -54,6 +56,7 @@ func (c *WebshareMultiCollectors) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.refreshTotal
 	ch <- c.refreshConsecutive
 	ch <- c.refreshAge
+	c.network.describe(ch)
 }
 
 func (c *WebshareMultiCollectors) Collect(ch chan<- prometheus.Metric) {
@@ -70,4 +73,5 @@ func (c *WebshareMultiCollectors) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.refreshConsecutive, prometheus.GaugeValue, float64(state.ConsecutiveRefreshFailures), labels...)
 		ch <- prometheus.MustNewConstMetric(c.refreshAge, prometheus.GaugeValue, state.LastRefreshAgeSeconds, labels...)
 	}
+	c.network.collect(ch, c.service, proxysupplier.WebshareNetworkSnapshotFor(c.supplier))
 }

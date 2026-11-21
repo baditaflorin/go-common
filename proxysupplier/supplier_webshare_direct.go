@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -92,8 +93,12 @@ var webshareDirectDefaultBaseURL = "https://proxy.webshare.io/api/v2/proxy/list/
 // see that method's doc comment for why address, not the full proxyURL,
 // is the reporting key.
 type webshareDirectEntry struct {
-	proxyURL string // fully formed http://user:pass@address:port
-	addr     string // address:port only
+	proxyURL    string // fully formed http://user:pass@address:port
+	addr        string // address:port only
+	asnNumber   int
+	asnName     string
+	subnet24    string
+	countryCode string
 
 	// failures/cooldownUntil mirror go-html-proxy's webshareproxy.Pool
 	// (this session, 2026-08-25) exactly -- same reasoning, same shape,
@@ -143,9 +148,11 @@ type webshareDirectSupplier struct {
 	httpClient      *http.Client
 	rules           *noProxyRules
 
-	mu   sync.RWMutex
-	list []*webshareDirectEntry
-	idx  atomic.Uint64
+	mu            sync.RWMutex
+	list          []*webshareDirectEntry // ASN & /24 interleaved order for round-robin
+	keyedList     []*webshareDirectEntry // canonical addr-sorted order for ProxyURLForKey
+	idx           atomic.Uint64
+	networkHealth *webshareNetworkHealth
 
 	// Refresh bookkeeping (see refreshLoop and poolSnapshot).
 	refreshOK      atomic.Uint64
@@ -194,6 +201,10 @@ func (s *webshareDirectSupplier) ProxyURL() string {
 }
 
 func (s *webshareDirectSupplier) nextEntry() *webshareDirectEntry {
+	return s.nextEntryExcludingASNs(nil)
+}
+
+func (s *webshareDirectSupplier) nextEntryExcludingASNs(excludeASNs map[int]struct{}) *webshareDirectEntry {
 	s.mu.RLock()
 	list := s.list
 	s.mu.RUnlock()
@@ -205,6 +216,37 @@ func (s *webshareDirectSupplier) nextEntry() *webshareDirectEntry {
 
 	now := time.Now().UnixNano()
 	start := s.idx.Add(1)
+	// Pass 1: honor IP cooldown, /24 subnet cooldown, ASN adaptive thinning/quarantine, and excludeASNs.
+	for i := 0; i < n; i++ {
+		e := list[(int(start)+i)%n]
+		if !e.eligible(now) {
+			continue
+		}
+		if len(excludeASNs) > 0 && e.asnNumber > 0 {
+			if _, skip := excludeASNs[e.asnNumber]; skip {
+				continue
+			}
+		}
+		if s.networkHealth != nil && !s.networkHealth.Allows(e.asnNumber, e.subnet24, now, start+uint64(i)) {
+			continue
+		}
+		return e
+	}
+	// Pass 2: if degraded thinning or excludeASNs filtered everything out, allow
+	// any IP-eligible entry whose ASN/subnet is not hard-quarantined.
+	for i := 0; i < n; i++ {
+		e := list[(int(start)+i)%n]
+		if !e.eligible(now) {
+			continue
+		}
+		if s.networkHealth != nil && s.networkHealth.IsQuarantinedOrSubnetCooled(e.asnNumber, e.subnet24, now) {
+			continue
+		}
+		return e
+	}
+	// Pass 3: if all ASNs/subnets are hard-cooled but individual IPs are still
+	// eligible, fail-open onto the next IP-eligible entry unless excluded, so
+	// temporary subnet/ASN pressure does not self-deadlock the entire pool.
 	for i := 0; i < n; i++ {
 		e := list[(int(start)+i)%n]
 		if e.eligible(now) {
@@ -239,7 +281,10 @@ func (s *webshareDirectSupplier) nextEntry() *webshareDirectEntry {
 // conditions ProxyURL() does.
 func (s *webshareDirectSupplier) ProxyURLForKey(key string) string {
 	s.mu.RLock()
-	list := s.list
+	list := s.keyedList
+	if len(list) == 0 {
+		list = s.list
+	}
 	s.mu.RUnlock()
 
 	n := len(list)
@@ -288,12 +333,27 @@ func (s *webshareDirectSupplier) markEntryResult(e *webshareDirectEntry, ok bool
 	if e == nil {
 		return
 	}
+	now := time.Now()
 	if ok {
 		e.failures.Store(0)
 		e.cooldownUntil.Store(0)
 	} else if e.failures.Add(1) >= webshareDirectMaxConsecutiveFailures {
-		e.cooldownUntil.Store(time.Now().Add(webshareDirectFailureCooldown).UnixNano())
+		e.cooldownUntil.Store(now.Add(webshareDirectFailureCooldown).UnixNano())
 	}
+	if s.networkHealth != nil {
+		s.networkHealth.Record(e.asnNumber, e.asnName, e.subnet24, e.addr, ok, now)
+	}
+}
+
+// WebshareNetworkHealth returns the live ASN and /24 subnet health snapshot for this pool.
+func (s *webshareDirectSupplier) WebshareNetworkHealth() WebshareNetworkSnapshot {
+	if s == nil || s.networkHealth == nil {
+		return WebshareNetworkSnapshot{}
+	}
+	s.mu.RLock()
+	entries := s.list
+	s.mu.RUnlock()
+	return s.networkHealth.Snapshot(entries, time.Now())
 }
 
 // newWebshareDirectSupplier constructs the supplier. Returns noneSupplier{}
@@ -323,6 +383,7 @@ func newWebshareDirectSupplierCore(cfg Config, registerActive bool) *webshareDir
 		refreshInterval: webshareDirectDefaultRefreshInterval,
 		httpClient:      &http.Client{Timeout: webshareDirectDefaultHTTPTimeout},
 		rules:           parseNoProxy(cfg.NoProxy),
+		networkHealth:   newWebshareNetworkHealth(),
 		retryBase:       webshareDirectRetryBase,
 		retryMax:        webshareDirectRetryMax,
 		stop:            make(chan struct{}),
@@ -358,6 +419,9 @@ type webshareEntry struct {
 	ProxyAddress string `json:"proxy_address"`
 	Port         int    `json:"port"`
 	Valid        bool   `json:"valid"`
+	ASNNumber    int    `json:"asn_number"`
+	ASNName      string `json:"asn_name"`
+	CountryCode  string `json:"country_code"`
 }
 
 type webshareListResponse struct {
@@ -428,27 +492,48 @@ func (s *webshareDirectSupplier) refresh(ctx context.Context) error {
 		// below parseable and makes addr the "[host]:port" form that
 		// conn.RemoteAddr() reports (MarkResult's key).
 		addr := net.JoinHostPort(e.ProxyAddress, strconv.Itoa(e.Port))
+		sub24 := subnet24ForHost(e.ProxyAddress)
 		if old, ok := prevByAddr[addr]; ok {
+			if e.ASNNumber > 0 {
+				old.asnNumber = e.ASNNumber
+			}
+			if e.ASNName != "" {
+				old.asnName = strings.TrimSpace(e.ASNName)
+			}
+			if sub24 != "" {
+				old.subnet24 = sub24
+			}
+			if e.CountryCode != "" {
+				old.countryCode = strings.TrimSpace(e.CountryCode)
+			}
 			list = append(list, old)
 			continue
 		}
 		list = append(list, &webshareDirectEntry{
 			proxyURL: fmt.Sprintf("http://%s:%s@%s",
 				url.QueryEscape(e.Username), url.QueryEscape(e.Password), addr),
-			addr: addr,
+			addr:        addr,
+			asnNumber:   e.ASNNumber,
+			asnName:     strings.TrimSpace(e.ASNName),
+			subnet24:    sub24,
+			countryCode: strings.TrimSpace(e.CountryCode),
 		})
 	}
 	if len(list) == 0 {
 		return errors.New("proxysupplier: webshare_direct fetched proxy list has zero valid entries")
 	}
 
-	// Canonical order (by addr) so ProxyURLForKey's hash->index mapping is
-	// stable across refreshes without re-sorting on every call — ProxyURL's
-	// round-robin is order-agnostic, so this costs it nothing.
+	// Keep a canonical addr-sorted slice so ProxyURLForKey's hash->index
+	// mapping stays stable across refreshes, while storing s.list interleaved
+	// across ASNs and /24 subnets so round-robin never bursts one /24 or ASN.
 	sort.Slice(list, func(i, j int) bool { return list[i].addr < list[j].addr })
+	keyed := make([]*webshareDirectEntry, len(list))
+	copy(keyed, list)
+	interleaved := interleaveWebshareEntries(list)
 
 	s.mu.Lock()
-	s.list = list
+	s.keyedList = keyed
+	s.list = interleaved
 	s.mu.Unlock()
 	return nil
 }
