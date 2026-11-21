@@ -11,9 +11,9 @@ type fakeNetworkSupplier struct {
 	snap proxysupplier.WebshareNetworkSnapshot
 }
 
-func (fakeNetworkSupplier) Name() string        { return "webshare_multi" }
-func (fakeNetworkSupplier) ProxyURL() string    { return "" }
-func (fakeNetworkSupplier) Bypass(string) bool  { return false }
+func (fakeNetworkSupplier) Name() string       { return "webshare_multi" }
+func (fakeNetworkSupplier) ProxyURL() string   { return "" }
+func (fakeNetworkSupplier) Bypass(string) bool { return false }
 func (f fakeNetworkSupplier) WebshareNetworkHealth() proxysupplier.WebshareNetworkSnapshot {
 	return f.snap
 }
