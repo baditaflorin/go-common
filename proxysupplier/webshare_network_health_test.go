@@ -66,15 +66,15 @@ func TestWebshareNetworkHealth_SubnetCooldownAndASNQuarantineRecovery(t *testing
 
 	// 1. Two distinct IPs failing in 10.1.1.0/24 triggers /24 cooldown.
 	h.Record(100, "Alpha", "10.1.1.0/24", "10.1.1.1:80", false, now)
-	if !h.Allows(100, "10.1.1.0/24", now.UnixNano(), 1) {
+	if !h.Allows(100, "10.1.1.0/24", now.UnixNano(), nil) {
 		t.Fatalf("subnet should still be allowed after 1 IP failure")
 	}
 	h.Record(100, "Alpha", "10.1.1.0/24", "10.1.1.2:80", false, now.Add(time.Second))
-	if h.Allows(100, "10.1.1.0/24", now.Add(2*time.Second).UnixNano(), 2) {
+	if h.Allows(100, "10.1.1.0/24", now.Add(2*time.Second).UnixNano(), nil) {
 		t.Fatalf("subnet 10.1.1.0/24 should be in cooldown after 2 distinct IP failures")
 	}
 	// Another /24 in the same ASN stays allowed.
-	if !h.Allows(100, "10.1.2.0/24", now.Add(2*time.Second).UnixNano(), 2) {
+	if !h.Allows(100, "10.1.2.0/24", now.Add(2*time.Second).UnixNano(), nil) {
 		t.Fatalf("sibling subnet 10.1.2.0/24 should remain allowed")
 	}
 
@@ -85,7 +85,7 @@ func TestWebshareNetworkHealth_SubnetCooldownAndASNQuarantineRecovery(t *testing
 	for i := 0; i < 5; i++ {
 		h.Record(200, "Beta", fmt.Sprintf("10.2.%d.0/24", i+10), fmt.Sprintf("10.2.%d.1:80", i+10), false, now)
 	}
-	if h.Allows(200, "10.2.99.0/24", now.Add(time.Second).UnixNano(), 1) {
+	if h.Allows(200, "10.2.99.0/24", now.Add(time.Second).UnixNano(), nil) {
 		t.Fatalf("AS200 should be quarantined at 50%% failure ratio")
 	}
 
@@ -104,10 +104,10 @@ func TestWebshareNetworkHealth_SubnetCooldownAndASNQuarantineRecovery(t *testing
 
 	// 3. After cooldown expires, allow 1 probe and close after 2 clean probes.
 	afterCD := now.Add(6 * time.Minute)
-	if !h.Allows(200, "10.2.99.0/24", afterCD.UnixNano(), 1) {
+	if !h.Allows(200, "10.2.99.0/24", afterCD.UnixNano(), nil) {
 		t.Fatalf("expected probe after ASN cooldown elapsed")
 	}
-	if h.Allows(200, "10.2.99.0/24", afterCD.Add(time.Second).UnixNano(), 2) {
+	if h.Allows(200, "10.2.99.0/24", afterCD.Add(time.Second).UnixNano(), nil) {
 		t.Fatalf("expected second probe within probe interval to be throttled")
 	}
 	h.Record(200, "Beta", "10.2.99.0/24", "10.2.99.1:80", true, afterCD.Add(2*time.Second))

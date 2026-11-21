@@ -121,7 +121,10 @@ func (s *webshareMultiSupplier) SelectPool(class PoolClass, excludePoolIDs ...st
 }
 
 // SelectPoolExcludingASNs picks one eligible member of the requested class,
-// skipping excluded pools and preferring ASNs not in excludeASNs.
+// skipping excluded pools and avoiding ASNs in excludeASNs: an excluded ASN is
+// used only as the very last resort, when no other ASN has an IP that is not
+// itself cooling down. With pacing enabled (see WebsharePacing) it returns a
+// *PacedError when every eligible entry's ASN is out of tokens.
 func (s *webshareMultiSupplier) SelectPoolExcludingASNs(class PoolClass, excludePoolIDs []string, excludeASNs []int) (WebshareSelection, error) {
 	if class != PoolClassDC && class != PoolClassResidential {
 		return WebshareSelection{}, ErrProxyUnavailable
@@ -176,11 +179,38 @@ func (s *webshareMultiSupplier) SelectPoolExcludingASNs(class PoolClass, exclude
 	}
 	s.current[eligible[chosen].ID] -= totalWeight
 	s.mu.Unlock()
-	for step := 0; step < len(eligible); step++ {
-		p := eligible[(chosen+step)%len(eligible)]
-		if selection, ok := s.selectionForExcludingASNs(p, excludedASNs); ok {
-			return selection, nil
+	return s.selectFromPools(eligible, chosen, excludedASNs)
+}
+
+// selectFromPools tries pools in order from chosen. An excluded ASN is a last
+// resort across all pools: every pool is first asked for a non-excluded
+// entry, and only then is a pool allowed to fall back to an excluded one.
+func (s *webshareMultiSupplier) selectFromPools(pools []*webshareNamedPool, chosen int, excludedASNs map[int]struct{}) (WebshareSelection, error) {
+	var paced *PacedError
+	strict := []bool{true}
+	if len(excludedASNs) > 0 {
+		strict = append(strict, false)
+	}
+	for _, strictExclusion := range strict {
+		if !strictExclusion && paced != nil {
+			// A non-excluded ASN only needs a token: wait for it rather than
+			// fall back onto an excluded ASN.
+			break
 		}
+		for step := 0; step < len(pools); step++ {
+			p := pools[(chosen+step)%len(pools)]
+			selection, err := s.selectionFor(p, excludedASNs, strictExclusion)
+			if err == nil {
+				return selection, nil
+			}
+			var pe *PacedError
+			if errors.As(err, &pe) {
+				paced = shorterPaced(paced, pe)
+			}
+		}
+	}
+	if paced != nil {
+		return WebshareSelection{}, paced
 	}
 	return WebshareSelection{}, ErrProxyUnavailable
 }
@@ -191,8 +221,9 @@ func (s *webshareMultiSupplier) SelectPoolID(poolID string) (WebshareSelection, 
 	return s.SelectPoolIDExcludingASNs(poolID, nil)
 }
 
-// SelectPoolIDExcludingASNs selects only the named pool while preferring exits
-// whose ASN is not in excludeASNs.
+// SelectPoolIDExcludingASNs selects only the named pool while avoiding exits
+// whose ASN is in excludeASNs (used only as the last resort; see
+// SelectPoolExcludingASNs). With pacing enabled it can return a *PacedError.
 func (s *webshareMultiSupplier) SelectPoolIDExcludingASNs(poolID string, excludeASNs []int) (WebshareSelection, error) {
 	excludedASNs := make(map[int]struct{}, len(excludeASNs))
 	for _, asn := range excludeASNs {
@@ -202,31 +233,75 @@ func (s *webshareMultiSupplier) SelectPoolIDExcludingASNs(poolID string, exclude
 	}
 	for _, p := range s.pools {
 		if p.ID == poolID {
-			if selection, ok := s.selectionForExcludingASNs(p, excludedASNs); ok {
-				return selection, nil
-			}
-			return WebshareSelection{}, ErrProxyUnavailable
+			return s.selectFromPools([]*webshareNamedPool{p}, 0, excludedASNs)
 		}
 	}
 	return WebshareSelection{}, ErrProxyUnavailable
 }
 
-func (s *webshareMultiSupplier) selectionForExcludingASNs(p *webshareNamedPool, excludeASNs map[int]struct{}) (WebshareSelection, bool) {
-	e := p.supplier.nextEntryExcludingASNs(excludeASNs)
-	if e == nil {
-		return WebshareSelection{}, false
+// selectionFor selects one entry of p. With strictExclusion, an entry in an
+// excluded ASN is never returned (not even as the pool's last resort).
+func (s *webshareMultiSupplier) selectionFor(p *webshareNamedPool, excludeASNs map[int]struct{}, strictExclusion bool) (WebshareSelection, error) {
+	e, err := p.supplier.selectEntryExcluding(excludeASNs, strictExclusion)
+	if err != nil {
+		return WebshareSelection{}, err
 	}
 	return WebshareSelection{
 		PoolID: p.ID, AccountID: p.AccountID, Class: p.Class,
 		ASNNumber: e.asnNumber, ASNName: e.asnName, Subnet24: e.subnet24, CountryCode: e.countryCode,
 		owner: s, pool: p, entry: e, proxyURL: e.proxyURL,
-	}, true
+	}, nil
 }
 
 // MarkSelectionResult updates only the exact pool entry that produced the
 // selection. Selections from another supplier, or from a pool no longer in
 // this supplier, are harmless no-ops.
 func (s *webshareMultiSupplier) MarkSelectionResult(selection WebshareSelection, ok bool) {
+	verdict := healthFail
+	if ok {
+		verdict = healthOK
+	}
+	s.markSelection(selection, ok, verdict)
+}
+
+// MarkSelectionOutcome is MarkSelectionResult with an outcome kind (see
+// Outcome): every non-OK outcome cools the selected exit IP down, but only
+// OutcomeChallenge counts against its ASN and /24.
+func (s *webshareMultiSupplier) MarkSelectionOutcome(selection WebshareSelection, outcome Outcome) {
+	ipOK, verdict, valid := outcomeEffect(outcome)
+	if !valid {
+		return
+	}
+	s.markSelection(selection, ipOK, verdict)
+}
+
+// MarkOutcome is the address-keyed form of MarkSelectionOutcome (see MarkResult).
+func (s *webshareMultiSupplier) MarkOutcome(addr string, outcome Outcome) {
+	for _, p := range s.pools {
+		p.supplier.MarkOutcome(addr, outcome)
+	}
+}
+
+// NextProxyURL is ProxyURL with the reason for an empty answer: the error of
+// SelectDefaultPool (ErrProxyUnavailable, or a *PacedError under pacing).
+func (s *webshareMultiSupplier) NextProxyURL() (string, error) {
+	sel, err := s.SelectDefaultPool()
+	if err != nil {
+		return "", err
+	}
+	return sel.proxyURL, nil
+}
+
+// SetWebsharePacing implements WebsharePacingConfigurer. The configuration is
+// shared by every pool of this supplier, as is the health tracker.
+func (s *webshareMultiSupplier) SetWebsharePacing(p WebsharePacing) {
+	if s == nil || s.networkHealth == nil {
+		return
+	}
+	s.networkHealth.pacer.configure(p)
+}
+
+func (s *webshareMultiSupplier) markSelection(selection WebshareSelection, ipOK bool, verdict healthVerdict) {
 	if selection.owner != s || selection.pool == nil || selection.entry == nil {
 		return
 	}
@@ -241,7 +316,7 @@ func (s *webshareMultiSupplier) MarkSelectionResult(selection WebshareSelection,
 				}
 			}
 			if found {
-				p.supplier.markEntryResult(selection.entry, ok)
+				p.supplier.markEntry(selection.entry, ipOK, verdict)
 			}
 			p.supplier.mu.RUnlock()
 			return
@@ -420,6 +495,9 @@ func newWebshareMultiSupplierWithPublish(path string, rules *noProxyRules, publi
 	}
 	seen := make(map[string]struct{}, len(cfg.Pools))
 	pools := make([]*webshareNamedPool, 0, len(cfg.Pools))
+	// One tracker for every pool, handed to each core before its refresh
+	// goroutine starts (assigning it afterwards raced with that goroutine).
+	sharedHealth := newWebshareNetworkHealth()
 	for _, pc := range cfg.Pools {
 		if _, exists := seen[pc.ID]; exists {
 			return &unavailableWebshareMultiSupplier{rules: rules}
@@ -458,7 +536,7 @@ func newWebshareMultiSupplierWithPublish(path string, rules *noProxyRules, publi
 			closeWebsharePools(pools)
 			return &unavailableWebshareMultiSupplier{rules: rules}
 		}
-		core := newWebshareDirectSupplierCore(Config{WebshareAPIKey: apiKey, WebsharePlanID: pc.PlanID, NoProxy: ""}, false)
+		core := newWebshareDirectSupplierCore(Config{WebshareAPIKey: apiKey, WebsharePlanID: pc.PlanID, NoProxy: ""}, false, sharedHealth)
 		if core == nil {
 			closeWebsharePools(pools)
 			return &unavailableWebshareMultiSupplier{rules: rules}
@@ -466,10 +544,6 @@ func newWebshareMultiSupplierWithPublish(path string, rules *noProxyRules, publi
 		pools = append(pools, &webshareNamedPool{WebsharePoolConfig: pc, supplier: core})
 	}
 	sort.Slice(pools, func(i, j int) bool { return pools[i].ID < pools[j].ID })
-	sharedHealth := newWebshareNetworkHealth()
-	for _, p := range pools {
-		p.supplier.networkHealth = sharedHealth
-	}
 	m := &webshareMultiSupplier{pools: pools, rules: rules, defaultPoolID: defaultPoolID, networkHealth: sharedHealth}
 	if publish {
 		activeWebshareMultiSupplier.Store(m)
@@ -667,3 +741,10 @@ func HTTPClientForSelection(selection WebshareSelection, timeout time.Duration, 
 var _ WebsharePoolSelector = (*webshareMultiSupplier)(nil)
 var _ WebshareDefaultSelector = (*webshareMultiSupplier)(nil)
 var _ WebshareSelectionReporter = (*webshareMultiSupplier)(nil)
+var _ WebshareSelectionOutcomeReporter = (*webshareMultiSupplier)(nil)
+var _ OutcomeReporter = (*webshareMultiSupplier)(nil)
+var _ OutcomeReporter = (*webshareDirectSupplier)(nil)
+var _ WebsharePacingConfigurer = (*webshareMultiSupplier)(nil)
+var _ WebsharePacingConfigurer = (*webshareDirectSupplier)(nil)
+var _ PacedProxyURLSupplier = (*webshareMultiSupplier)(nil)
+var _ PacedProxyURLSupplier = (*webshareDirectSupplier)(nil)

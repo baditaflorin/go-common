@@ -53,7 +53,11 @@ func NewFromConfig(cfg Config) Supplier {
 	case "webshare_multi":
 		// Catalogs are individually fetched per account plan. The wrapper
 		// selects DC pools by default and requires typed selection for ISP.
-		return newWebshareMultiSupplier(cfg.WebsharePoolsFile, rules, cfg.WebshareDefaultPoolID)
+		ws := newWebshareMultiSupplier(cfg.WebsharePoolsFile, rules, cfg.WebshareDefaultPoolID)
+		if m, ok := ws.(*webshareMultiSupplier); ok {
+			m.SetWebsharePacing(cfg.WebsharePacing)
+		}
+		return ws
 
 	default:
 		return noneSupplier{}

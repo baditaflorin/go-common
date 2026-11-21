@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.137.0] - 2026-11-22
+
+### Added
+
+- proxysupplier: outcome kinds for Webshare exits. `Outcome` (`OutcomeOK`, `OutcomeChallenge`, `OutcomeTransport`, `OutcomeUpstream`) is reported with `MarkSelectionOutcome(selection, outcome)` (webshare_multi, interface `WebshareSelectionOutcomeReporter`) or `MarkOutcome(addr, outcome)` (webshare_direct and webshare_multi, interface `OutcomeReporter`). Every non-OK outcome cools the exit IP exactly as `MarkResult(addr, false)` does, but only `OutcomeChallenge` counts against the IP's ASN and /24, so dial errors and target 5xx can no longer quarantine an ASN. The bool `MarkResult`/`MarkSelectionResult` keep their old meaning (false counts as a network failure). `proxysupplier_webshare_asn_outcomes_total` keeps its `ok`/`failure` labels; `failure` counts what counts against the ASN.
+- proxysupplier: opt-in per-ASN pacing, off by default. `WebsharePacing{PerIPRate, MinASNRate, Burst}` (in `Config.WebsharePacing`, the env vars `WEBSHARE_PACING_PER_IP_RATE`, `WEBSHARE_PACING_MIN_ASN_RATE` and `WEBSHARE_PACING_BURST`, or at runtime with `ConfigureWebsharePacing`/`SetWebsharePacing`) gives each ASN a token bucket refilling at `PerIPRate` x its IP count across the pools that share the health tracker, with a `MinASNRate` floor and `Burst` (default 2). A selection takes a token only for the entry it returns; when every eligible ASN is out of tokens it returns a `*PacedError{RetryAfter}` (`errors.Is` matches `ErrPaced` and `ErrProxyUnavailable`) instead of an unpaced pick. `SelectWait(ctx, fn)` blocks on it, and `NextProxyURL()` (interface `PacedProxyURLSupplier`) is ProxyURL with that error. New metrics `proxysupplier_webshare_asn_paced_total{asn,asn_name}`, `proxysupplier_webshare_pacing_waits_total` and `proxysupplier_webshare_pacing_per_ip_rate`; `WebshareNetworkSnapshot.Pacing` and the per-ASN `PacedTotal` and `PacingRatePerSecond` carry the same in the `/pools` status.
+- proxysupplier: `HealthyCapacity(poolID)` and `HealthyCapacityAll()` on webshare_multi (interface `WebshareCapacityReporter`) return an `ASNCapacity`: the non-quarantined ASNs that still have an eligible IP (never-tried ASNs count), those IPs, the quarantined ASNs and the shortest time until one may probe again, so a caller can tell a partly quarantined pool from an exhausted one.
+
+### Fixed
+
+- proxysupplier: a catalog refresh wrote the ASN, /24 and country of entries already published while selection read them without a lock (a data race). An entry whose metadata changed is now replaced by a new entry that carries its cooldown state; an unchanged entry is kept as is. A changed proxy credential for the same address is now picked up instead of keeping the old one. webshare_multi hands its shared health tracker to each pool before the pool's refresh goroutine starts, instead of assigning it afterwards.
+- proxysupplier: the /24 tracker was never pruned, so after 4,096 subnets new ones went untracked for good. Idle subnets (no failure inside the window, no cooldown) are dropped on every refresh, on a success that leaves them idle, and when the map is full.
+- **BREAKING (behavioural):** proxysupplier: a degraded ASN's thinning tested the parity of the selection cursor, which in an even-sized list always skipped the same half of the ASN's IPs; admission now counts per entry, so every IP keeps rotating at the thinned rate. `SelectPoolExcludingASNs` and `SelectPoolIDExcludingASNs` honoured excluded ASNs only in their first pass: the second pass (no thinning) now honours them too, every pool is asked for a non-excluded entry before any pool falls back to an excluded one, and an excluded ASN is used only as the last resort. Tests cover each through the real selection path; `go test -race ./proxysupplier/...` passes.
+  - summary: Webshare retries that exclude ASNs no longer land on them while another ASN has an eligible IP; degraded ASNs rotate over all their IPs.
+
 ## [0.135.1] - 2026-11-19
 
 ### Added

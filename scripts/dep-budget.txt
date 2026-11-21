@@ -75,6 +75,8 @@ safehttp go.opentelemetry.io/auto/sdk
 safehttp go.opentelemetry.io/otel
 safehttp go.opentelemetry.io/otel/metric
 safehttp go.opentelemetry.io/otel/trace
+# Reached only through go.opentelemetry.io/auto/sdk since the OpenTelemetry 1.47.0 bump (0.134.3).
+safehttp go.opentelemetry.io/otel/log
 
 # selftest imports safehttp.
 selftest @safehttp
