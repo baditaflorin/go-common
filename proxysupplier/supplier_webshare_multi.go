@@ -62,6 +62,7 @@ type webshareMultiSupplier struct {
 	pools         []*webshareNamedPool
 	rules         *noProxyRules
 	defaultPoolID string
+	networkHealth *webshareNetworkHealth
 	mu            sync.Mutex
 	current       map[string]int
 }
@@ -116,12 +117,24 @@ func (s *webshareMultiSupplier) SelectDefaultPool() (WebshareSelection, error) {
 // accidentally reusing the same account plan. A residential selection is
 // never made implicitly by the default ProxyURL path.
 func (s *webshareMultiSupplier) SelectPool(class PoolClass, excludePoolIDs ...string) (WebshareSelection, error) {
+	return s.SelectPoolExcludingASNs(class, excludePoolIDs, nil)
+}
+
+// SelectPoolExcludingASNs picks one eligible member of the requested class,
+// skipping excluded pools and preferring ASNs not in excludeASNs.
+func (s *webshareMultiSupplier) SelectPoolExcludingASNs(class PoolClass, excludePoolIDs []string, excludeASNs []int) (WebshareSelection, error) {
 	if class != PoolClassDC && class != PoolClassResidential {
 		return WebshareSelection{}, ErrProxyUnavailable
 	}
 	excluded := make(map[string]struct{}, len(excludePoolIDs))
 	for _, id := range excludePoolIDs {
 		excluded[id] = struct{}{}
+	}
+	excludedASNs := make(map[int]struct{}, len(excludeASNs))
+	for _, asn := range excludeASNs {
+		if asn > 0 {
+			excludedASNs[asn] = struct{}{}
+		}
 	}
 	eligible := make([]*webshareNamedPool, 0, len(s.pools))
 	weights := make([]int, 0, len(s.pools))
@@ -165,7 +178,7 @@ func (s *webshareMultiSupplier) SelectPool(class PoolClass, excludePoolIDs ...st
 	s.mu.Unlock()
 	for step := 0; step < len(eligible); step++ {
 		p := eligible[(chosen+step)%len(eligible)]
-		if selection, ok := s.selectionFor(p); ok {
+		if selection, ok := s.selectionForExcludingASNs(p, excludedASNs); ok {
 			return selection, nil
 		}
 	}
@@ -175,9 +188,21 @@ func (s *webshareMultiSupplier) SelectPool(class PoolClass, excludePoolIDs ...st
 // SelectPoolID selects only the named pool, regardless of its class. The
 // caller must make the policy decision to name a residential pool explicitly.
 func (s *webshareMultiSupplier) SelectPoolID(poolID string) (WebshareSelection, error) {
+	return s.SelectPoolIDExcludingASNs(poolID, nil)
+}
+
+// SelectPoolIDExcludingASNs selects only the named pool while preferring exits
+// whose ASN is not in excludeASNs.
+func (s *webshareMultiSupplier) SelectPoolIDExcludingASNs(poolID string, excludeASNs []int) (WebshareSelection, error) {
+	excludedASNs := make(map[int]struct{}, len(excludeASNs))
+	for _, asn := range excludeASNs {
+		if asn > 0 {
+			excludedASNs[asn] = struct{}{}
+		}
+	}
 	for _, p := range s.pools {
 		if p.ID == poolID {
-			if selection, ok := s.selectionFor(p); ok {
+			if selection, ok := s.selectionForExcludingASNs(p, excludedASNs); ok {
 				return selection, nil
 			}
 			return WebshareSelection{}, ErrProxyUnavailable
@@ -186,13 +211,14 @@ func (s *webshareMultiSupplier) SelectPoolID(poolID string) (WebshareSelection, 
 	return WebshareSelection{}, ErrProxyUnavailable
 }
 
-func (s *webshareMultiSupplier) selectionFor(p *webshareNamedPool) (WebshareSelection, bool) {
-	e := p.supplier.nextEntry()
+func (s *webshareMultiSupplier) selectionForExcludingASNs(p *webshareNamedPool, excludeASNs map[int]struct{}) (WebshareSelection, bool) {
+	e := p.supplier.nextEntryExcludingASNs(excludeASNs)
 	if e == nil {
 		return WebshareSelection{}, false
 	}
 	return WebshareSelection{
 		PoolID: p.ID, AccountID: p.AccountID, Class: p.Class,
+		ASNNumber: e.asnNumber, ASNName: e.asnName, Subnet24: e.subnet24, CountryCode: e.countryCode,
 		owner: s, pool: p, entry: e, proxyURL: e.proxyURL,
 	}, true
 }
@@ -248,6 +274,28 @@ func (s *webshareMultiSupplier) Pools() []WebsharePoolInfo {
 // WebsharePoolStates implements WebsharePoolStateProvider.
 func (s *webshareMultiSupplier) WebsharePoolStates() []WebsharePoolState {
 	return websharePoolsSnapshot(s)
+}
+
+// WebshareNetworkHealth aggregates live ASN and /24 subnet health across all
+// configured DC pools in this multi-pool supplier.
+func (s *webshareMultiSupplier) WebshareNetworkHealth() WebshareNetworkSnapshot {
+	if s == nil {
+		return WebshareNetworkSnapshot{}
+	}
+	nh := s.networkHealth
+	if nh == nil {
+		nh = newWebshareNetworkHealth()
+	}
+	var entries []*webshareDirectEntry
+	for _, p := range s.pools {
+		if p.Class != PoolClassDC {
+			continue
+		}
+		p.supplier.mu.RLock()
+		entries = append(entries, p.supplier.list...)
+		p.supplier.mu.RUnlock()
+	}
+	return nh.Snapshot(entries, time.Now())
 }
 
 // WebsharePools returns safe configured pool identities/health for a supplier
@@ -418,7 +466,11 @@ func newWebshareMultiSupplierWithPublish(path string, rules *noProxyRules, publi
 		pools = append(pools, &webshareNamedPool{WebsharePoolConfig: pc, supplier: core})
 	}
 	sort.Slice(pools, func(i, j int) bool { return pools[i].ID < pools[j].ID })
-	m := &webshareMultiSupplier{pools: pools, rules: rules, defaultPoolID: defaultPoolID}
+	sharedHealth := newWebshareNetworkHealth()
+	for _, p := range pools {
+		p.supplier.networkHealth = sharedHealth
+	}
+	m := &webshareMultiSupplier{pools: pools, rules: rules, defaultPoolID: defaultPoolID, networkHealth: sharedHealth}
 	if publish {
 		activeWebshareMultiSupplier.Store(m)
 	}
