@@ -43,22 +43,15 @@ func interleaveWebshareEntries(entries []*webshareDirectEntry) []*webshareDirect
 	sort.Ints(asnKeys)
 
 	type bucket struct {
-		items   []*webshareDirectEntry
-		pos     int
-		weight  int
-		current int
+		items []*webshareDirectEntry
+		pos   int
 	}
 
 	// 2. Within each ASN, interleave its /24 subnets using smooth weighted RR.
 	asnBuckets := make([]*bucket, 0, len(asnKeys))
-	totalWeight := 0
 	for _, asn := range asnKeys {
 		interleaved := interleaveBySubnet(byASN[asn])
-		asnBuckets = append(asnBuckets, &bucket{
-			items:  interleaved,
-			weight: len(interleaved),
-		})
-		totalWeight += len(interleaved)
+		asnBuckets = append(asnBuckets, &bucket{items: interleaved})
 	}
 
 	// 3. Across ASNs, emit entries by picking the ASN with the most remaining
@@ -96,7 +89,6 @@ func interleaveWebshareEntries(entries []*webshareDirectEntry) []*webshareDirect
 		chosen.pos++
 		lastASN = bestIdx
 	}
-	_ = totalWeight
 	return out
 }
 
