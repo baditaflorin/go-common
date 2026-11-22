@@ -298,10 +298,10 @@ func TestWebshareOutcomeKinds_OnlyChallengesCountAgainstTheNetwork(t *testing.T)
 	}
 
 	// Challenges count: two IPs in the /24 cool it, and enough of them quarantine the ASN.
-	for _, e := range list[:10] {
-		s.MarkOutcome(e.addr, OutcomeChallenge)
+	for i := 0; i < webshareASNMinSamples; i++ {
+		s.MarkOutcome(list[i%10].addr, OutcomeChallenge)
 	}
-	if a := asn100(); a.FailTotal != 10 || a.State != WebshareASNStateQuarantined || a.CooledSubnets24 != 1 {
+	if a := asn100(); a.FailTotal != uint64(webshareASNMinSamples) || a.State != WebshareASNStateQuarantined || a.CooledSubnets24 != 1 {
 		t.Fatalf("challenges not counted: %+v", a)
 	}
 

@@ -46,13 +46,13 @@ func TestWebshareMulti_UntriedASNsTakeOverWhenOthersAreQuarantined(t *testing.T)
 
 	now := time.Now()
 	for _, asn := range []int{101, 103, 105} {
-		degradeASN(h, asn, 0, 10, now)
+		degradeASN(h, asn, 0, webshareASNMinSamples, now)
 	}
 	c := m.HealthyCapacityAll()
-	if c.HealthyASNs != 3 || c.EligibleIPs != 9 || c.QuarantinedASNs != 3 {
-		t.Fatalf("capacity = %+v, want 3 healthy ASNs, 9 IPs, 3 quarantined", c)
+	if c.HealthyASNs != 3 || c.EligibleIPs != 9 || c.QuarantinedASNs != 3 || c.ProbeReadyASNs != 0 {
+		t.Fatalf("capacity = %+v, want 3 healthy ASNs, 9 IPs, 3 quarantined, 0 probe-ready", c)
 	}
-	if c.NextProbeIn < webshareASNBaseCooldown-time.Minute || c.NextProbeIn > webshareASNBaseCooldown {
+	if c.NextProbeIn < webshareASNBaseCooldown-30*time.Second || c.NextProbeIn > webshareASNBaseCooldown {
 		t.Fatalf("NextProbeIn = %s, want about %s", c.NextProbeIn, webshareASNBaseCooldown)
 	}
 
@@ -79,9 +79,9 @@ func TestWebshareMulti_UntriedASNsTakeOverWhenOthersAreQuarantined(t *testing.T)
 
 func TestWebshareMulti_HealthyCapacityPerPoolAndIPAndSubnetCooldowns(t *testing.T) {
 	m, h := sixASNMulti(t)
-	degradeASN(h, 105, 0, 10, time.Now())
+	degradeASN(h, 105, 0, webshareASNMinSamples, time.Now())
 
-	if c := m.HealthyCapacity("quality-dc"); c.HealthyASNs != 1 || c.EligibleIPs != 3 || c.QuarantinedASNs != 1 {
+	if c := m.HealthyCapacity("quality-dc"); c.HealthyASNs != 1 || c.EligibleIPs != 3 || c.QuarantinedASNs != 1 || c.ProbeReadyASNs != 0 {
 		t.Fatalf("quality-dc capacity = %+v, want AS106 only", c)
 	}
 	if c := m.HealthyCapacity("legacy-dc"); c != (ASNCapacity{HealthyASNs: 4, EligibleIPs: 12}) {
@@ -104,14 +104,22 @@ func TestWebshareMulti_HealthyCapacityPerPoolAndIPAndSubnetCooldowns(t *testing.
 		t.Fatalf("after /24 cooldown: %+v, want 3 ASNs / 8 IPs", c)
 	}
 
-	// A probe that was just admitted pushes the next one out by the probe interval.
+	// Once cooldown elapses and no probe ran yet, ProbeReadyASNs reports 1 and NextProbeIn is 0.
 	ah := h.asns[105]
 	h.mu.Lock()
 	ah.cooldownUntil = time.Now().Add(-time.Second).UnixNano()
+	ah.lastProbeNano = 0
+	h.mu.Unlock()
+	if c := m.HealthyCapacity("quality-dc"); c.ProbeReadyASNs != 1 || c.NextProbeIn != 0 {
+		t.Fatalf("probe-ready capacity = %+v, want ProbeReadyASNs=1 NextProbeIn=0", c)
+	}
+
+	// A probe that was just admitted pushes the next one out by the probe interval.
+	h.mu.Lock()
 	ah.lastProbeNano = time.Now().UnixNano()
 	h.mu.Unlock()
-	if c := m.HealthyCapacity("quality-dc"); c.NextProbeIn <= 0 || c.NextProbeIn > webshareASNProbeInterval {
-		t.Fatalf("NextProbeIn after a probe = %s, want within %s", c.NextProbeIn, webshareASNProbeInterval)
+	if c := m.HealthyCapacity("quality-dc"); c.ProbeReadyASNs != 0 || c.NextProbeIn <= 0 || c.NextProbeIn > webshareASNProbeInterval {
+		t.Fatalf("NextProbeIn after a probe = %+v, want ProbeReadyASNs=0 and NextProbeIn within %s", c, webshareASNProbeInterval)
 	}
 	var _ WebshareCapacityReporter = m
 }

@@ -78,15 +78,23 @@ func TestWebshareNetworkHealth_SubnetCooldownAndASNQuarantineRecovery(t *testing
 		t.Fatalf("sibling subnet 10.1.2.0/24 should remain allowed")
 	}
 
-	// 2. Drive AS200 to 50% failures across 10 samples -> quarantined.
+	// 2. A brief 5-of-10 burst degrades (thins) AS200 without prematurely quarantining it.
 	for i := 0; i < 5; i++ {
 		h.Record(200, "Beta", fmt.Sprintf("10.2.%d.0/24", i+1), fmt.Sprintf("10.2.%d.1:80", i+1), true, now)
 	}
 	for i := 0; i < 5; i++ {
 		h.Record(200, "Beta", fmt.Sprintf("10.2.%d.0/24", i+10), fmt.Sprintf("10.2.%d.1:80", i+10), false, now)
 	}
+	if h.IsQuarantinedOrSubnetCooled(200, "10.2.99.0/24", now.Add(time.Second).UnixNano()) {
+		t.Fatalf("AS200 should only be degraded, not quarantined, after 5/10 failures")
+	}
+
+	// 3. Driving AS200 to >=65% failures across 20 samples quarantines it.
+	for i := 0; i < 10; i++ {
+		h.Record(200, "Beta", fmt.Sprintf("10.2.%d.0/24", i+20), fmt.Sprintf("10.2.%d.1:80", i+20), false, now)
+	}
 	if h.Allows(200, "10.2.99.0/24", now.Add(time.Second).UnixNano(), nil) {
-		t.Fatalf("AS200 should be quarantined at 50%% failure ratio")
+		t.Fatalf("AS200 should be quarantined at 75%% failure ratio over 20 samples")
 	}
 
 	entries := []*webshareDirectEntry{

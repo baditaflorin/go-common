@@ -12,17 +12,19 @@ import (
 var (
 	webshareSubnetWindow           = 2 * time.Minute
 	webshareSubnetFailureThreshold = 2
-	webshareSubnetCooldown         = 10 * time.Minute
+	webshareSubnetCooldown         = 5 * time.Minute
 
-	webshareASNWindowSize       = 40
-	webshareASNMinSamples       = 10
-	webshareASNDegradedRatio    = 0.25
-	webshareASNHeavyRatio       = 0.40
-	webshareASNQuarantineRatio  = 0.50
-	webshareASNBaseCooldown     = 10 * time.Minute
-	webshareASNMaxCooldown      = 30 * time.Minute
-	webshareASNProbeInterval    = 30 * time.Second
-	webshareASNCloseAfterProbes = 2
+	webshareASNWindowSize         = 40
+	webshareASNDegradedMinSamples = 10
+	webshareASNMinSamples         = 20
+	webshareASNDegradedRatio      = 0.25
+	webshareASNHeavyRatio         = 0.40
+	webshareASNSevereRatio        = 0.55
+	webshareASNQuarantineRatio    = 0.65
+	webshareASNBaseCooldown       = 2 * time.Minute
+	webshareASNMaxCooldown        = 10 * time.Minute
+	webshareASNProbeInterval      = 15 * time.Second
+	webshareASNCloseAfterProbes   = 1
 )
 
 const (
@@ -161,7 +163,7 @@ func (a *asnHealth) stateString(nowNano int64) (state string, ratio float64, sam
 		}
 		return WebshareASNStateQuarantined, ratio, samples, rem
 	}
-	if samples >= webshareASNMinSamples && ratio >= webshareASNDegradedRatio {
+	if samples >= webshareASNDegradedMinSamples && ratio >= webshareASNDegradedRatio {
 		return WebshareASNStateDegraded, ratio, samples, 0
 	}
 	return WebshareASNStateHealthy, ratio, samples, 0
@@ -376,9 +378,11 @@ func (h *webshareNetworkHealth) Allows(asnNumber int, subnet24 string, nowNano i
 		return true
 	}
 	samples, ratio := ah.failureStats()
-	if samples >= webshareASNMinSamples {
+	if samples >= webshareASNDegradedMinSamples {
 		every := uint64(0)
-		if ratio >= webshareASNHeavyRatio {
+		if ratio >= webshareASNSevereRatio {
+			every = 8
+		} else if ratio >= webshareASNHeavyRatio {
 			every = 4
 		} else if ratio >= webshareASNDegradedRatio {
 			every = 2
