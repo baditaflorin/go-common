@@ -17,6 +17,9 @@ type ASNCapacity struct {
 	EligibleIPs int `json:"eligible_ips"`
 	// QuarantinedASNs is the number of quarantined ASNs in the catalog.
 	QuarantinedASNs int `json:"quarantined_asns"`
+	// ProbeReadyASNs is the number of quarantined ASNs whose cooldown and probe
+	// interval have elapsed so a single recovery probe may run now.
+	ProbeReadyASNs int `json:"probe_ready_asns,omitempty"`
 	// NextProbeIn is the shortest time until a quarantined ASN may send its
 	// next probe (its cooldown end, or its probe interval after the last
 	// probe). Zero when a probe is due now or no ASN is quarantined (see
@@ -92,6 +95,9 @@ func (h *webshareNetworkHealth) capacity(entries []*webshareDirectEntry, now tim
 						at = max(at, ah.lastProbeNano+webshareASNProbeInterval.Nanoseconds())
 					}
 					wait := max(at-nowNano, 0)
+					if wait == 0 {
+						c.ProbeReadyASNs++
+					}
 					if nextProbe < 0 || wait < nextProbe {
 						nextProbe = wait
 					}

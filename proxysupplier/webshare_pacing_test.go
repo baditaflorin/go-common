@@ -212,7 +212,7 @@ func TestWebsharePacing_SkippedASNsKeepTheirTokens(t *testing.T) {
 	clk := newFakeClock()
 	h := newWebshareNetworkHealth()
 	h.pacer.now = clk.Now
-	degradeASN(h, 100, 0, 10, time.Now()) // AS100 quarantined
+	degradeASN(h, 100, 0, webshareASNMinSamples, time.Now()) // AS100 quarantined
 	s := supplierWithHealth(h, asnEntry("10.1.1.1", 100), asnEntry("10.2.1.1", 200), asnEntry("10.1.2.1", 100))
 	s.SetWebsharePacing(WebsharePacing{PerIPRate: 1, Burst: 2})
 	for i := 0; i < 2; i++ {
