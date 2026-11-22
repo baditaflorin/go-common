@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.138.0] - 2026-11-22
+
+### Added
+
+- proxysupplier: Webshare ASN and /24 health can survive a restart. `ExportHealthState(now)` and `RestoreHealthState(state, now)` on webshare_direct and webshare_multi (interface `WebshareHealthPersister`) read and refill the shared tracker: per ASN the quarantine and its end, consecutive trips (so the cooldown keeps escalating), the outcome window and totals; the /24 subnets still cooling down. Restore only adds what the tracker does not know yet. `OpenWebshareHealthFile(supplier, path, opts)` restores from a JSON file, saves every `Interval` (default 10s; temp file, fsync, rename, mode 0600) and once more on `Close`; a missing, corrupt, foreign-version or older-than-`MaxAge` (default 2h) file starts fresh, and an unwritable directory fails at open. Before this a restart forgot every quarantine and the next minutes of traffic re-learned the challenge wave by sending into every ASN again (2026-11-22: 48 of 54 ASNs re-challenged within 5 minutes of a sidecar deploy). The file holds no proxy address or credential.
+
 ## [0.137.0] - 2026-11-22
 
 ### Added
