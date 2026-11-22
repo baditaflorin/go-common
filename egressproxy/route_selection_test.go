@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/baditaflorin/go-common/proxysupplier"
 )
@@ -42,9 +43,12 @@ func TestEgressProxyUsesPreselectedProviderNeutralRoute(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("CONNECT status = %d, want 200", resp.StatusCode)
 	}
-	if target.accepts.Load() != 1 {
-		t.Fatalf("target accepts = %d, want 1", target.accepts.Load())
-	}
+	// The kernel completes the target's handshake before its accept goroutine
+	// runs, so the counter can still read 0 right after the 200 reaches the
+	// client (seen under go 1.27 on CI). Wait for it instead of reading it once.
+	eventually(t, 3*time.Second, "the target to count the accepted connection", func() bool {
+		return target.accepts.Load() == 1
+	})
 	if got := upstream.auths(); len(got) != 1 || got[0] != basicHeader("route-user", "route-pass") {
 		t.Fatalf("upstream auth did not use selected route credentials (count=%d)", len(got))
 	}

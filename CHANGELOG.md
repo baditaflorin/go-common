@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.138.1] - 2026-11-22
+
+### Fixed
+
+- `egressproxy` test `TestEgressProxyUsesPreselectedProviderNeutralRoute` read the target's accept counter once, right after the CONNECT 200. The kernel completes the target's handshake before its accept goroutine increments the counter, so the read could see 0 and fail the `forward-compat` lane (go 1.27) on pull requests. It now waits with `eventually`. Reproduced on the unfixed test (5 failures in 6,000 runs with `-cpu 1,4`); the fixed test passes 6,000 runs and `go test -race ./egressproxy/`. Test-only change, no library code touched.
+
 ## [0.138.0] - 2026-11-22
 
 ### Added
