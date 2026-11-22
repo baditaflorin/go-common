@@ -94,3 +94,40 @@ func TestRandom_RotatesAcrossPool(t *testing.T) {
 		t.Fatalf("only %d distinct UAs in 200 draws — rotation broken", len(seen))
 	}
 }
+
+func TestApplyNavigation_AlignsSecFetchSiteWithReferer(t *testing.T) {
+	p := browserheaders.Personas()[0]
+	cases := []struct {
+		name     string
+		target   string
+		referer  string
+		wantSite string
+	}{
+		{name: "no_referer", target: "https://html.duckduckgo.com/html/?q=test", referer: "", wantSite: "none"},
+		{name: "same_site", target: "https://html.duckduckgo.com/html/?q=test", referer: "https://duckduckgo.com/", wantSite: "same-site"},
+		{name: "same_origin", target: "https://html.duckduckgo.com/html/?q=test", referer: "https://html.duckduckgo.com/html/", wantSite: "same-origin"},
+		{name: "cross_site", target: "https://html.duckduckgo.com/html/?q=test", referer: "https://example.org/", wantSite: "cross-site"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := http.Header{}
+			p.ApplyNavigation(h, tc.target, tc.referer)
+			if got := h.Get("Sec-Fetch-Site"); got != tc.wantSite {
+				t.Fatalf("Sec-Fetch-Site = %q, want %q", got, tc.wantSite)
+			}
+			if got := h.Get("Referer"); got != tc.referer {
+				t.Fatalf("Referer = %q, want %q", got, tc.referer)
+			}
+		})
+	}
+}
+
+func TestPersonas_HaveValidFamily(t *testing.T) {
+	for _, p := range browserheaders.Personas() {
+		switch p.Family {
+		case browserheaders.FamilyChrome, browserheaders.FamilyFirefox, browserheaders.FamilySafari:
+		default:
+			t.Fatalf("persona %q has invalid Family %q", p.UserAgent, p.Family)
+		}
+	}
+}
