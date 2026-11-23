@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Add an opt-in durable work queue client with scoped credentials, fenced leases, idempotent task operations and explicit run completion status.
+
 ## [0.138.1] - 2026-11-22
 
 ### Fixed
