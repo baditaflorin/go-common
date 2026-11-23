@@ -381,3 +381,51 @@ func (c *Client) RunCompletion(ctx context.Context, run string) (Completion, err
 	out.Complete = *response.Complete
 	return out, nil
 }
+
+// RecordAttempt writes one bounded immutable receipt under the current lease.
+// Retrying the same receipt after an ambiguous acknowledgement is safe.
+func (c *Client) RecordAttempt(ctx context.Context, run string, l Lease, receipt json.RawMessage) error {
+	p, e := taskPath(run, l, "attempt")
+	var object map[string]json.RawMessage
+	if e != nil || len(receipt) > 16384 || !json.Valid(receipt) || json.Unmarshal(receipt, &object) != nil || object == nil {
+		return ErrInvalid
+	}
+	return c.postAck(ctx, p, struct {
+		Worker  string          `json:"worker"`
+		Version int64           `json:"lease_version"`
+		Receipt json.RawMessage `json:"receipt"`
+	}{l.Worker, l.Version, receipt}, "recorded", true)
+}
+
+type AttemptReceipt struct {
+	LeaseVersion int64           `json:"lease_version"`
+	Attempt      int             `json:"attempt"`
+	Payload      json.RawMessage `json:"payload"`
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
+func (c *Client) AttemptReceipts(ctx context.Context, run, key string) ([]AttemptReceipt, error) {
+	p, e := runPath(run)
+	if e != nil || !valid(key, 256) {
+		return nil, ErrInvalid
+	}
+	var out struct {
+		Attempts []AttemptReceipt `json:"attempts"`
+	}
+	status, e := c.call(ctx, http.MethodGet, p+"/tasks/"+url.PathEscape(key)+"/attempts", nil, &out)
+	if e != nil {
+		return nil, e
+	}
+	if status != http.StatusOK || out.Attempts == nil || len(out.Attempts) > 10 {
+		return nil, ErrUnavailable
+	}
+	var last int64
+	for _, r := range out.Attempts {
+		var object map[string]json.RawMessage
+		if r.LeaseVersion <= last || r.Attempt < 1 || r.Attempt > 10 || r.CreatedAt.IsZero() || len(r.Payload) > 16384 || json.Unmarshal(r.Payload, &object) != nil || object == nil {
+			return nil, ErrUnavailable
+		}
+		last = r.LeaseVersion
+	}
+	return out.Attempts, nil
+}
