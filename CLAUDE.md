@@ -836,7 +836,7 @@ fleet-runner stats                           # audit log + token usage summary
 ```
 
 <!-- anchor id=fleet-runner-verbs-health repo=go_fleet_runner symbol=verb:health verified=630a481e6 digest=sha256:ba70ebf76d4be8c7445d6ec763afcff57e74d866cd65181530a874cd16bb9a64 on=2026-10-18 -->
-<!-- anchor id=bootstrap-compose-scaffold-compose repo=go_fleet_runner symbol=verb:scaffold-compose verified=630a481e6 digest=sha256:23d1e526896c43ec1592818e4befcbfc2c788adbdb204d3e30a9028b36657d31 on=2026-10-18 -->
+<!-- anchor id=bootstrap-compose-scaffold-compose repo=go_fleet_runner symbol=verb:scaffold-compose verified=e5af5e85d digest=sha256:276242da40337d3477d3fd1eef673fd748cf82a81c32ce3b72f6faa08f4fb01e on=2026-11-16 -->
 
 `new-service` does not set GitHub topics. `bin/generate.py` registers a repo
 only with a `mesh-<mesh>` topic, and also reads `lang-<x>` (defaults to go on
