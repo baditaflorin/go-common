@@ -2,7 +2,7 @@
 
 # Package index
 
-79 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
+80 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
 
 | Package | Summary |
 | --- | --- |
@@ -31,6 +31,7 @@
 | [`deploymentauthorization`](../deploymentauthorization/) | Defines the signed deployment-decision contract shared by the authority and fleet runner. |
 | [`deploymentintent`](../deploymentintent/) | Defines and validates the versioned deployment intent exchanged by fleet deployment control-plane components. |
 | [`deploymentlease`](../deploymentlease/) | The shared fail-closed client for the Fleet Deployment Authority's mTLS authorization and target-lease API. |
+| [`durablequeue`](../durablequeue/) | Provides a scoped client for the durable work queue. |
 | [`egress`](../egress/) | Decides whether an outbound request goes through the environment's egress proxy (HTTP_PROXY / HTTPS_PROXY / NO_PROXY). |
 | [`egressproxy`](../egressproxy/) | A credential-injecting forward proxy that listens on loopback only, so a browser that cannot authenticate to an upstream proxy can still be forced through one. |
 | [`env`](../env/) | Provides typed, zero-dependency helpers for reading environment variables with defaults, required-or-fatal semantics, and common Go types (bool, int, duration, slice). |

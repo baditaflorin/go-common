@@ -25,6 +25,7 @@ depcheck 84
 deploymentauthorization 63
 deploymentintent 77
 deploymentlease 66
+durablequeue 70
 egress 95
 egressproxy 89
 env 77
