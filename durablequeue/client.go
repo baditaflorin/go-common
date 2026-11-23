@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -291,4 +292,64 @@ func (c *Client) SetPaused(ctx context.Context, run string, paused bool) error {
 		action = "pause"
 	}
 	return c.postAck(ctx, p+"/"+action, struct{}{}, "paused", paused)
+}
+
+// TerminalTask is an owner-scoped completed or permanently failed task receipt.
+// Large results should live in the owning storage service, referenced here.
+type TerminalTask struct {
+	Key       string          `json:"key"`
+	State     string          `json:"state"`
+	Attempts  int             `json:"attempts"`
+	Result    json.RawMessage `json:"result,omitempty"`
+	ErrorCode string          `json:"error_code,omitempty"`
+}
+type TerminalPage struct {
+	Tasks []TerminalTask `json:"tasks"`
+	Next  string         `json:"next,omitempty"`
+}
+
+// TerminalResults returns one byte-bounded keyset page. For an exhaustive
+// export, wait until Stats reports Complete: tasks can become terminal behind
+// a cursor while a run is still active.
+func (c *Client) TerminalResults(ctx context.Context, run, after string, limit int) (TerminalPage, error) {
+	var page TerminalPage
+	path, err := runPath(run)
+	if err != nil || (after != "" && !valid(after, 256)) || limit < 1 || limit > 100 {
+		return page, ErrInvalid
+	}
+	query := url.Values{}
+	query.Set("limit", strconv.Itoa(limit))
+	if after != "" {
+		query.Set("after", after)
+	}
+	status, err := c.call(ctx, http.MethodGet, path+"/tasks?"+query.Encode(), nil, &page)
+	if err != nil {
+		return TerminalPage{}, err
+	}
+	if status != http.StatusOK || len(page.Tasks) > limit || page.Tasks == nil {
+		return TerminalPage{}, ErrUnavailable
+	}
+	seen := make(map[string]bool, len(page.Tasks))
+	for _, task := range page.Tasks {
+		if !valid(task.Key, 256) || task.Key == after || seen[task.Key] || task.Attempts < 1 {
+			return TerminalPage{}, ErrUnavailable
+		}
+		seen[task.Key] = true
+		switch task.State {
+		case "done":
+			if !json.Valid(task.Result) || task.ErrorCode != "" {
+				return TerminalPage{}, ErrUnavailable
+			}
+		case "failed":
+			if len(task.Result) != 0 || !valid(task.ErrorCode, 128) {
+				return TerminalPage{}, ErrUnavailable
+			}
+		default:
+			return TerminalPage{}, ErrUnavailable
+		}
+	}
+	if page.Next != "" && (len(page.Tasks) == 0 || page.Next != page.Tasks[len(page.Tasks)-1].Key) {
+		return TerminalPage{}, ErrUnavailable
+	}
+	return page, nil
 }

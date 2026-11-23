@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.140.2] - 2026-11-23
+
+### Added
+
+- durablequeue: read bounded, owner-scoped pages of terminal task receipts after run completion.
+
 ## [0.140.1] - 2026-11-23
 
 ### Added
