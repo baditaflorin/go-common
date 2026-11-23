@@ -353,3 +353,31 @@ func (c *Client) TerminalResults(ctx context.Context, run, after string, limit i
 	}
 	return page, nil
 }
+
+// Completion is a lightweight indexed completion check, without exact counts.
+type Completion struct {
+	Sealed   bool
+	Complete bool
+}
+
+func (c *Client) RunCompletion(ctx context.Context, run string) (Completion, error) {
+	var out Completion
+	path, err := runPath(run)
+	if err != nil {
+		return out, err
+	}
+	var response struct {
+		Sealed   *bool `json:"sealed"`
+		Complete *bool `json:"complete"`
+	}
+	status, err := c.call(ctx, http.MethodGet, path+"/completion", nil, &response)
+	if err != nil {
+		return out, err
+	}
+	if status != http.StatusOK || response.Sealed == nil || response.Complete == nil || *response.Complete && !*response.Sealed {
+		return out, ErrUnavailable
+	}
+	out.Sealed = *response.Sealed
+	out.Complete = *response.Complete
+	return out, nil
+}

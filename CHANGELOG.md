@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.140.3] - 2026-11-23
+
+### Added
+
+- durablequeue: add a lightweight indexed completion check for worker polling.
+
 ## [0.140.2] - 2026-11-23
 
 ### Added

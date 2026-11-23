@@ -38,3 +38,32 @@ func TestTerminalResultsRejectsMalformedServerPages(t *testing.T) {
 		t.Fatalf("oversize: %v", err)
 	}
 }
+
+func TestRunCompletionRejectsIncompleteOrContradictoryResponses(t *testing.T) {
+	for _, tc := range []struct {
+		body     string
+		valid    bool
+		complete bool
+	}{
+		{`{"sealed":true,"complete":true}`, true, true},
+		{`{"sealed":false,"complete":false}`, true, false},
+		{`{"sealed":false,"complete":true}`, false, false},
+		{`{"complete":false}`, false, false},
+		{`{"sealed":true}`, false, false},
+	} {
+		c, _ := New(Config{URL: "https://queue.example", Token: "ak_fixture", Transport: rt(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path != "/v1/runs/run/completion" {
+				t.Fatalf("unexpected path %s", r.URL.Path)
+			}
+			return response(200, tc.body), nil
+		})})
+		result, err := c.RunCompletion(context.Background(), "run")
+		if tc.valid {
+			if err != nil || result.Complete != tc.complete {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+		} else if !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("accepted %s: %v", tc.body, err)
+		}
+	}
+}
