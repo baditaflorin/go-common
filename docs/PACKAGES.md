@@ -2,7 +2,7 @@
 
 # Package index
 
-80 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
+81 importable packages, built from each package's doc comment. The import path is `github.com/baditaflorin/go-common/<package>`. To change a summary, edit that package's doc comment and regenerate; CI fails if this file is stale.
 
 | Package | Summary |
 | --- | --- |
@@ -50,6 +50,7 @@
 | [`nullify`](../nullify/) | The canonical "I checked and found nothing" helper for enrichers writing a verdict/classification column to Postgres. |
 | [`obs`](../obs/) | Provides fleet-canonical runtime observability: a localhost-only debug server exposing net/http/pprof plus a /metrics mirror, and a helper to (idempotently) register the Go runtime + process… |
 | [`openapi`](../openapi/) | Provides types and helpers for building OpenAPI 3.0.3 specification documents that fleet services expose at /openapi.json. |
+| [`pagebatch`](../pagebatch/) | Frames bounded groups of raw page requests and receipts. |
 | [`pagination`](../pagination/) | Provides canonical types and helpers for cursor-based and offset-based paginated API responses. |
 | [`pentest`](../pentest/) | Provides security-testing helpers: a bounded-concurrency worker pool for concurrent payload delivery and a result aggregator. |
 | [`policyeval`](../policyeval/) | A pure-Go rule engine for in-process policy evaluation. |

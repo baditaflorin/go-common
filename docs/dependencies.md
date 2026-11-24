@@ -2,7 +2,7 @@
 
 # Third-party dependencies per package
 
-72 importable packages, 42 of them with no third-party module at all, and 44 under a budget. Generated from `go list -deps`; CI fails if this file is stale.
+73 importable packages, 42 of them with no third-party module at all, and 44 under a budget. Generated from `go list -deps`; CI fails if this file is stale.
 
 go-common is one Go module, but a service only builds, and only lists in its own `go.mod` and `go.sum`, the
 third-party modules that the packages it imports reach. This page measures that for every package, so that
@@ -37,10 +37,10 @@ Heaviest first, then by name.
 | [`obs`](../obs/) | 19 | - | `(itself)`, `promx`, `graph`, `middleware`, `proxysupplier`, `ratecoord`, `internal/tracehttp` | `github.com/beorn7/perks`, `github.com/cespare/xxhash/v2`, `github.com/go-logr/logr`, `github.com/go-logr/stdr`, `github.com/munnerz/goautoneg`, `github.com/prometheus/client_golang`, `github.com/prometheus/client_model`, `github.com/prometheus/common`, `github.com/prometheus/procfs`, `go.opentelemetry.io/auto/sdk`, `go.opentelemetry.io/otel`, `go.opentelemetry.io/otel/log`, `go.opentelemetry.io/otel/metric`, `go.opentelemetry.io/otel/trace`, `go.yaml.in/yaml/v2`, `golang.org/x/sync`, `golang.org/x/sys`, `golang.org/x/time`, `google.golang.org/protobuf` |
 | [`promx`](../promx/) | 19 | - | `(itself)`, `graph`, `middleware`, `proxysupplier`, `ratecoord`, `internal/tracehttp` | `github.com/beorn7/perks`, `github.com/cespare/xxhash/v2`, `github.com/go-logr/logr`, `github.com/go-logr/stdr`, `github.com/munnerz/goautoneg`, `github.com/prometheus/client_golang`, `github.com/prometheus/client_model`, `github.com/prometheus/common`, `github.com/prometheus/procfs`, `go.opentelemetry.io/auto/sdk`, `go.opentelemetry.io/otel`, `go.opentelemetry.io/otel/log`, `go.opentelemetry.io/otel/metric`, `go.opentelemetry.io/otel/trace`, `go.yaml.in/yaml/v2`, `golang.org/x/sync`, `golang.org/x/sys`, `golang.org/x/time`, `google.golang.org/protobuf` |
 | [`dbx`](../dbx/) | 15 | - | `(itself)` | `github.com/XSAM/otelsql`, `github.com/cespare/xxhash/v2`, `github.com/go-logr/logr`, `github.com/go-logr/stdr`, `github.com/jackc/pgpassfile`, `github.com/jackc/pgservicefile`, `github.com/jackc/pgx/v5`, `github.com/jackc/puddle/v2`, `go.opentelemetry.io/auto/sdk`, `go.opentelemetry.io/otel`, `go.opentelemetry.io/otel/log`, `go.opentelemetry.io/otel/metric`, `go.opentelemetry.io/otel/trace`, `golang.org/x/sync`, `golang.org/x/text` |
+| [`capturestore`](../capturestore/) | 10 | - | `graph`, `internal/tracehttp`, `pagebatch` | `github.com/cespare/xxhash/v2`, `github.com/go-logr/logr`, `github.com/go-logr/stdr`, `go.opentelemetry.io/auto/sdk`, `go.opentelemetry.io/otel`, `go.opentelemetry.io/otel/log`, `go.opentelemetry.io/otel/metric`, `go.opentelemetry.io/otel/trace`, `golang.org/x/net`, `golang.org/x/text` |
 | [`client`](../client/) | 10 | - | `middleware`, `graph`, `internal/tracehttp` | `github.com/cespare/xxhash/v2`, `github.com/go-logr/logr`, `github.com/go-logr/stdr`, `go.opentelemetry.io/auto/sdk`, `go.opentelemetry.io/otel`, `go.opentelemetry.io/otel/log`, `go.opentelemetry.io/otel/metric`, `go.opentelemetry.io/otel/trace`, `golang.org/x/sync`, `golang.org/x/time` |
 | [`deploymentlease`](../deploymentlease/) | 10 | - | `deploymentauthorization`, `spiffe` | `github.com/go-jose/go-jose/v4`, `github.com/secure-systems-lab/go-securesystemslib`, `github.com/spiffe/go-spiffe/v2`, `golang.org/x/crypto`, `golang.org/x/net`, `golang.org/x/sys`, `golang.org/x/text`, `google.golang.org/genproto/googleapis/rpc`, `google.golang.org/grpc`, `google.golang.org/protobuf` |
 | [`spiffeauth`](../spiffeauth/) | 10 | - | `(itself)`, `middleware`, `spiffe` | `github.com/go-jose/go-jose/v4`, `github.com/spiffe/go-spiffe/v2`, `golang.org/x/net`, `golang.org/x/sync`, `golang.org/x/sys`, `golang.org/x/text`, `golang.org/x/time`, `google.golang.org/genproto/googleapis/rpc`, `google.golang.org/grpc`, `google.golang.org/protobuf` |
-| [`capturestore`](../capturestore/) | 8 | - | `graph`, `internal/tracehttp` | `github.com/cespare/xxhash/v2`, `github.com/go-logr/logr`, `github.com/go-logr/stdr`, `go.opentelemetry.io/auto/sdk`, `go.opentelemetry.io/otel`, `go.opentelemetry.io/otel/log`, `go.opentelemetry.io/otel/metric`, `go.opentelemetry.io/otel/trace` |
 | [`credentiallease`](../credentiallease/) | 8 | - | `spiffe` | `github.com/go-jose/go-jose/v4`, `github.com/spiffe/go-spiffe/v2`, `golang.org/x/net`, `golang.org/x/sys`, `golang.org/x/text`, `google.golang.org/genproto/googleapis/rpc`, `google.golang.org/grpc`, `google.golang.org/protobuf` |
 | [`fleetfetch`](../fleetfetch/) | 8 | - | `graph`, `internal/tracehttp` | `github.com/cespare/xxhash/v2`, `github.com/go-logr/logr`, `github.com/go-logr/stdr`, `go.opentelemetry.io/auto/sdk`, `go.opentelemetry.io/otel`, `go.opentelemetry.io/otel/log`, `go.opentelemetry.io/otel/metric`, `go.opentelemetry.io/otel/trace` |
 | [`jsbundle`](../jsbundle/) | 8 | - | `graph`, `internal/tracehttp` | `github.com/cespare/xxhash/v2`, `github.com/go-logr/logr`, `github.com/go-logr/stdr`, `go.opentelemetry.io/auto/sdk`, `go.opentelemetry.io/otel`, `go.opentelemetry.io/otel/log`, `go.opentelemetry.io/otel/metric`, `go.opentelemetry.io/otel/trace` |
@@ -57,6 +57,7 @@ Heaviest first, then by name.
 | [`deploymentauthorization`](../deploymentauthorization/) | 2 | - | `(itself)` | `github.com/secure-systems-lab/go-securesystemslib`, `golang.org/x/crypto` |
 | [`ledger`](../ledger/) | 2 | - | `middleware` | `golang.org/x/sync`, `golang.org/x/time` |
 | [`middleware`](../middleware/) | 2 | yes | `(itself)` | `golang.org/x/sync`, `golang.org/x/time` |
+| [`pagebatch`](../pagebatch/) | 2 | - | `(itself)` | `golang.org/x/net`, `golang.org/x/text` |
 | [`snapshotparse`](../snapshotparse/) | 2 | - | `(itself)` | `golang.org/x/net`, `golang.org/x/text` |
 | [`qrterm`](../qrterm/) | 1 | - | `(itself)` | `github.com/skip2/go-qrcode` |
 | [`ratecoord`](../ratecoord/) | 1 | - | `(itself)` | `golang.org/x/time` |
@@ -120,6 +121,7 @@ modules from these, so this is where a dependency enters the module.
 | `logx` | `go.opentelemetry.io/otel/trace` |
 | `middleware` | `golang.org/x/sync`, `golang.org/x/time` |
 | `obs` | `github.com/prometheus/client_golang` |
+| `pagebatch` | `golang.org/x/net` |
 | `profiling` | `github.com/grafana/pyroscope-go` |
 | `promx` | `github.com/prometheus/client_golang`, `go.opentelemetry.io/otel/trace` |
 | `proxysupplier` | `golang.org/x/time` |
@@ -144,8 +146,8 @@ release that touches all of them.
 | 11 | `golang.org/x/time` | `chromeguard`, `client`, `egressproxy`, `ledger`, `middleware`, `obs`, `promx`, `proxysupplier`, `ratecoord`, `server`, `spiffeauth` |
 | 10 | `golang.org/x/sync` | `chromeguard`, `client`, `dbx`, `egressproxy`, `ledger`, `middleware`, `obs`, `promx`, `server`, `spiffeauth` |
 | 10 | `golang.org/x/sys`, `google.golang.org/protobuf` | `chromeguard`, `credentiallease`, `deploymentlease`, `egressproxy`, `obs`, `promx`, `server`, `spiffe`, `spiffeauth`, `telemetry` |
-| 8 | `golang.org/x/text` | `credentiallease`, `dbx`, `deploymentlease`, `server`, `snapshotparse`, `spiffe`, `spiffeauth`, `telemetry` |
-| 7 | `golang.org/x/net` | `credentiallease`, `deploymentlease`, `server`, `snapshotparse`, `spiffe`, `spiffeauth`, `telemetry` |
+| 10 | `golang.org/x/text` | `capturestore`, `credentiallease`, `dbx`, `deploymentlease`, `pagebatch`, `server`, `snapshotparse`, `spiffe`, `spiffeauth`, `telemetry` |
+| 9 | `golang.org/x/net` | `capturestore`, `credentiallease`, `deploymentlease`, `pagebatch`, `server`, `snapshotparse`, `spiffe`, `spiffeauth`, `telemetry` |
 | 6 | `go.yaml.in/yaml/v2` | `chromeguard`, `dataformat`, `egressproxy`, `obs`, `promx`, `server` |
 | 6 | `google.golang.org/genproto/googleapis/rpc`, `google.golang.org/grpc` | `credentiallease`, `deploymentlease`, `server`, `spiffe`, `spiffeauth`, `telemetry` |
 | 5 | `github.com/beorn7/perks`, `github.com/munnerz/goautoneg`, `github.com/prometheus/client_golang`, `github.com/prometheus/client_model`, `github.com/prometheus/common`, `github.com/prometheus/procfs` | `chromeguard`, `egressproxy`, `obs`, `promx`, `server` |
