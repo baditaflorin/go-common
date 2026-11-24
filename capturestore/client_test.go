@@ -132,6 +132,20 @@ func TestDownloadDecompressesAndChecksRawChecksum(t *testing.T) {
 	if !bytes.Equal(got, raw) {
 		t.Fatalf("body %q", got)
 	}
+	s = makeServer(digest)
+	defer s.Close()
+	c, e = New(Config{URL: s.URL, Token: "t", Transport: s.Client().Transport})
+	if e != nil {
+		t.Fatal(e)
+	}
+	meta := Capture{ID: "cap", SHA256: digest, BodyBytes: int64(len(raw))}
+	if body, err := c.DownloadCapture(context.Background(), meta); err != nil || !bytes.Equal(body, raw) {
+		t.Fatalf("verified capture download: %q %v", body, err)
+	}
+	meta.SHA256 = strings.Repeat("0", 64)
+	if _, err := c.DownloadCapture(context.Background(), meta); err == nil {
+		t.Fatal("accepted a download that disagreed with indexed metadata")
+	}
 	s = makeServer(strings.Repeat("0", 64))
 	c, e = New(Config{URL: s.URL, Token: "t", Transport: s.Client().Transport})
 	if e != nil {
@@ -141,6 +155,34 @@ func TestDownloadDecompressesAndChecksRawChecksum(t *testing.T) {
 	s.Close()
 	if e == nil || !strings.Contains(e.Error(), "checksum mismatch") {
 		t.Fatalf("checksum result %v", e)
+	}
+}
+
+func TestCreateWithDigestCarriesAndChecksTheCallerDigest(t *testing.T) {
+	raw := []byte("original page")
+	sum := sha256.Sum256(raw)
+	digest := hex.EncodeToString(sum[:])
+	meta := Metadata{IdempotencyKey: "i", Namespace: "ns", SourceService: "fetch",
+		URL: "https://example.test", BodyKind: "website_response"}
+	c, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen := r.Header.Get("X-Source-SHA256")
+		if !shaPattern.MatchString(seen) || r.Header.Get("Content-Type") != "application/octet-stream" {
+			t.Errorf("missing digest or content type: %q", seen)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil || !bytes.Equal(body, raw) {
+			t.Errorf("changed body: %q %v", body, err)
+		}
+		_ = json.NewEncoder(w).Encode(CreateResult{
+			Capture: Capture{ID: "cap", Metadata: meta, BodyBytes: int64(len(raw)), SHA256: digest, GzipBytes: 4},
+		})
+	}))
+	defer server.Close()
+	if _, err := c.CreateWithDigest(context.Background(), meta, raw, digest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CreateWithDigest(context.Background(), meta, raw, strings.Repeat("0", 64)); err == nil {
+		t.Fatal("accepted a receipt that disagreed with the source digest")
 	}
 }
 func stringInt(n int) string { return fmt.Sprint(n) }
