@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.141.1] - 2026-11-25
+
+### Changed
+
+- `botwall.Detect` decides most ordinary pages from a lower-cased prefix (16 KB, then 64 KB) instead of lower-casing and scanning the whole document. The prefix is cut on a rune boundary and scanned as the start of the document is, so its visible-text count can only fall short of the document's; a prefix over `MaxVisibleText` proves the page is not a wall. Verdicts are unchanged: `TestDetectMatchesThePlainForm` and `FuzzDetectMatchesThePlainForm` compare it with the previous form, and `TestPrefixCountNeverExceedsTheDocuments` checks the bound on 24,000 random cuts. On a 120 KB ordinary page: 0.40 ms → 0.055 ms, 131 KB → 16 KB allocated.
+
 ## [0.141.0] - 2026-11-24
 
 ### Added

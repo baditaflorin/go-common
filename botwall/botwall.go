@@ -3,6 +3,7 @@ package botwall
 import (
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -26,6 +27,9 @@ func Vendors() []string {
 // one.
 func Detect(html string) string {
 	if html == "" || len(html) > MaxBody {
+		return ""
+	}
+	if hasVisibleTextBeyondLimit(html) {
 		return ""
 	}
 	l := strings.ToLower(html)
@@ -62,6 +66,38 @@ func Detect(html string) string {
 		return "google_sorry"
 	}
 	return ""
+}
+
+// probeSizes are the prefix lengths checked before the whole document is
+// lower-cased. Most pages pass MaxVisibleText within the first few kilobytes.
+var probeSizes = [...]int{16 << 10, 64 << 10}
+
+// hasVisibleTextBeyondLimit reports, without lower-casing the whole document,
+// that its visible text is over MaxVisibleText, so Detect answers "".
+//
+// It counts the visible text of a lower-cased prefix that ends on a rune
+// boundary. The prefix is scanned exactly as the start of the whole document
+// is, and wherever a tag or script runs past the cut the scan stops early, so
+// the count can only fall short of the whole document's, never exceed it. A
+// prefix over the limit therefore proves the document is over it. A false
+// answer proves nothing, and Detect goes on as before.
+func hasVisibleTextBeyondLimit(html string) bool {
+	for _, size := range probeSizes {
+		if size >= len(html) {
+			return false
+		}
+		// A byte that cannot continue a UTF-8 sequence starts a rune in any
+		// decoding, so lower-casing the prefix gives a prefix of the lower-cased
+		// document.
+		cut := size
+		for cut > 0 && !utf8.RuneStart(html[cut]) {
+			cut--
+		}
+		if visibleTextLen(strings.ToLower(html[:cut])) > MaxVisibleText {
+			return true
+		}
+	}
+	return false
 }
 
 // impervaChallenge: the block page ("Request unsuccessful. Incapsula incident ID: ..." inside the iframe fallback) or the
