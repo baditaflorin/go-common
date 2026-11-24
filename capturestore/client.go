@@ -229,24 +229,9 @@ func (c *Client) CreateWithDigest(ctx context.Context, m Metadata, body []byte, 
 
 func (c *Client) create(ctx context.Context, m Metadata, body []byte, digest string) (CreateResult, error) {
 	var out CreateResult
-	if len(body) > MaxBodyBytes {
-		return out, errors.New("capturestore: body exceeds 8 MiB limit")
-	}
-	raw, err := json.Marshal(m)
+	h, err := captureUploadHeaders(m, len(body), digest)
 	if err != nil {
-		return out, errors.New("capturestore: invalid metadata")
-	}
-	encoded := base64.RawURLEncoding.EncodeToString(raw)
-	if len(encoded) > MaxMetadataBytes {
-		return out, errors.New("capturestore: metadata header exceeds 16 KiB limit")
-	}
-	if m.IdempotencyKey == "" || m.Namespace == "" || m.SourceService == "" || m.URL == "" || (m.BodyKind != "website_response" && m.BodyKind != "proxy_error_response") {
-		return out, errors.New("capturestore: required metadata is missing or invalid")
-	}
-	h := make(http.Header)
-	h.Set("X-Capture-Metadata", encoded)
-	if digest != "" {
-		h.Set("X-Source-SHA256", digest)
+		return out, err
 	}
 	_, err = c.do(ctx, http.MethodPost, capturesPath, nil, body, "application/octet-stream", h, &out)
 	if err != nil {
@@ -256,10 +241,37 @@ func (c *Client) create(ctx context.Context, m Metadata, body []byte, digest str
 		sum := sha256.Sum256(body)
 		digest = hex.EncodeToString(sum[:])
 	}
-	if !validID(out.Capture.ID) || out.Capture.BodyBytes != int64(len(body)) || out.Capture.SHA256 != digest || out.Capture.GzipBytes <= 0 || out.Capture.Namespace != m.Namespace || out.Capture.IdempotencyKey != m.IdempotencyKey || out.Capture.SourceService != m.SourceService || out.Capture.SourceVersion != m.SourceVersion {
+	if !validCaptureReceipt(out.Capture, m, len(body), digest) {
 		return CreateResult{}, errors.New("capturestore: invalid create receipt")
 	}
 	return out, nil
+}
+func captureUploadHeaders(m Metadata, size int, digest string) (http.Header, error) {
+	if size > MaxBodyBytes {
+		return nil, errors.New("capturestore: body exceeds 8 MiB limit")
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return nil, errors.New("capturestore: invalid metadata")
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(raw)
+	if len(encoded) > MaxMetadataBytes {
+		return nil, errors.New("capturestore: metadata header exceeds 16 KiB limit")
+	}
+	if m.IdempotencyKey == "" || m.Namespace == "" || m.SourceService == "" || m.URL == "" || (m.BodyKind != "website_response" && m.BodyKind != "proxy_error_response") {
+		return nil, errors.New("capturestore: required metadata is missing or invalid")
+	}
+	h := http.Header{"X-Capture-Metadata": {encoded}}
+	if digest != "" {
+		h.Set("X-Source-SHA256", digest)
+	}
+	return h, nil
+}
+
+func validCaptureReceipt(c Capture, m Metadata, size int, digest string) bool {
+	return validID(c.ID) && c.BodyBytes == int64(size) && c.SHA256 == digest && c.GzipBytes > 0 &&
+		c.Namespace == m.Namespace && c.IdempotencyKey == m.IdempotencyKey &&
+		c.SourceService == m.SourceService && c.SourceVersion == m.SourceVersion
 }
 func validID(id string) bool { return idPattern.MatchString(id) }
 func (c *Client) Get(ctx context.Context, id string) (Capture, error) {

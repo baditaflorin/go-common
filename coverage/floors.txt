@@ -47,6 +47,7 @@ middleware 65
 nullify 98
 obs 85
 openapi 91
+pagebatch 86
 pagination 84
 pentest 79
 policyeval 66

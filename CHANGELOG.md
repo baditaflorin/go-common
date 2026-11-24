@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.141.0] - 2026-11-24
+
+### Added
+
+- Capture-store clients can carry a known source SHA-256, write groups of captures and derivations, and verify each receipt against the original item. The optional raw derivation format preserves the parser's exact bytes.
+- The pagebatch package encodes bounded multipart requests and correlates response bodies and per-item status by Content-ID.
+
 ## [0.140.3] - 2026-11-23
 
 ### Added
