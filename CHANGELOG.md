@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `safehttp.WithTLSClientSessionCache` lets callers share a bounded TLS session cache across primary transports. The transport continues to verify origin certificates and hostnames with Go's defaults.
+
 ## [0.141.1] - 2026-11-25
 
 ### Changed

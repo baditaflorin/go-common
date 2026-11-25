@@ -3,6 +3,7 @@ package safehttp
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -444,6 +445,7 @@ type options struct {
 	// proxyConnectResponseHook observes CONNECT responses before net/http
 	// validates the proxy's status code. nil preserves standard behavior.
 	proxyConnectResponseHook func(context.Context, *url.URL, *http.Request, *http.Response) error
+	tlsClientSessionCache    tls.ClientSessionCache
 
 	// Persistent local breaker-state cache — opt-in via
 	// WithPersistentBreakerState (see breaker_state.go). Only takes
@@ -464,6 +466,14 @@ type ProxyConnectResponseHook func(context.Context, *url.URL, *http.Request, *ht
 // standard transport otherwise reduces to an untyped request error.
 func WithProxyConnectResponseHook(hook ProxyConnectResponseHook) Option {
 	return func(o *options) { o.proxyConnectResponseHook = hook }
+}
+
+// WithTLSClientSessionCache enables TLS resumption on the primary transport.
+// Hostname and certificate verification still use the standard TLS defaults.
+// Use separate cache namespaces for distinct egress identities or trust policies.
+// A nil cache leaves the default handshakes in place.
+func WithTLSClientSessionCache(cache tls.ClientSessionCache) Option {
+	return func(o *options) { o.tlsClientSessionCache = cache }
 }
 
 // Option configures NewClient.
@@ -625,6 +635,10 @@ func proxySkippingPrivateWithLookup(req *http.Request, viaProxy func(*http.Reque
 // exercised directly in tests (the wrapped chain hides the underlying
 // transport behind unexported types).
 func newBaseTransport(o *options, proxyFn func(*http.Request) (*url.URL, error)) *http.Transport {
+	var tlsConfig *tls.Config
+	if o.tlsClientSessionCache != nil {
+		tlsConfig = &tls.Config{ClientSessionCache: o.tlsClientSessionCache}
+	}
 	return &http.Transport{
 		// Honor the standard HTTP_PROXY / HTTPS_PROXY / NO_PROXY env vars.
 		// This is what every Go program on the planet expects out of an
@@ -647,6 +661,7 @@ func newBaseTransport(o *options, proxyFn func(*http.Request) (*url.URL, error))
 		Proxy:                  proxyFn,
 		DialContext:            makeDialerWithConnWrapper(o.portCheck, o.connWrapper),
 		OnProxyConnectResponse: o.proxyConnectResponseHook,
+		TLSClientConfig:        tlsConfig,
 		// ForceAttemptHTTP2 must be set explicitly: because DialContext
 		// above is a custom dialer, net/http otherwise disables HTTP/2,
 		// suppressing "h2" in the ALPN offer. Off by default; opt in via
