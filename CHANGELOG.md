@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.141.3] - 2026-11-26
+
+### Changed
+
+- `botwall.Detect` checks a bounded prefix without allocating lower-cased copies. It returns early only when the original visible-text rule is provably exceeded; malformed UTF-8 and case mappings that cannot be safely scanned fall back to the existing detector. Saved-page replay, generated documents, fuzzing and existing challenge fixtures compare the verdicts with the original implementation.
+
 ## [0.141.2] - 2026-11-25
 
 ### Added
