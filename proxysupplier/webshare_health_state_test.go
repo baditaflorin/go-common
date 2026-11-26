@@ -67,9 +67,11 @@ func TestWebshareHealthStateRoundTripKeepsQuarantineWindowAndEscalation(t *testi
 	if dst.asns[100].cooldownUntil != src.asns[100].cooldownUntil {
 		t.Fatalf("cooldown end changed: %d != %d", dst.asns[100].cooldownUntil, src.asns[100].cooldownUntil)
 	}
-	// A failed probe after the cooldown trips it a second time: the cooldown escalates as if the process never restarted.
+	// Reaching webshareASNProbeFailLimit failed probes after the cooldown trips it a second time: the cooldown escalates as if the process never restarted.
 	afterCooldown := time.Unix(0, dst.asns[100].cooldownUntil).Add(time.Second)
-	dst.Record(100, "", "", "", false, afterCooldown)
+	for i := 0; i < webshareASNProbeFailLimit; i++ {
+		dst.Record(100, "", "", "", false, afterCooldown)
+	}
 	if got, want := time.Duration(dst.asns[100].cooldownUntil-afterCooldown.UnixNano()), 2*webshareASNBaseCooldown; got != want {
 		t.Fatalf("second trip cooldown = %s, want %s", got, want)
 	}
