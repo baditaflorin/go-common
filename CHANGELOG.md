@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.141.5] - 2026-11-26
+
+### Added
+
+- Graph senders attach a random batch identity as an optional HTTP header,
+  preserving it across retries and SPIFFE-to-key fallback. New batches and
+  split batches get fresh identities. Collectors that do not understand the
+  header keep their existing behavior.
+
 ## [0.141.3] - 2026-11-26
 
 ### Changed

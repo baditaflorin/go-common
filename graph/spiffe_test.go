@@ -42,15 +42,15 @@ type recordingCollector struct {
 }
 
 type recordedRequest struct {
-	path, apiKey string
-	batch        Batch
+	path, apiKey, batchID string
+	batch                 Batch
 }
 
 func (c *recordingCollector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var b Batch
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	c.mu.Lock()
-	c.requests = append(c.requests, recordedRequest{path: r.URL.Path, apiKey: r.Header.Get("X-API-Key"), batch: b})
+	c.requests = append(c.requests, recordedRequest{path: r.URL.Path, apiKey: r.Header.Get("X-API-Key"), batchID: r.Header.Get(BatchIDHeader), batch: b})
 	status := c.status
 	c.mu.Unlock()
 	w.WriteHeader(status)
@@ -185,6 +185,9 @@ func TestSPIFFEPathFailureFallsBackToTheKeyAndCoolsDown(t *testing.T) {
 			s.flush()
 			if len(mtls.got()) != 1 || len(key.got()) != 1 {
 				t.Fatalf("mTLS collector got %d, key collector %d; want the batch on both", len(mtls.got()), len(key.got()))
+			}
+			if mtls.got()[0].batchID == "" || mtls.got()[0].batchID != key.got()[0].batchID {
+				t.Fatal("transport fallback changed the batch identity")
 			}
 			if key.got()[0].apiKey != "writer-test-key" {
 				t.Fatal("the fallback did not carry the writer key")

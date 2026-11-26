@@ -3,10 +3,12 @@ package graph
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand/v2"
+	randv2 "math/rand/v2"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -16,6 +18,10 @@ import (
 )
 
 const graphAuthFailureCooldown = time.Minute
+
+// BatchIDHeader identifies one logical batch across retries and transport
+// fallback. Older collectors ignore the header and keep their old semantics.
+const BatchIDHeader = "X-Graph-Batch-Id"
 
 // sendTimeout bounds one POST /events, on either path.
 const sendTimeout = 5 * time.Second
@@ -67,7 +73,8 @@ type sender struct {
 	// pending holds at most one failed batch outside the ring. This
 	// preserves the batch for a later retry without draining additional
 	// observations during the same failing flush.
-	pending []Event
+	pending   []Event
+	pendingID string
 	// tail holds the events of a drained batch that did not fit in one request (see splitAtBytes); they go out before the ring is
 	// drained again. Only the flush goroutine touches it.
 	tail              []Event
@@ -127,7 +134,7 @@ func (s *sender) run() {
 	} else {
 		close(s.mtlsConnected)
 	}
-	timer := time.NewTimer(jitteredFlushDelay(s.cfg.flushInterval, rand.Float64()))
+	timer := time.NewTimer(jitteredFlushDelay(s.cfg.flushInterval, randv2.Float64()))
 	defer timer.Stop()
 	for {
 		select {
@@ -137,7 +144,7 @@ func (s *sender) run() {
 			return
 		case <-timer.C:
 			s.flush(context.Background())
-			timer.Reset(jitteredFlushDelay(s.cfg.flushInterval, rand.Float64()))
+			timer.Reset(jitteredFlushDelay(s.cfg.flushInterval, randv2.Float64()))
 		}
 	}
 }
@@ -184,9 +191,19 @@ func (s *sender) flush(contexts ...context.Context) {
 		if len(rest) > 0 {
 			s.tail = append(rest, s.tail...)
 		}
+		if s.pendingID == "" {
+			var id [16]byte
+			if _, err := rand.Read(id[:]); err != nil {
+				s.pending = events
+				atomic.AddInt64(&s.counters.BatchesFailed, 1)
+				return
+			}
+			s.pendingID = hex.EncodeToString(id[:])
+		}
 		switch s.send(ctx, events) {
 		case sendOK:
 			s.pending = nil
+			s.pendingID = ""
 			if len(events) < s.cfg.flushBatch && len(s.tail) == 0 {
 				return // ring is now empty
 			}
@@ -195,9 +212,11 @@ func (s *sender) flush(contexts ...context.Context) {
 			// pending would block every later batch until restart. Drop it, and
 			// leave the next batch for the next tick like any other failure.
 			s.pending = nil
+			s.pendingID = ""
 			return
 		case sendTooLarge:
 			s.pending = nil
+			s.pendingID = ""
 			if len(events) == 1 {
 				atomic.AddInt64(&s.counters.BatchesFailed, 1)
 				atomic.AddInt64(&s.counters.BatchesRejected, 1)
@@ -332,6 +351,9 @@ func (s *sender) post(parent context.Context, client interface {
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if s.pendingID != "" {
+		req.Header.Set(BatchIDHeader, s.pendingID)
+	}
 	req.Header.Set("User-Agent", "go-common-graph/"+version+" ("+serviceID+")")
 	if writerAPIKey != "" {
 		req.Header.Set(header.APIKey, writerAPIKey)
