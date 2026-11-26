@@ -271,7 +271,7 @@ func TestSelectWait_HonoursContext(t *testing.T) {
 	calls := 0
 	paced := func() (string, error) { calls++; return "", &PacedError{RetryAfter: time.Hour} }
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
 	_, err := SelectWait(ctx, paced)
