@@ -22,9 +22,10 @@ var (
 	webshareASNSevereRatio        = 0.55
 	webshareASNQuarantineRatio    = 0.65
 	webshareASNBaseCooldown       = 2 * time.Minute
-	webshareASNMaxCooldown        = 10 * time.Minute
+	webshareASNMaxCooldown        = 4 * time.Minute
 	webshareASNProbeInterval      = 15 * time.Second
 	webshareASNCloseAfterProbes   = 1
+	webshareASNProbeFailLimit     = 3
 )
 
 const (
@@ -112,6 +113,7 @@ type asnHealth struct {
 	cooldownUntil    int64
 	lastProbeNano    int64
 	probeSuccesses   int
+	probeFailures    int
 	consecutiveTrips int
 	tripsTotal       uint64
 	// admitted counts thinning decisions for callers that pass no per-entry
@@ -300,17 +302,22 @@ func (h *webshareNetworkHealth) recordASNLocked(asnNumber int, asnName string, o
 		}
 		if ok {
 			ah.probeSuccesses++
+			ah.probeFailures = 0
 			if ah.probeSuccesses >= webshareASNCloseAfterProbes {
 				ah.quarantined = false
 				ah.cooldownUntil = 0
 				ah.probeSuccesses = 0
+				ah.probeFailures = 0
 				ah.consecutiveTrips = 0
 				ah.resetWindow()
 				ah.recordOutcome(true)
 			}
 		} else {
 			ah.probeSuccesses = 0
-			ah.tripLocked(nowNano)
+			ah.probeFailures++
+			if ah.probeFailures >= webshareASNProbeFailLimit {
+				ah.tripLocked(nowNano)
+			}
 		}
 		return
 	}
@@ -325,6 +332,7 @@ func (h *webshareNetworkHealth) recordASNLocked(asnNumber int, asnName string, o
 func (a *asnHealth) tripLocked(nowNano int64) {
 	a.quarantined = true
 	a.probeSuccesses = 0
+	a.probeFailures = 0
 	a.consecutiveTrips++
 	a.tripsTotal++
 	cd := webshareASNBaseCooldown * time.Duration(a.consecutiveTrips)
@@ -414,7 +422,7 @@ func (h *webshareNetworkHealth) IsQuarantinedOrSubnetCooled(asnNumber int, subne
 		}
 	}
 	if asnNumber > 0 {
-		if ah, ok := h.asns[asnNumber]; ok && ah.quarantined && nowNano < ah.cooldownUntil {
+		if ah, ok := h.asns[asnNumber]; ok && ah.quarantined {
 			return true
 		}
 	}

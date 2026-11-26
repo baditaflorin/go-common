@@ -127,6 +127,29 @@ func TestWebshareNetworkHealth_SubnetCooldownAndASNQuarantineRecovery(t *testing
 	}
 }
 
+func TestWebshareNetworkHealth_SingleFailedProbeDoesNotReTripAndPass2RespectsQuarantine(t *testing.T) {
+	h := newWebshareNetworkHealth()
+	now := time.Unix(1_700_000_000, 0)
+	for i := 0; i < webshareASNMinSamples; i++ {
+		h.Record(300, "Gamma", "", "", false, now)
+	}
+	afterCD := now.Add(webshareASNBaseCooldown + time.Second)
+	// Even after cooldown expires, Pass 2 must still see the ASN as quarantined so it cannot flood probes.
+	if !h.IsQuarantinedOrSubnetCooled(300, "", afterCD.UnixNano()) {
+		t.Fatalf("expected quarantined ASN to stay blocked on Pass 2 until a probe closes it")
+	}
+	// One failed probe does not immediately re-lock the ASN for another full cooldown.
+	h.Record(300, "Gamma", "", "", false, afterCD)
+	if st := h.Snapshot([]*webshareDirectEntry{{addr: "10.3.1.1:80", asnNumber: 300, asnName: "Gamma"}}, afterCD).ASNs[0]; st.CooldownRemainingSeconds != 0 || st.TripsTotal != 1 {
+		t.Fatalf("single failed probe should not re-trip: %+v", st)
+	}
+	// One clean probe recovers it.
+	h.Record(300, "Gamma", "", "", true, afterCD.Add(webshareASNProbeInterval))
+	if h.IsQuarantinedOrSubnetCooled(300, "", afterCD.Add(webshareASNProbeInterval+time.Second).UnixNano()) {
+		t.Fatalf("expected ASN to exit quarantine after clean probe")
+	}
+}
+
 func TestWebshareMulti_SelectExcludingASNs(t *testing.T) {
 	shared := newWebshareNetworkHealth()
 	s1 := &webshareDirectSupplier{
