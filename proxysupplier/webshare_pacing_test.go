@@ -297,6 +297,25 @@ func TestSelectWait_HonoursContext(t *testing.T) {
 	}
 }
 
+func TestSelectWait_RetainsPacedCauseAcrossWake(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	original := pacingSleep
+	pacingSleep = func(context.Context, time.Duration) error {
+		// A timer can wake just before the context becomes done, so the
+		// cancellation may be observed only at the start of the next loop.
+		cancel()
+		return nil
+	}
+	t.Cleanup(func() { pacingSleep = original })
+	_, err := SelectWait(ctx, func() (string, error) {
+		return "", &PacedError{RetryAfter: time.Second}
+	})
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrPaced) {
+		t.Fatalf("err = %v, want both context.Canceled and ErrPaced", err)
+	}
+}
+
 func TestWebsharePacing_ConfigAndEnv(t *testing.T) {
 	t.Setenv("WEBSHARE_PACING_PER_IP_RATE", "0.05")
 	t.Setenv("WEBSHARE_PACING_MIN_ASN_RATE", "0.5")

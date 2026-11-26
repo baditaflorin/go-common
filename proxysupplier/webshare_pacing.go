@@ -159,8 +159,12 @@ var pacingSleep = func(ctx context.Context, d time.Duration) error {
 //	})
 func SelectWait[T any](ctx context.Context, selectFn func() (T, error)) (T, error) {
 	var zero T
+	var lastPaced *PacedError
 	for {
 		if err := ctx.Err(); err != nil {
+			if lastPaced != nil {
+				return zero, fmt.Errorf("%w (%w)", err, lastPaced)
+			}
 			return zero, err
 		}
 		v, err := selectFn()
@@ -168,6 +172,7 @@ func SelectWait[T any](ctx context.Context, selectFn func() (T, error)) (T, erro
 		if err == nil || !errors.As(err, &paced) {
 			return v, err
 		}
+		lastPaced = paced
 		wait := paced.RetryAfter
 		if wait <= 0 {
 			wait = time.Millisecond
