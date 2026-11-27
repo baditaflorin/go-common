@@ -26,6 +26,14 @@ var (
 			return err
 		},
 	})
+	envAlternateCollectorIP = env.Declare(env.Var{
+		Name: "GRAPH_COLLECTOR_ALTERNATE_IP", Kind: env.KindString,
+		Doc: "Optional independent collector edge IP; HTTPS still verifies the canonical graph hostname. Enable only after replica fencing, durability and failover have been proven.",
+		Check: func(v string) error {
+			_, err := parseAlternateCollectorIP(v)
+			return err
+		},
+	})
 	envAPIKey = env.Declare(env.Var{
 		Name: "GRAPH_API_KEY", Kind: env.KindString, Secret: true,
 		Doc: "Writer-only API key, the compatibility path for services not yet using GRAPH_API_KEY_FILE. Never falls back to FLEET_API_KEY.",

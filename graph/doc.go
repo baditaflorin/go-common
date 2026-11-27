@@ -88,6 +88,10 @@
 //	GRAPH_COLLECTOR_URL  — exactly "https://fleet-graph.0exec.com" for a
 //	                       remote collector. HTTP/HTTPS loopback endpoints
 //	                       are allowed only for local development and tests.
+//	GRAPH_COLLECTOR_ALTERNATE_IP — optional independent edge IP for event writes.
+//	                       TLS still verifies the canonical collector hostname.
+//	                       Enable only after replicated deduplication and fencing
+//	                       are proven. It does not change Lookup or the mTLS path.
 //	GRAPH_SAMPLE_RATE    — float 0..1, default 1.0.
 //	GRAPH_API_KEY_FILE   — optional protected file containing the dedicated
 //	                       event-writer key. When set, it takes precedence
