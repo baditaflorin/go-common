@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.141.6] - 2026-11-27
+
+### Added
+
+- Graph event senders can optionally retry an identified batch through a
+  separate edge IP while retaining canonical HTTPS hostname verification. This
+  remains disabled until an operator configures the IP and verifies replica
+  fencing and durable cross-replica deduplication.
+
 ## [0.141.5] - 2026-11-26
 
 ### Added

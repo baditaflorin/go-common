@@ -28,6 +28,7 @@ type config struct {
 	enabled          bool
 	collectorURL     string
 	collectorErr     error
+	alternateIP      netip.Addr
 	writerAPIKey     string
 	writerAPIKeyFile string
 	readerAPIKey     string
@@ -52,11 +53,13 @@ type config struct {
 // loadConfig reads env vars once. Called from initOnce.
 func loadConfig() config {
 	collectorURL, collectorErr := normalizeCollectorURL(envCollectorURL.Value())
+	alternateIP, _ := parseAlternateCollectorIP(envAlternateCollectorIP.Value())
 	spiffeCollectorURL, spiffeCollectorErr := normalizeSPIFFECollectorURL(envSPIFFECollectorURL.Value())
 	c := config{
 		enabled:      parseBoolEnv(envEnabled.Name, false),
 		collectorURL: collectorURL,
 		collectorErr: collectorErr,
+		alternateIP:  alternateIP,
 		// GRAPH_API_KEY is deliberately writer-only. In particular, do
 		// not fall back to FLEET_API_KEY: a graph event writer should
 		// never inherit broad fleet credentials by accident.
@@ -98,6 +101,20 @@ func loadConfig() config {
 		c.flushBatch = 1
 	}
 	return c
+}
+
+// parseAlternateCollectorIP accepts a literal address only. The connection
+// still authenticates the canonical collector hostname using ordinary TLS.
+func parseAlternateCollectorIP(raw string) (netip.Addr, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return netip.Addr{}, nil
+	}
+	ip, err := netip.ParseAddr(raw)
+	if err != nil || !ip.IsValid() || ip.Zone() != "" || ip.IsUnspecified() || ip.IsMulticast() {
+		return netip.Addr{}, fmt.Errorf("graph alternate collector must be a unicast IP literal")
+	}
+	return ip.Unmap(), nil
 }
 
 // loadGraphWriterAPIKey prefers the protected file mount used by fleet-runner.

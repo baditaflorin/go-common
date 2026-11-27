@@ -6,10 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	randv2 "math/rand/v2"
+	"net"
 	"net/http"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -80,6 +83,7 @@ type sender struct {
 	tail              []Event
 	counters          *atomicCounters
 	client            *http.Client
+	alternateClient   *http.Client
 	stop              chan struct{}
 	stopped           chan struct{}
 	stopOnce          sync.Once
@@ -97,7 +101,7 @@ type sender struct {
 }
 
 func newSender(cfg config, serviceID, version string, r *ring, c *atomicCounters) *sender {
-	return &sender{
+	s := &sender{
 		cfg:       cfg,
 		serviceID: serviceID,
 		version:   version,
@@ -110,6 +114,10 @@ func newSender(cfg config, serviceID, version string, r *ring, c *atomicCounters
 		mtlsConnected:  make(chan struct{}),
 		mtlsRetryPause: mtlsConnectRetryMin,
 	}
+	if cfg.alternateIP.IsValid() && cfg.collectorErr == nil && cfg.collectorURL == "https://"+graphCanonicalCollectorHost {
+		s.alternateClient = newGraphAlternateHTTPClient(cfg.alternateIP)
+	}
+	return s
 }
 
 func (s *sender) setIdentity(serviceID, version string) {
@@ -281,7 +289,7 @@ func (s *sender) send(parent context.Context, events []Event) sendResult {
 		return sendTooLarge
 	}
 	if mtls != nil {
-		code, err := s.post(parent, mtls, s.cfg.spiffeCollectorURL, body, "", serviceID, version)
+		code, err := s.post(parent, mtls, s.cfg.spiffeCollectorURL, body, "", serviceID, version, false)
 		switch {
 		case err == nil && code >= 200 && code < 300:
 			atomic.AddInt64(&s.counters.BatchesSent, 1)
@@ -315,7 +323,21 @@ func (s *sender) send(parent context.Context, events []Event) sendResult {
 		}
 		atomic.AddInt64(&s.counters.BatchesSPIFFEFallback, 1)
 	}
-	code, err := s.post(parent, s.client, s.cfg.collectorURL, body, writerAPIKey, serviceID, version)
+	code, err := s.post(parent, s.client, s.cfg.collectorURL, body, writerAPIKey, serviceID, version, false)
+	// Only a batch with a stable id can be retried against an independent
+	// edge: the first request may have committed even when its answer was lost.
+	// The receiver must have durable cross-replica deduplication and fencing.
+	if s.alternateClient != nil && s.pendingID != "" && parent.Err() == nil && (err != nil || code >= 500 || code >= 300 && code < 400) {
+		code, err = s.post(parent, s.alternateClient, s.cfg.collectorURL, body, writerAPIKey, serviceID, version, true)
+		if err == nil && code >= 200 && code < 300 {
+			atomic.AddInt64(&s.counters.BatchesSent, 1)
+			return sendOK
+		}
+		// An alternate may be behind on key or schema state; preserve the batch
+		// for a later primary retry instead of treating its 4xx as permanent.
+		atomic.AddInt64(&s.counters.BatchesFailed, 1)
+		return sendRetain
+	}
 	if err != nil {
 		atomic.AddInt64(&s.counters.BatchesFailed, 1)
 		return sendRetain
@@ -343,7 +365,7 @@ func (s *sender) send(parent context.Context, events []Event) sendResult {
 // when writerAPIKey is not empty, so the SPIFFE path never carries it.
 func (s *sender) post(parent context.Context, client interface {
 	Do(*http.Request) (*http.Response, error)
-}, endpoint string, body []byte, writerAPIKey, serviceID, version string) (int, error) {
+}, endpoint string, body []byte, writerAPIKey, serviceID, version string, requireGraphIdentity bool) (int, error) {
 	ctx, cancel := context.WithTimeout(parent, sendTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/events", bytes.NewReader(body))
@@ -369,6 +391,9 @@ func (s *sender) post(parent context.Context, client interface {
 	// path a new connection is a new mTLS handshake.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 	_ = resp.Body.Close()
+	if requireGraphIdentity && resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.Header.Get("X-Service-Name") != "go-fleet-graph" {
+		return 0, errors.New("alternate response did not identify as graph")
+	}
 	return resp.StatusCode, nil
 }
 
@@ -431,6 +456,25 @@ func newGraphHTTPClient(timeout time.Duration) *http.Client {
 			IdleConnTimeout:     60 * time.Second,
 		},
 	}
+}
+
+// The request URL and TLS server name remain canonical. Only the TCP dial
+// target changes; proxying and redirects stay disabled as on the primary path.
+func newGraphAlternateHTTPClient(ip netip.Addr) *http.Client {
+	return newGraphAlternateHTTPClientForAddress(net.JoinHostPort(ip.String(), "443"))
+}
+
+func newGraphAlternateHTTPClientForAddress(address string) *http.Client {
+	c := newGraphHTTPClient(sendTimeout)
+	t := c.Transport.(*http.Transport)
+	dialer := &net.Dialer{}
+	t.DialContext = func(ctx context.Context, network, requested string) (net.Conn, error) {
+		if requested != net.JoinHostPort(graphCanonicalCollectorHost, "443") {
+			return nil, fmt.Errorf("graph alternate refused noncanonical authority")
+		}
+		return dialer.DialContext(ctx, network, address)
+	}
+	return c
 }
 
 func (s *sender) shutdown(ctx context.Context) error {
