@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -149,5 +150,35 @@ func TestAlternateUnrelatedSuccessDoesNotDropBatch(t *testing.T) {
 	s.flush()
 	if len(s.pending) != 1 {
 		t.Fatal("unidentified alternate success discarded the batch")
+	}
+}
+
+// The remote test server and CA are synthetic; this opt-in check exercises
+// the real TLS fallback transport across an isolated staging tunnel.
+func TestAlternateCrossHost(t *testing.T) {
+	address, caPath := os.Getenv("GRAPH_TEST_ALT_ADDRESS"), os.Getenv("GRAPH_TEST_ALT_CA")
+	if address == "" && caPath == "" {
+		t.Skip("cross-host alternate not configured")
+	}
+	if address == "" || caPath == "" {
+		t.Fatal("cross-host alternate requires both address and CA")
+	}
+	pem, err := os.ReadFile(caPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		t.Fatal("invalid test CA")
+	}
+	cfg := config{enabled: true, collectorURL: "https://" + graphCanonicalCollectorHost, writerAPIKey: "synthetic-test-key", alternateIP: netip.MustParseAddr("127.0.0.1")}
+	s, r, counters := newTestSender(cfg, 1)
+	s.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("synthetic primary failure") })
+	s.alternateClient = newGraphAlternateHTTPClientForAddress(address)
+	s.alternateClient.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	_, _ = r.push(Event{Path: "/cross-host-canary"})
+	s.flush()
+	if len(s.pending) != 0 || counters.BatchesSent != 1 {
+		t.Fatal("batch was not accepted by the independent test edge")
 	}
 }
