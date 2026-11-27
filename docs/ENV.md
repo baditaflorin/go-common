@@ -33,6 +33,7 @@ The variables that go-common packages declare in the `env` registry, with what t
 | `GRAPH_API_KEY` | string | (secret) | Writer-only API key, the compatibility path for services not yet using GRAPH_API_KEY_FILE. Never falls back to FLEET_API_KEY. |
 | `GRAPH_API_KEY_FILE` | string | unset | Path of the protected file holding the writer API key. It takes precedence over GRAPH_API_KEY, and an unreadable file fails closed. |
 | `GRAPH_BUFFER_SIZE` | int | `10000` | Events buffered before the oldest are dropped; at least 64. |
+| `GRAPH_COLLECTOR_ALTERNATE_IP` | string | unset | Optional independent collector edge IP; HTTPS still verifies the canonical graph hostname. Enable only after replica fencing, durability and failover have been proven. |
 | `GRAPH_COLLECTOR_URL` | string | unset | URL of the fleet-graph collector: the canonical https host or a loopback address. |
 | `GRAPH_ENABLED` | bool | `false` | Opt-in switch for emitting service-to-service call events. Emission also needs GRAPH_COLLECTOR_URL and a writer key. |
 | `GRAPH_FLUSH_BATCH` | int | `2000` | Events per flush request; at least 1. go-fleet-graph accepts 2000 from 0.4.44 on and refuses more than 500 before that. A request is also cut at about 600 KB. |
